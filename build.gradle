@@ -1,0 +1,57 @@
+plugins {
+    id 'java'
+}
+
+repositories {
+    maven {
+        url = 'https://repo.runelite.net'
+        content {
+            includeGroupByRegex('net\\.runelite.*')
+        }
+    }
+    mavenCentral()
+}
+
+def runeLiteVersion = 'latest.release'
+def pluginMainClass = 'net.betterpartydefence.BetterPartyDefencePluginTest'
+
+dependencies {
+    compileOnly "net.runelite:client:${runeLiteVersion}"
+
+    compileOnly 'org.projectlombok:lombok:1.18.46'
+    annotationProcessor 'org.projectlombok:lombok:1.18.46'
+
+    testImplementation 'junit:junit:4.13.2'
+    testImplementation 'org.mockito:mockito-core:5.20.0'
+    testImplementation "net.runelite:client:${runeLiteVersion}"
+    testImplementation "net.runelite:jshell:${runeLiteVersion}"
+}
+
+group = 'net.betterpartydefence'
+version = '1.3.0'
+
+tasks.withType(JavaCompile).configureEach {
+    options.encoding = 'UTF-8'
+    options.release.set(11)
+}
+
+// Ship runelite-plugin.properties on the classpath so the plugin reads its own metadata at runtime.
+processResources {
+    from(projectDir) {
+        include 'runelite-plugin.properties'
+    }
+}
+
+tasks.withType(AbstractArchiveTask).configureEach {
+    preserveFileTimestamps = false
+    reproducibleFileOrder = true
+}
+
+// Development RuneLite launcher. This does not use the user's normal Jagex Launcher session.
+tasks.register('run', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = pluginMainClass
+
+    jvmArgs '-ea', '--add-opens=java.desktop/sun.awt=ALL-UNNAMED'
+    args '--developer-mode', '--debug'
+}
