@@ -1,4 +1,4 @@
-# Better Party Defence
+﻿# Better Party Defence
 
 Better Party Defence is a focused RuneLite plugin that displays a supported boss/NPC's estimated live Defence after defence-draining special attacks.
 
@@ -50,6 +50,4 @@ With `--debug`, `client.log` includes messages such as `Tracking supported NPC`,
 The boss stat table and defence-drain calculations were derived from the OSParty code supplied with the original project. The local special-attack detection follows RuneLite's Special Attack Counter event model, reduced to defence-draining weapons only. See `ATTRIBUTION.md` and `LICENSE-OSPARTY.txt`.
 
 ## Multi-phase encounter handling
-
-- **Kephri:** Defence drains persist while RuneLite swaps between the shielded and weak NPC actors. When Kephri enters the final enrage/vulnerable phase, the tracker restores Defence to the phase's real starting value (80, with the existing floor of 60) and rebinds the overlay to the new actor. The tracker clears when Kephri reaches her dead actor.
-- **Sotetseg:** The tracker/overlay survives the combat ↔ maze NPC swaps instead of treating each NPC index as a new boss. Sotetseg genuinely restores Defence at each maze, so the displayed Defence is restored to 200 when the ToB encounter state enters the maze while the encounter itself remains tracked. The tracker clears only when the Sotetseg encounter state ends.
+- **Sotetseg:** The tracker/overlay survives the combat â†” maze NPC swaps instead of treating each NPC index as a new boss. Sotetseg genuinely restores Defence at each maze, so the displayed Defence is restored to 200 when the ToB encounter state enters the maze while the encounter itself remains tracked. The tracker clears only when the Sotetseg encounter state ends.
