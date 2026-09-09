@@ -142,6 +142,28 @@ public class DefenceTracker
 		int hit;
 	}
 
+	/** Absolute tracker state used by the optional BPD-to-BPD party sync. */
+	@Value
+	public static class SyncState
+	{
+		String bossName;
+		BossDefence bossType;
+		long current;
+		long min;
+		long base;
+		long attackLevel;
+		long strengthLevel;
+		long magicLevel;
+		long magicBaseLevel;
+		long magicDef;
+		long magicBaseDef;
+		boolean magicUsesDefence;
+		boolean demon;
+		boolean accursedApplied;
+		boolean drained;
+		List<SpecHistoryEntry> history;
+	}
+
 	/** One defence-draining special attack landed on an NPC, from any party member. */
 	@Value
 	private static class Drain
@@ -262,6 +284,18 @@ public class DefenceTracker
 		if (bossType == BossDefence.SOTETSEG)
 		{
 			updateSotetsegEncounterState();
+		}
+
+		// A BPD sync snapshot can seed this tracker before the boss is loaded locally. Once the
+		// same logical boss enters our scene, bind the existing synced state to that actor rather
+		// than starting a fresh encounter.
+		if (bossIndex == -1 && bossType != null)
+		{
+			NPC replacement = findNpcForBoss(bossType);
+			if (replacement != null)
+			{
+				rebindBoss(replacement);
+			}
 		}
 
 		if (bossIndex != -1)
@@ -570,8 +604,8 @@ public class DefenceTracker
 
 	private boolean shouldRebindSameEncounter(BossDefence incomingBoss)
 	{
-		return bossIndex != -1 && incomingBoss != null && incomingBoss == bossType
-			&& (isPhasePersistentBoss(incomingBoss) || npcByIndex(bossIndex) == null);
+		return bossType != null && incomingBoss != null && incomingBoss == bossType
+			&& (bossIndex == -1 || isPhasePersistentBoss(incomingBoss) || npcByIndex(bossIndex) == null);
 	}
 
 	private static boolean isPhasePersistentBoss(BossDefence boss)
@@ -786,7 +820,7 @@ public class DefenceTracker
 
 	public DefenceState state()
 	{
-		if (bossIndex == -1 || bossDef < 0)
+		if (bossType == null || bossDef < 0)
 		{
 			return null;
 		}
@@ -798,6 +832,88 @@ public class DefenceTracker
 			magicDefBonus, magicStartDefBonus, magicLevel, magicStartLevel);
 	}
 
+	/** Snapshot the exact mutable values needed to continue this encounter on another BPD client. */
+	public SyncState syncState()
+	{
+		if (bossType == null || bossDef < 0)
+		{
+			return null;
+		}
+		return new SyncState(
+			Text.removeTags(bossName),
+			bossType,
+			bossDef,
+			minDef,
+			bossStartDef,
+			atkLevel,
+			strLevel,
+			magicLevel,
+			magicStartLevel,
+			magicDefBonus,
+			magicStartDefBonus,
+			magicUsesDefence,
+			demon,
+			accursedApplied,
+			drained,
+			Collections.unmodifiableList(new ArrayList<>(specHistory)));
+	}
+
+	/**
+	 * Seed/update this client's local tracker from another BPD user. A null localNpc means the
+	 * receiver is elsewhere in the same encounter; the state remains valid and will rebind if the
+	 * boss later enters this client's scene. Pending index-only SpecialCounter events are discarded
+	 * because this absolute snapshot already contains their result.
+	 */
+	public void applySyncState(SyncState sync, NPC localNpc)
+	{
+		if (sync == null || sync.getBossType() == null)
+		{
+			return;
+		}
+
+		bossType = sync.getBossType();
+		bossName = sync.getBossName() == null ? bossType.getNpcName() : sync.getBossName();
+		bossIndex = localNpc == null ? -1 : localNpc.getIndex();
+		bossNpcId = localNpc == null ? -1 : localNpc.getId();
+		bossDef = sync.getCurrent();
+		minDef = sync.getMin();
+		bossStartDef = sync.getBase();
+		atkLevel = sync.getAttackLevel();
+		strLevel = sync.getStrengthLevel();
+		magicLevel = sync.getMagicLevel();
+		magicStartLevel = sync.getMagicBaseLevel();
+		magicDefBonus = sync.getMagicDef();
+		magicStartDefBonus = sync.getMagicBaseDef();
+		magicUsesDefence = sync.isMagicUsesDefence();
+		demon = sync.isDemon();
+		accursedApplied = sync.isAccursedApplied();
+		drained = sync.isDrained();
+		kephriFinalResetApplied = bossType == BossDefence.KEPHRI && isKephriFinalPhaseId(bossNpcId);
+		sotetsegEncounterState = bossType == BossDefence.SOTETSEG
+			? client.getVarbitValue(VarbitID.TOB_CLIENT_WAVEPROGRESS_TYPE) : -1;
+		wasInCoxRaid = client.getVarbitValue(VarbitID.RAIDS_CLIENT_INDUNGEON) == 1;
+
+		specHistory.clear();
+		if (sync.getHistory() != null)
+		{
+			specHistory.addAll(sync.getHistory());
+		}
+		pending.clear();
+		clearHeld();
+		log.debug("Applied BPD sync for {} actor={} def={}/{} specs={}",
+			bossType, bossIndex, bossDef, bossStartDef, specHistory.size());
+	}
+
+	public BossDefence trackedBossType()
+	{
+		return bossType;
+	}
+
+	public boolean hasBoundNpc()
+	{
+		return bossIndex >= 0 && npcByIndex(bossIndex) != null;
+	}
+
 	public void reset()
 	{
 		reset("manual reset");
@@ -805,7 +921,7 @@ public class DefenceTracker
 
 	public void reset(String reason)
 	{
-		if (bossIndex != -1 || !pending.isEmpty() || queuedIndex != -1)
+		if (bossType != null || bossIndex != -1 || !pending.isEmpty() || queuedIndex != -1)
 		{
 			log.debug("Reset defence tracker: {}", reason);
 		}

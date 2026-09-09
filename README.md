@@ -47,11 +47,7 @@ With `--debug`, `client.log` includes messages such as `Tracking supported NPC`,
 
 ## Attribution
 
-The boss stat table and defence-drain calculations were derived and inspired from the OSParty code supplied with the original project. The local special-attack detection follows RuneLite's Special Attack Counter event model, reduced to defence-draining weapons only. See `ATTRIBUTION.md` and `LICENSE-OSPARTY.txt`.
+The boss stat table and defence-drain calculations were derived from the OSParty code supplied with the original project. The local special-attack detection follows RuneLite's Special Attack Counter event model, reduced to defence-draining weapons only. See `ATTRIBUTION.md` and `LICENSE-OSPARTY.txt`.
 
 ## Multi-phase encounter handling
-- **Sotetseg:** The tracker/overlay survives the combat maze NPC swaps instead of treating each NPC index as a new boss. Sotetseg genuinely restores Defence at each maze, so the displayed Defence is restored to 200 when the ToB encounter state enters the maze while the encounter itself remains tracked. The tracker clears only when the Sotetseg encounter state ends.
-
-
-
-
+- **Sotetseg:** The tracker/overlay survives the combat â†” maze NPC swaps instead of treating each NPC index as a new boss. Sotetseg genuinely restores Defence at each maze, so the displayed Defence is restored to 200 when the ToB encounter state enters the maze while the encounter itself remains tracked. The tracker clears only when the Sotetseg encounter state ends.

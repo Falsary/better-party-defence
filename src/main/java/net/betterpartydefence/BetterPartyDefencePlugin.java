@@ -21,6 +21,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Iterator;
 import java.io.File;
 import javax.swing.JFileChooser;
 import javax.swing.SwingUtilities;
@@ -34,6 +35,8 @@ import net.runelite.api.GameState;
 import net.runelite.api.NPC;
 import net.runelite.api.Skill;
 import net.runelite.api.WorldView;
+import net.runelite.api.coords.WorldPoint;
+import net.runelite.api.gameval.VarPlayerID;
 import net.runelite.api.events.FakeXpDrop;
 import net.runelite.api.events.GameStateChanged;
 import net.runelite.api.events.GameTick;
@@ -59,6 +62,7 @@ import net.runelite.client.plugins.specialcounter.SpecialWeapon;
 import net.runelite.client.ui.overlay.OverlayManager;
 import net.runelite.client.ui.overlay.infobox.InfoBox;
 import net.runelite.client.ui.overlay.infobox.InfoBoxManager;
+import net.runelite.client.util.Text;
 
 /**
  * Displays a boss's live Defence using special-attack events shared by members of the
@@ -125,10 +129,17 @@ public class BetterPartyDefencePlugin extends Plugin
 	private TrackerFontManager trackerFontManager;
 	private DefenceInfoBox defenceBox;
 	private static final int DUPLICATE_WINDOW_TICKS = 1;
+	private static final int SYNC_HISTORY_DUPLICATE_WINDOW_TICKS = 2;
+	private static final int NON_INSTANCE_HP_TOLERANCE = 5;
+	private static final int NON_INSTANCE_POSITION_TOLERANCE = 8;
+	private static final long SYNC_MAX_AGE_MILLIS = 5_000L;
 	private final Map<SpecEventKey, Integer> recentSpecEvents = new HashMap<>();
+	private final Map<SyncedSpecKey, Integer> recentSyncedSpecs = new HashMap<>();
 	private final List<InfoBox> hiddenSpecialCounterInfoBoxes = new ArrayList<>();
 	private Integer hiddenSpecialCounterNpcIndex;
 	private boolean wasInParty;
+	private Integer lastSyncSignature;
+	private ActiveSyncScope activeSyncScope;
 
 	@Provides
 	@Singleton
@@ -147,6 +158,9 @@ public class BetterPartyDefencePlugin extends Plugin
 		// still be decoded even when this client's Special Attack Counter UI is disabled.
 		// WSClient de-duplicates registrations by message class.
 		wsClient.registerMessage(SpecialCounterUpdate.class);
+		// The experimental richer BPD message is harmless when the option is off; registering it
+		// simply allows clients with the option enabled to decode one another's snapshots.
+		wsClient.registerMessage(BpdDefenceSync.class);
 
 		skillIconSource = new SkillIconSource(client, skillIconManager, config);
 		trackerFontManager = new TrackerFontManager(config);
@@ -183,6 +197,10 @@ public class BetterPartyDefencePlugin extends Plugin
 		trackerFontManager = null;
 		removeInfoBox();
 		recentSpecEvents.clear();
+		recentSyncedSpecs.clear();
+		activeSyncScope = null;
+		lastSyncSignature = null;
+		wsClient.unregisterMessage(BpdDefenceSync.class);
 		// Do not unregister a message class that the active core Special Attack Counter still needs.
 		if (!isSpecialCounterActive())
 		{
@@ -206,11 +224,15 @@ public class BetterPartyDefencePlugin extends Plugin
 
 		int tick = client.getTickCount();
 		recentSpecEvents.entrySet().removeIf(entry -> tick - entry.getValue() > DUPLICATE_WINDOW_TICKS);
+		recentSyncedSpecs.entrySet().removeIf(
+			entry -> tick - entry.getValue() > SYNC_HISTORY_DUPLICATE_WINDOW_TICKS);
 
 		// Local defence tracking is intentionally independent of party membership. Hub Party is
 		// the transport for remote specs, not a prerequisite for drawing our own tracked target.
 		localSpecDetector.onGameTick();
 		defenceTracker.onGameTick();
+		reconcileActiveSyncScope();
+		maybeBroadcastDefenceSync();
 		updateDefenceInfoBox();
 
 		// RuneLite's EventBus requires GameTick subscribers to be named exactly onGameTick.
@@ -250,7 +272,14 @@ public class BetterPartyDefencePlugin extends Plugin
 	public void onPartyChanged(PartyChanged event)
 	{
 		recentSpecEvents.clear();
+		recentSyncedSpecs.clear();
 		wasInParty = event.getPartyId() != null;
+		lastSyncSignature = null;
+		if (!wasInParty && activeSyncScope != null && !defenceTracker.hasBoundNpc())
+		{
+			defenceTracker.reset("left party while using remote BPD sync");
+		}
+		activeSyncScope = null;
 		log.debug("Hub Party session changed: partyId={}", event.getPartyId());
 	}
 
@@ -266,6 +295,9 @@ public class BetterPartyDefencePlugin extends Plugin
 			hiddenSpecialCounterInfoBoxes.clear();
 			hiddenSpecialCounterNpcIndex = null;
 			recentSpecEvents.clear();
+			recentSyncedSpecs.clear();
+			activeSyncScope = null;
+			lastSyncSignature = null;
 		}
 	}
 
@@ -338,6 +370,13 @@ public class BetterPartyDefencePlugin extends Plugin
 			SpecEventKey key = new SpecEventKey(
 				event.getMemberId(), event.getWorld(), event.getNpcIndex(), event.getPlayerId(), weapon, event.getHit());
 			int tick = client.getTickCount();
+			SyncedSpecKey syncedKey = new SyncedSpecKey(normalizePlayerName(senderName), weapon, event.getHit());
+			Integer syncedAt = recentSyncedSpecs.get(syncedKey);
+			if (syncedAt != null && tick - syncedAt <= SYNC_HISTORY_DUPLICATE_WINDOW_TICKS)
+			{
+				log.debug("Ignoring standard party spec already covered by BPD sync {}", syncedKey);
+				return;
+			}
 			Integer lastSeen = recentSpecEvents.get(key);
 			if (lastSeen != null && tick - lastSeen <= DUPLICATE_WINDOW_TICKS)
 			{
@@ -366,6 +405,21 @@ public class BetterPartyDefencePlugin extends Plugin
 		if ("hideOverlappingDefenceDisplays".equals(event.getKey()))
 		{
 			syncOverlappingDefenceDisplays();
+			return;
+		}
+
+		if ("syncWithOtherPartyDefenceUsers".equals(event.getKey()))
+		{
+			lastSyncSignature = null;
+			recentSyncedSpecs.clear();
+			if (!config.syncWithOtherPartyDefenceUsers())
+			{
+				if (activeSyncScope != null && !defenceTracker.hasBoundNpc())
+				{
+					defenceTracker.reset("experimental BPD sync disabled");
+				}
+				activeSyncScope = null;
+			}
 			return;
 		}
 
@@ -401,6 +455,384 @@ public class BetterPartyDefencePlugin extends Plugin
 				configManager.setConfiguration(BetterPartyDefenceConfig.GROUP, "defenceFont", fallback);
 			}
 		});
+	}
+
+
+	/** Receive the optional absolute BPD tracker snapshot from another member of this PartyService party. */
+	@Subscribe
+	public void onBpdDefenceSync(BpdDefenceSync event)
+	{
+		if (!config.syncWithOtherPartyDefenceUsers() || !partyService.isInParty()
+			|| event == null || event.getProtocolVersion() != BpdDefenceSync.PROTOCOL_VERSION)
+		{
+			return;
+		}
+
+		PartyMember localMember = partyService.getLocalMember();
+		if (localMember != null && localMember.getMemberId() == event.getMemberId())
+		{
+			return;
+		}
+		if (partyService.getMemberById(event.getMemberId()) == null)
+		{
+			return;
+		}
+
+		clientThread.invoke(() -> acceptBpdDefenceSync(event));
+	}
+
+	private void acceptBpdDefenceSync(BpdDefenceSync event)
+	{
+		if (!config.syncWithOtherPartyDefenceUsers() || !partyService.isInParty()
+			|| event.getWorld() != client.getWorld())
+		{
+			return;
+		}
+		long age = Math.abs(System.currentTimeMillis() - event.getSentAtMillis());
+		if (event.getSentAtMillis() <= 0 || age > SYNC_MAX_AGE_MILLIS)
+		{
+			log.debug("Ignoring stale BPD sync age={}ms", age);
+			return;
+		}
+
+		DefenceTracker.SyncState sync = event.toSyncState();
+		if (sync == null || sync.getBossType() == null || !sync.isDrained())
+		{
+			return;
+		}
+
+		// Never let the experimental path override a normal live local encounter. It is a fallback
+		// for clients which cannot currently resolve the boss actor themselves.
+		if (defenceTracker.hasBoundNpc())
+		{
+			return;
+		}
+
+		BossDefence boss = sync.getBossType();
+		NPC localBoss = findLiveNpcForBoss(boss);
+		if (!incomingScopeMatches(event, boss, localBoss))
+		{
+			return;
+		}
+
+		defenceTracker.applySyncState(sync, localBoss);
+		activeSyncScope = new ActiveSyncScope(event.getScopeType(), event.getScopeId(), boss);
+		lastSyncSignature = syncSignature(sync);
+		rememberSyncedSpecs(sync);
+		log.debug("Accepted BPD sync from member={} boss={} scope={}:{} actor={}",
+			event.getMemberId(), boss, event.getScopeType(), event.getScopeId(),
+			localBoss == null ? -1 : localBoss.getIndex());
+	}
+
+	/** Broadcast only after the normal/local tracker has changed and while this client can see the boss. */
+	private void maybeBroadcastDefenceSync()
+	{
+		if (!config.syncWithOtherPartyDefenceUsers() || !partyService.isInParty())
+		{
+			lastSyncSignature = null;
+			return;
+		}
+
+		DefenceTracker.SyncState sync = defenceTracker.syncState();
+		if (sync == null || !sync.isDrained())
+		{
+			lastSyncSignature = null;
+			return;
+		}
+
+		NPC npc = findBoundNpc();
+		if (npc == null || npc.isDead() || npc.getHealthRatio() == 0)
+		{
+			return;
+		}
+
+		int signature = syncSignature(sync);
+		if (lastSyncSignature != null && lastSyncSignature == signature)
+		{
+			return;
+		}
+
+		SyncScope scope = localSyncScope(sync.getBossType(), npc);
+		if (scope == null)
+		{
+			return;
+		}
+
+		WorldPoint point = npc.getWorldLocation();
+		int x = point == null ? 0 : point.getX();
+		int y = point == null ? 0 : point.getY();
+		int plane = point == null ? 0 : point.getPlane();
+		int hp = healthPercent(npc);
+		if (scope.getType() == BpdDefenceSync.SCOPE_WORLD && hp < 0)
+		{
+			return;
+		}
+
+		partyService.send(new BpdDefenceSync(
+			client.getWorld(), sync, scope.getType(), scope.getId(), x, y, plane, hp));
+		lastSyncSignature = signature;
+		log.debug("Broadcast BPD sync boss={} scope={}:{} def={}/{}",
+			sync.getBossType(), scope.getType(), scope.getId(), sync.getCurrent(), sync.getBase());
+	}
+
+	private int syncSignature(DefenceTracker.SyncState sync)
+	{
+		return Objects.hash(
+			sync.getBossType(), sync.getCurrent(), sync.getMin(), sync.getBase(),
+			sync.getAttackLevel(), sync.getStrengthLevel(), sync.getMagicLevel(),
+			sync.getMagicBaseLevel(), sync.getMagicDef(), sync.getMagicBaseDef(),
+			sync.isAccursedApplied(), sync.isDrained(), sync.getHistory());
+	}
+
+	private void rememberSyncedSpecs(DefenceTracker.SyncState sync)
+	{
+		List<DefenceTracker.SpecHistoryEntry> history = sync.getHistory();
+		if (history == null || history.isEmpty())
+		{
+			return;
+		}
+
+		// The snapshot is absolute and may contain more than one new same-tick spec. Mark every
+		// represented row briefly so the standard SpecialCounterUpdate echo cannot apply it again.
+		int tick = client.getTickCount();
+		for (DefenceTracker.SpecHistoryEntry entry : history)
+		{
+			if (entry != null && entry.getWeapon() != null)
+			{
+				recentSyncedSpecs.put(new SyncedSpecKey(
+					normalizePlayerName(entry.getPlayerName()), entry.getWeapon(), entry.getHit()), tick);
+			}
+		}
+	}
+
+	private static String normalizePlayerName(String name)
+	{
+		if (name == null)
+		{
+			return "";
+		}
+		return Text.removeTags(name).trim().toLowerCase();
+	}
+
+	private SyncScope localSyncScope(BossDefence boss, NPC npc)
+	{
+		int raidScope = raidScopeType(boss);
+		if (raidScope != -1)
+		{
+			int controller = raidController(raidScope);
+			return controller > 0 ? new SyncScope(raidScope, controller) : null;
+		}
+
+		WorldView worldView = client.getTopLevelWorldView();
+		if (worldView == null)
+		{
+			return null;
+		}
+		if (worldView.isInstance())
+		{
+			// For instances without a public shared controller id (including ToA), use a
+			// conservative scene/template fingerprint. A mismatch rejects the sync rather than
+			// risking cross-instance state. This is intentionally strict while the feature is experimental.
+			return new SyncScope(BpdDefenceSync.SCOPE_INSTANCE, instanceFingerprint(worldView));
+		}
+		return npc == null ? null : new SyncScope(BpdDefenceSync.SCOPE_WORLD, 0);
+	}
+
+	private boolean incomingScopeMatches(BpdDefenceSync event, BossDefence boss, NPC localBoss)
+	{
+		int expectedRaidScope = raidScopeType(boss);
+		if (expectedRaidScope != -1)
+		{
+			return event.getScopeType() == expectedRaidScope
+				&& event.getScopeId() > 0
+				&& raidController(expectedRaidScope) == event.getScopeId();
+		}
+
+		WorldView worldView = client.getTopLevelWorldView();
+		if (worldView == null)
+		{
+			return false;
+		}
+		if (event.getScopeType() == BpdDefenceSync.SCOPE_INSTANCE)
+		{
+			return worldView.isInstance() && instanceFingerprint(worldView) == event.getScopeId();
+		}
+		if (event.getScopeType() != BpdDefenceSync.SCOPE_WORLD || worldView.isInstance() || localBoss == null)
+		{
+			return false;
+		}
+
+		int localHp = healthPercent(localBoss);
+		if (localHp < 0 || event.getHealthPercent() < 0
+			|| Math.abs(localHp - event.getHealthPercent()) > NON_INSTANCE_HP_TOLERANCE)
+		{
+			return false;
+		}
+		WorldPoint point = localBoss.getWorldLocation();
+		if (point == null || point.getPlane() != event.getBossPlane())
+		{
+			return false;
+		}
+		return Math.abs(point.getX() - event.getBossX()) <= NON_INSTANCE_POSITION_TOLERANCE
+			&& Math.abs(point.getY() - event.getBossY()) <= NON_INSTANCE_POSITION_TOLERANCE;
+	}
+
+	private void reconcileActiveSyncScope()
+	{
+		if (activeSyncScope == null)
+		{
+			return;
+		}
+
+		DefenceTracker.DefenceState state = defenceTracker.state();
+		BossDefence tracked = defenceTracker.trackedBossType();
+		if (state == null)
+		{
+			activeSyncScope = null;
+			return;
+		}
+		if (tracked != activeSyncScope.getBoss())
+		{
+			// A normal local event moved the tracker to another boss; that local state wins.
+			activeSyncScope = null;
+			return;
+		}
+		if (!syncScopeStillValid(activeSyncScope))
+		{
+			defenceTracker.reset("BPD synced encounter ended locally");
+			activeSyncScope = null;
+			lastSyncSignature = null;
+			removeInfoBox();
+		}
+	}
+
+	private boolean syncScopeStillValid(ActiveSyncScope scope)
+	{
+		if (client.getGameState() != GameState.LOGGED_IN || !partyService.isInParty())
+		{
+			return false;
+		}
+		switch (scope.getType())
+		{
+			case BpdDefenceSync.SCOPE_COX:
+			case BpdDefenceSync.SCOPE_TOB:
+				return scope.getId() > 0 && raidController(scope.getType()) == scope.getId();
+			case BpdDefenceSync.SCOPE_INSTANCE:
+				WorldView worldView = client.getTopLevelWorldView();
+				return worldView != null && worldView.isInstance()
+					&& instanceFingerprint(worldView) == scope.getId();
+			case BpdDefenceSync.SCOPE_WORLD:
+			default:
+				// Open-world encounters are cleared by the normal local boss death/world-hop rules.
+				// Do not treat walking out of render distance as an encounter end.
+				return true;
+		}
+	}
+
+	private int raidController(int scopeType)
+	{
+		switch (scopeType)
+		{
+			case BpdDefenceSync.SCOPE_COX:
+				return client.getVarpValue(VarPlayerID.RAIDS_PARTY_GROUPHOLDER);
+			case BpdDefenceSync.SCOPE_TOB:
+				return client.getVarpValue(VarPlayerID.TOB_MYCONTROLLER);
+			default:
+				return -1;
+		}
+	}
+
+	private static int raidScopeType(BossDefence boss)
+	{
+		if (boss == null)
+		{
+			return -1;
+		}
+		if (boss.has(BossDefence.Flag.COX_SCALED))
+		{
+			return BpdDefenceSync.SCOPE_COX;
+		}
+		switch (boss)
+		{
+			case THE_MAIDEN_OF_SUGADINTI:
+			case PESTILENT_BLOAT:
+			case NYLOCAS_VASILIAS:
+			case SOTETSEG:
+			case XARPUS:
+			case VERZIK_VITUR:
+				return BpdDefenceSync.SCOPE_TOB;
+			default:
+				return -1;
+		}
+	}
+
+	private static int instanceFingerprint(WorldView worldView)
+	{
+		int hash = 17;
+		hash = 31 * hash + worldView.getBaseX();
+		hash = 31 * hash + worldView.getBaseY();
+		int[][][] chunks = worldView.getInstanceTemplateChunks();
+		if (chunks != null)
+		{
+			for (int[][] plane : chunks)
+			{
+				if (plane == null) continue;
+				for (int[] row : plane)
+				{
+					if (row == null) continue;
+					for (int chunk : row)
+					{
+						hash = 31 * hash + chunk;
+					}
+				}
+			}
+		}
+		return hash;
+	}
+
+	private NPC findBoundNpc()
+	{
+		DefenceTracker.DefenceState state = defenceTracker.state();
+		if (state == null || state.getNpcIndex() < 0)
+		{
+			return null;
+		}
+		WorldView worldView = client.getTopLevelWorldView();
+		return worldView == null || worldView.npcs() == null ? null : worldView.npcs().byIndex(state.getNpcIndex());
+	}
+
+	private NPC findLiveNpcForBoss(BossDefence boss)
+	{
+		if (boss == null)
+		{
+			return null;
+		}
+		WorldView worldView = client.getTopLevelWorldView();
+		if (worldView == null || worldView.npcs() == null)
+		{
+			return null;
+		}
+		Iterator<? extends NPC> iterator = worldView.npcs().iterator();
+		while (iterator != null && iterator.hasNext())
+		{
+			NPC npc = iterator.next();
+			if (npc != null && !npc.isDead() && npc.getHealthRatio() != 0 && npc.getName() != null
+				&& BossDefence.matchingNpcName(npc.getName()) == boss)
+			{
+				return npc;
+			}
+		}
+		return null;
+	}
+
+	private static int healthPercent(NPC npc)
+	{
+		if (npc == null || npc.getHealthRatio() < 0 || npc.getHealthScale() <= 0)
+		{
+			return -1;
+		}
+		return Math.max(0, Math.min(100,
+			(int) Math.round(npc.getHealthRatio() * 100.0 / npc.getHealthScale())));
 	}
 
 	private void syncOverlappingDefenceDisplays()
@@ -526,6 +958,10 @@ public class BetterPartyDefencePlugin extends Plugin
 	 */
 	private boolean trackedNpcIsLive(DefenceTracker.DefenceState state)
 	{
+		if (state.getNpcIndex() < 0)
+		{
+			return activeSyncScope != null && syncScopeStillValid(activeSyncScope);
+		}
 		WorldView worldView = client.getTopLevelWorldView();
 		if (worldView == null || worldView.npcs() == null)
 		{
@@ -543,6 +979,29 @@ public class BetterPartyDefencePlugin extends Plugin
 			infoBoxManager.removeInfoBox(defenceBox);
 			defenceBox = null;
 		}
+	}
+
+	@Value
+	private static class SyncScope
+	{
+		int type;
+		int id;
+	}
+
+	@Value
+	private static class ActiveSyncScope
+	{
+		int type;
+		int id;
+		BossDefence boss;
+	}
+
+	@Value
+	private static class SyncedSpecKey
+	{
+		String playerName;
+		SpecialWeapon weapon;
+		int hit;
 	}
 
 	@Value

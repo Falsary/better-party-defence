@@ -39,8 +39,10 @@ public class NpcDefenceOverlay extends Overlay
 			return null;
 		}
 		DefenceState state = tracker.state();
-		if (state == null)
+		if (state == null || state.getNpcIndex() < 0)
 		{
+			// A synced encounter can exist before this client has the boss actor loaded.
+			// Attached rendering requires an actor; Detached/InfoBox can still show the state.
 			return null;
 		}
 		NPC npc = npcByIndex(state.getNpcIndex());
@@ -65,6 +67,10 @@ public class NpcDefenceOverlay extends Overlay
 
 	private NPC npcByIndex(int index)
 	{
+		if (index < 0 || client.getTopLevelWorldView() == null || client.getTopLevelWorldView().npcs() == null)
+		{
+			return null;
+		}
 		return client.getTopLevelWorldView().npcs().byIndex(index);
 	}
 }

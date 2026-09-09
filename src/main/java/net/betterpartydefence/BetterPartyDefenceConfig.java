@@ -27,6 +27,9 @@ public interface BetterPartyDefenceConfig extends Config
 	@ConfigSection(name = "Magic defence", description = "Magic-defence display options.", position = 3)
 	String MAGIC = "magic";
 
+	@ConfigSection(name = "Experimental", description = "Experimental Better Party Defence features.", position = 4)
+	String EXPERIMENTAL = "experimental";
+
 	@ConfigItem(keyName = "defenceHpBar", name = "Show defence tracker", description = "Display the tracked monster's live defence.", position = 1, section = DISPLAY)
 	default boolean defenceHpBar() { return true; }
 
@@ -122,4 +125,13 @@ public interface BetterPartyDefenceConfig extends Config
 	@Alpha
 	@ConfigItem(keyName = "magicDefenceColor", name = "Magic defence colour", description = "Colour used for the magic-defence readout.", position = 4, section = MAGIC)
 	default Color magicDefenceColor() { return new Color(0x22, 0x5E, 0xA8); }
+
+	@ConfigItem(
+		keyName = "syncWithOtherPartyDefenceUsers",
+		name = "Sync with other Party Defence users in party",
+		description = "Share Better Party Defence tracker state with other BPD users in the same party and encounter.",
+		position = 1,
+		section = EXPERIMENTAL)
+	default boolean syncWithOtherPartyDefenceUsers() { return false; }
 }
+

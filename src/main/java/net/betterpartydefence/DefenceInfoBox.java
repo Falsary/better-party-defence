@@ -2,6 +2,7 @@ package net.betterpartydefence;
 
 import java.awt.Color;
 import java.awt.image.BufferedImage;
+import java.util.ArrayList;
 import java.util.List;
 import net.betterpartydefence.DefenceTracker.DefenceState;
 import net.betterpartydefence.DefenceTracker.SpecHistoryEntry;
@@ -70,14 +71,14 @@ public class DefenceInfoBox extends InfoBox
 			else
 			{
 				StringBuilder tip = new StringBuilder("Spec history:");
-				for (SpecHistoryEntry entry : history)
+				for (SpecSummary summary : aggregateHistory(history))
 				{
 					tip.append("<br>")
-						.append(entry.getPlayerName())
+						.append(summary.playerName)
 						.append(": ")
-						.append(shortWeaponName(entry.getWeapon()))
+						.append(shortWeaponName(summary.weapon))
 						.append(' ')
-						.append(entry.getHit());
+						.append(summary.value);
 				}
 				text = tip.toString();
 			}
@@ -87,6 +88,83 @@ public class DefenceInfoBox extends InfoBox
 		{
 			tooltip = text;
 			setTooltip(text);
+		}
+	}
+
+	/**
+	 * Aggregate the hover the way the specs actually work. Percentage/fixed-effect specs are
+	 * useful as a number of uses (DWH 1, 2, 3...), while damage/effect-magnitude specs such as
+	 * BGS are useful as the total amount landed. Preserve first-seen order for a stable tooltip.
+	 */
+	private static List<SpecSummary> aggregateHistory(List<SpecHistoryEntry> history)
+	{
+		List<SpecSummary> summaries = new ArrayList<>();
+		for (SpecHistoryEntry entry : history)
+		{
+			if (entry == null)
+			{
+				continue;
+			}
+			SpecialWeapon weapon = entry.getWeapon();
+			String player = entry.getPlayerName();
+			if (player == null || player.trim().isEmpty())
+			{
+				player = "Unknown";
+			}
+			SpecSummary existing = null;
+			for (SpecSummary summary : summaries)
+			{
+				if (summary.weapon == weapon && summary.playerName.equals(player))
+				{
+					existing = summary;
+					break;
+				}
+			}
+
+			int amount = historyUsesCount(weapon) ? 1 : Math.max(0, entry.getHit());
+			if (existing == null)
+			{
+				summaries.add(new SpecSummary(player, weapon, amount));
+			}
+			else
+			{
+				existing.value += amount;
+			}
+		}
+		return summaries;
+	}
+
+	private static boolean historyUsesCount(SpecialWeapon weapon)
+	{
+		if (weapon == null)
+		{
+			return true;
+		}
+		switch (weapon)
+		{
+			case DRAGON_WARHAMMER:
+			case ELDER_MAUL:
+			case ARCLIGHT:
+			case DARKLIGHT:
+			case EMBERLIGHT:
+			case ACCURSED_SCEPTRE:
+				return true;
+			default:
+				return false;
+		}
+	}
+
+	private static final class SpecSummary
+	{
+		private final String playerName;
+		private final SpecialWeapon weapon;
+		private int value;
+
+		private SpecSummary(String playerName, SpecialWeapon weapon, int value)
+		{
+			this.playerName = playerName;
+			this.weapon = weapon;
+			this.value = value;
 		}
 	}
 
