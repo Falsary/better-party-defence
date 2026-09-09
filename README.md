@@ -1,53 +1,69 @@
 ﻿# Better Party Defence
 
-Better Party Defence is a focused RuneLite plugin that displays a supported boss/NPC's estimated live Defence after defence-draining special attacks.
+Better Party Defence tracks the estimated live Defence of supported bosses and NPCs after defence-draining special attacks.
 
-## Hub Party Panel integration
+The plugin works locally on its own and can also combine special attacks from other players in the same Hub Party.
 
-The user-facing party UI is **Hub Party Panel**. Hub Party Panel uses RuneLite's underlying `PartyService`, and Better Party Defence observes that same session. It does not create a second party, use OSParty networking, create a custom websocket/backend, or require RuneLite's built-in Party sidebar.
+## Party support
 
-Local tracking now works even when you are not in a party. Hub Party is only the transport used to combine specs from multiple clients.
+Better Party Defence uses the same RuneLite `PartyService` session used by Hub Party Panel.
 
-## How special attacks reach the tracker
+It does not create a separate party system, use OSParty networking, or require RuneLite's built-in Party sidebar.
 
-Better Party Defence detects **your own supported defence-draining specs directly**. You do not need to enable RuneLite's separate Special Attack Counter just to make your own tracker work.
+Your own supported special attacks are detected directly by Better Party Defence, so RuneLite's Special Attack Counter does not need to be enabled for local tracking.
 
-For party members:
+For other party members:
 
-- If they run Better Party Defence, their supported local drains are published to the existing Hub Party session.
-- If they instead have RuneLite's **Special Attack Counter** enabled, its standard `SpecialCounterUpdate` messages are also understood by Better Party Defence.
-- A client running only Hub Party Panel cannot contribute spec events, because Hub Party Panel does not transmit target/hit/weapon data for special attacks.
+* Players using Better Party Defence can share supported defence drains with each other.
+* Players using RuneLite's Special Attack Counter can also contribute through its standard `SpecialCounterUpdate` party messages.
+* Players using only Hub Party Panel cannot contribute special attack information because Hub Party Panel itself does not send target, weapon, or hit information.
 
-Better Party Defence reuses RuneLite's standard `SpecialCounterUpdate` wire message; it does not introduce a custom networking protocol.
+Local tracking continues to work normally when you are not in a party.
 
-## Quick functionality test
+## Display
 
-1. Enable Better Party Defence.
-2. Leave **Show before first spec** enabled.
-3. Attack/interact with a supported boss/NPC. Its starting Defence should appear immediately, even solo.
-4. Land a supported defence-draining spec. The value should update.
-5. For party testing, join the same party through **Hub Party Panel**. A second client can contribute specs by running either Better Party Defence or RuneLite's Special Attack Counter.
+Better Party Defence can display the current estimated Defence directly on supported NPCs and through an InfoBoxfor magic and an infobox for melee.
 
-With `--debug`, `client.log` includes messages such as `Tracking supported NPC`, `Local defence spec`, `Party spec`, and `def ... -> ...`.
+Display options include attached and detached layouts, configurable fonts and sizing, skill icons, Defence formatting, and optional previous-target display behaviour.
 
-## Supported spec weapons
+Magic Defence is tracked separately where supported and can use its own InfoBox.
 
-- Dragon Warhammer
-- Elder Maul
-- Bandos Godsword
-- Arclight / Darklight
-- Emberlight
-- Barrelchest Anchor
-- Bone Dagger
-- Dorgeshuun Crossbow
-- Accursed Sceptre
-- Tonalztics of Ralos
-- Seercull
-- Eye of Ayak
+## Party sync
+
+Better Party Defence includes optional party synchronization for players using the plugin together.
+
+Sync allows current Defence state to be shared between supported clients instead of relying only on individual special attack events. This helps with situations such as players entering an encounter late, temporarily losing sight of a target, or returning to a raid after dying.
+
+Raid state is kept separate between different raid instances, even when players are members of the same Hub Party.
+
+Party synchronization can be disabled from the plugin settings without affecting normal local tracking.
+
+## Supported special attacks
+
+* Dragon Warhammer
+* Elder Maul
+* Bandos Godsword
+* Arclight / Darklight
+* Emberlight
+* Barrelchest Anchor
+* Bone Dagger
+* Dorgeshuun Crossbow
+* Accursed Sceptre
+* Tonalztics of Ralos
+* Seercull
+* Eye of Ayak
+
+## Multi-target encounters
+
+The tracker can retain Defence state for multiple supported targets during the same encounter.
+
+This is useful for encounters such as Olm where different targets may be drained independently. Switching targets does not discard the previously tracked Defence or special attack history.
+
 
 ## Attribution
 
-The boss stat table and defence-drain calculations were derived from the OSParty code supplied with the original project. The local special-attack detection follows RuneLite's Special Attack Counter event model, reduced to defence-draining weapons only. See `ATTRIBUTION.md` and `LICENSE-OSPARTY.txt`.
+Boss stat data and defence-drain calculations were derived from OSParty code supplied with the original project.
 
-## Multi-phase encounter handling
-- **Sotetseg:** The tracker/overlay survives the combat â†” maze NPC swaps instead of treating each NPC index as a new boss. Sotetseg genuinely restores Defence at each maze, so the displayed Defence is restored to 200 when the ToB encounter state enters the maze while the encounter itself remains tracked. The tracker clears only when the Sotetseg encounter state ends.
+Local special attack detection follows RuneLite's Special Attack Counter event model, reduced to the functionality required for defence-draining weapons.
+
+See `ATTRIBUTION.md` and `LICENSE-OSPARTY.txt` for additional information and licensing.
