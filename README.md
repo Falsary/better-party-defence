@@ -67,3 +67,100 @@ Boss stat data and defence-drain calculations were derived from OSParty code sup
 Local special attack detection follows RuneLite's Special Attack Counter event model, reduced to the functionality required for defence-draining weapons.
 
 See `ATTRIBUTION.md` and `LICENSE-OSPARTY.txt` for additional information and licensing.
+
+## Supported bosses
+
+Better Party Defence currently supports the following bosses and encounter targets.
+
+### Chambers of Xeric
+
+- Abyssal Portal / Vespula Portal
+- Deathly Mage
+- Deathly Ranger
+- Great Olm
+- Great Olm Left Claw
+- Great Olm Right Claw
+- Ice Demon
+- Lizardman Shaman
+- Skeletal Mystic
+- Tekton
+- Tekton (Enraged)
+- Vasa Nistirio
+
+### Theatre of Blood
+
+- The Maiden of Sugadinti
+- Pestilent Bloat
+- Nylocas Vasilias
+- Sotetseg
+- Xarpus
+- Verzik Vitur
+
+### Tombs of Amascut
+
+- Akkha
+- Akkha's Shadow
+- Ba-Ba
+- Core
+- Elidinis' Warden
+- Kephri
+- Obelisk
+- Tumeken's Warden
+- Zebak
+
+### Other bosses
+
+- Abyssal Sire
+- Alchemical Hydra
+- Araxxor
+- Artio
+- Callisto
+- Calvar'ion
+- Cerberus
+- Chaos Elemental
+- Commander Zilyana
+- Corporeal Beast
+- Dagannoth Prime
+- Dagannoth Rex
+- Dagannoth Supreme
+- General Graardor
+- Giant Mole
+- Kalphite Queen
+- King Black Dragon
+- Kree'arra
+- K'ril Tsutsaroth
+- Nex
+- Phantom Muspah
+- Phosani's Nightmare
+- Sarachnis
+- Scorpia
+- Skotizo
+- Spindel
+- The Hueycoatl
+- The Nightmare
+- TzKal-Zuk
+- TzTok-Jad
+- Vardorvis
+- Venenatis
+- Vet'ion
+- Vorkath
+- Yama
+- Zulrah
+
+## Not currently supported
+
+Some bosses and encounters are not currently supported by the Defence tracker.
+
+Notable examples include:
+
+- Duke Sucellus
+- The Leviathan
+- The Whisperer
+- Scurrius
+- Moons of Peril
+- Royal Titans
+- Chambers of Xeric Guardians
+- Muttadiles
+- Vanguards
+
+Support may be expanded where reliable Defence-drain tracking is applicable.
