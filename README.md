@@ -16,7 +16,7 @@ For other party members:
 
 * Players using Better Party Defence can share supported defence drains with each other.
 * Players using RuneLite's Special Attack Counter can also contribute through its standard `SpecialCounterUpdate` party messages.
-* Players using only Hub Party Panel cannot contribute special attack information because Hub Party Panel itself does not send target, weapon, or hit information.
+* Players using Hub Party Panel can contribute special attack information if RuneLite's Special Attack Counter is enabled.
 
 Local tracking continues to work normally when you are not in a party.
 
@@ -24,7 +24,7 @@ Local tracking continues to work normally when you are not in a party.
 
 Better Party Defence can display the current estimated Defence directly on supported NPCs and through an InfoBoxfor magic and an infobox for melee.
 
-Display options include attached and detached layouts, configurable fonts and sizing, skill icons, Defence formatting, and optional previous-target display behaviour.
+Display options include attached and detached layouts, configurable fonts and sizing, skill icons, Defence formatting, and optional previous-target display behaviour and it ships by default by hiding conflicting infoboxes.
 
 Magic Defence is tracked separately where supported and can use its own InfoBox.
 
@@ -164,3 +164,11 @@ Notable examples include:
 - Vanguards
 
 Support may be expanded where reliable Defence-drain tracking is applicable.
+
+## Experimental features
+
+ These work well enough to ship on by default, although may still have untested edge cases. 
+ In current use they are working as intended, but additional real-world testing may uncover situations that still need refinement.
+
+ 
+  
