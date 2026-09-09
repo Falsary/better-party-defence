@@ -105,6 +105,8 @@ public class DefenceTracker
 
 	/** Specs which contributed to the current tracked encounter, shown in the info-box tooltip. */
 	private final List<SpecHistoryEntry> specHistory = new ArrayList<>();
+	/** Logical encounters this client authoritatively observed ending on a dead NPC actor. */
+	private final Set<BossDefence> endedBosses = new LinkedHashSet<>();
 
 	/** Filled from the socket reader thread, drained on the client thread. */
 	private final ConcurrentLinkedDeque<Drain> pending = new ConcurrentLinkedDeque<>();
@@ -393,6 +395,10 @@ public class DefenceTracker
 				handlePhaseNpc(npc);
 				if (bossIndex != -1 && (npc.isDead() || npc.getHealthRatio() == 0))
 				{
+					if (bossType != null)
+					{
+						endedBosses.add(bossType);
+					}
 					removeCurrent("tracked NPC died");
 				}
 			}
@@ -1319,9 +1325,25 @@ public class DefenceTracker
 			NPC npc = npcByIndex(entry.getKey());
 			if (npc != null && (npc.isDead() || npc.getHealthRatio() == 0))
 			{
+				SavedState ended = entry.getValue();
+				if (ended != null && ended.bossType != null)
+				{
+					endedBosses.add(ended.bossType);
+				}
 				it.remove();
 			}
 		}
+	}
+
+	/**
+	 * Return and clear logical boss types whose concrete NPC actor was observed dead this tick.
+	 * The plugin decides which encounter types are safe to broadcast as authoritative resets.
+	 */
+	public Set<BossDefence> consumeEndedBosses()
+	{
+		Set<BossDefence> ended = new LinkedHashSet<>(endedBosses);
+		endedBosses.clear();
+		return ended;
 	}
 
 	private void clearActiveFields()
@@ -1480,6 +1502,7 @@ public class DefenceTracker
 		clearActiveFields();
 		tracked.clear();
 		unboundTracked.clear();
+		endedBosses.clear();
 		pending.clear();
 		clearHeld();
 	}

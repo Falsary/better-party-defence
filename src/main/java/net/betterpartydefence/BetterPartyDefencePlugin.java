@@ -39,6 +39,7 @@ import net.runelite.api.Skill;
 import net.runelite.api.WorldView;
 import net.runelite.api.coords.WorldPoint;
 import net.runelite.api.gameval.VarPlayerID;
+import net.runelite.api.gameval.VarbitID;
 import net.runelite.api.events.FakeXpDrop;
 import net.runelite.api.events.GameStateChanged;
 import net.runelite.api.events.GameTick;
@@ -140,6 +141,16 @@ public class BetterPartyDefencePlugin extends Plugin
 	private static final long SYNC_PARTY_WIDE_ABSENCE_TIMEOUT_MILLIS = 20_000L;
 	private static final long ENCOUNTER_PRESENCE_INTERVAL_MILLIS = 2_000L;
 	private static final long ENCOUNTER_PRESENCE_MAX_AGE_MILLIS = 6_000L;
+	/** Blocks stale pre-reset absolute snapshots long enough for their normal max age to expire. */
+	private static final long ENCOUNTER_RESET_BARRIER_MILLIS = SYNC_MAX_AGE_MILLIS;
+	/** Duplicate death/wipe notices from several clients must not clear a freshly restarted encounter. */
+	private static final long ENCOUNTER_RESET_DEDUP_MILLIS = 10_000L;
+	private static final int TOA_PARTY_MEMBER_DEAD = 30;
+	private static final int[] TOA_PARTY_HEALTH_VARBITS =
+	{
+		VarbitID.TOA_CLIENT_P0, VarbitID.TOA_CLIENT_P1, VarbitID.TOA_CLIENT_P2, VarbitID.TOA_CLIENT_P3,
+		VarbitID.TOA_CLIENT_P4, VarbitID.TOA_CLIENT_P5, VarbitID.TOA_CLIENT_P6, VarbitID.TOA_CLIENT_P7
+	};
 	private final Map<SpecEventKey, Integer> recentSpecEvents = new HashMap<>();
 	private final Map<SyncedSpecKey, Integer> recentSyncedSpecs = new HashMap<>();
 	private final List<InfoBox> hiddenSpecialCounterInfoBoxes = new ArrayList<>();
@@ -155,8 +166,12 @@ public class BetterPartyDefencePlugin extends Plugin
 	private final Map<BossDefence, Long> lastSoloSyncedEncounterPresenceMillis = new HashMap<>();
 	private final Map<BossDefence, SyncScope> retainedRaidScopes = new HashMap<>();
 	private final Map<Long, SenderEncounterPresence> senderEncounterPresence = new HashMap<>();
+	/** Recent authoritative encounter resets, keyed by boss + concrete world/raid scope. */
+	private final Map<EncounterResetKey, Long> recentEncounterResets = new HashMap<>();
 	/** Party members proven to be running BPD during this PartyService session. */
 	private final Set<Long> knownBpdPartyMembers = new HashSet<>();
+	/** Debounces the all-party-dead ToA state so one wipe clears once, not every tick. */
+	private boolean toaPartyWasFullyDead;
 	private ActiveSyncScope activeSyncScope;
 	private SyncScope lastPresenceScope;
 	private long lastPresenceBroadcastMillis;
@@ -182,6 +197,7 @@ public class BetterPartyDefencePlugin extends Plugin
 		// simply allows clients with the option enabled to decode one another's snapshots.
 		wsClient.registerMessage(BpdDefenceSync.class);
 		wsClient.registerMessage(BpdEncounterPresence.class);
+		wsClient.registerMessage(BpdEncounterReset.class);
 
 		skillIconSource = new SkillIconSource(client, skillIconManager, config);
 		trackerFontManager = new TrackerFontManager(config);
@@ -225,12 +241,15 @@ public class BetterPartyDefencePlugin extends Plugin
 		lastSoloSyncedEncounterPresenceMillis.clear();
 		retainedRaidScopes.clear();
 		senderEncounterPresence.clear();
+		recentEncounterResets.clear();
 		knownBpdPartyMembers.clear();
+		toaPartyWasFullyDead = false;
 		activeSyncScope = null;
 		lastPresenceScope = null;
 		lastPresenceBroadcastMillis = 0L;
 		lastSyncSignature = null;
 		lastSyncBroadcastMillis = 0L;
+		wsClient.unregisterMessage(BpdEncounterReset.class);
 		wsClient.unregisterMessage(BpdEncounterPresence.class);
 		wsClient.unregisterMessage(BpdDefenceSync.class);
 		// Do not unregister a message class that the active core Special Attack Counter still needs.
@@ -261,11 +280,15 @@ public class BetterPartyDefencePlugin extends Plugin
 		long now = System.currentTimeMillis();
 		senderEncounterPresence.entrySet().removeIf(
 			entry -> now - entry.getValue().getReceivedAtMillis() > ENCOUNTER_PRESENCE_MAX_AGE_MILLIS);
+		recentEncounterResets.entrySet().removeIf(
+			entry -> now - entry.getValue() > ENCOUNTER_RESET_DEDUP_MILLIS);
 
 		// Local defence tracking is intentionally independent of party membership. Hub Party is
 		// the transport for remote specs, not a prerequisite for drawing our own tracked target.
 		localSpecDetector.onGameTick();
 		defenceTracker.onGameTick();
+		reconcileAuthoritativeNpcDeaths();
+		reconcileToaFullWipe();
 		reconcilePendingWorldSyncs();
 		reconcileActiveSyncScope();
 		maybeBroadcastEncounterPresence();
@@ -322,7 +345,9 @@ public class BetterPartyDefencePlugin extends Plugin
 		// Party membership is transport only. Do not clear remembered raid scopes or tracker state
 		// here: leaving a Hub Party while still inside the same raid must preserve the encounter.
 		senderEncounterPresence.clear();
+		recentEncounterResets.clear();
 		knownBpdPartyMembers.clear();
+		toaPartyWasFullyDead = false;
 		lastPresenceScope = null;
 		lastPresenceBroadcastMillis = 0L;
 		activeSyncScope = null;
@@ -349,7 +374,9 @@ public class BetterPartyDefencePlugin extends Plugin
 			lastSoloSyncedEncounterPresenceMillis.clear();
 			retainedRaidScopes.clear();
 			senderEncounterPresence.clear();
+			recentEncounterResets.clear();
 			knownBpdPartyMembers.clear();
+			toaPartyWasFullyDead = false;
 			lastPresenceScope = null;
 			lastPresenceBroadcastMillis = 0L;
 			lastSyncSignature = null;
@@ -572,6 +599,55 @@ public class BetterPartyDefencePlugin extends Plugin
 		});
 	}
 
+	/** Receive an authoritative encounter reset from another current BPD party member. */
+	@Subscribe
+	public void onBpdEncounterReset(BpdEncounterReset event)
+	{
+		if (!partyService.isInParty()
+			|| event == null || event.getProtocolVersion() != BpdEncounterReset.PROTOCOL_VERSION)
+		{
+			return;
+		}
+
+		PartyMember localMember = partyService.getLocalMember();
+		if (localMember != null && localMember.getMemberId() == event.getMemberId())
+		{
+			return;
+		}
+		if (partyService.getMemberById(event.getMemberId()) == null)
+		{
+			return;
+		}
+
+		clientThread.invoke(() ->
+		{
+			knownBpdPartyMembers.add(event.getMemberId());
+			if (!config.syncWithOtherPartyDefenceUsers() || !partyService.isInParty()
+				|| partyService.getMemberById(event.getMemberId()) == null
+				|| event.getWorld() != client.getWorld())
+			{
+				return;
+			}
+
+			long age = Math.abs(System.currentTimeMillis() - event.getSentAtMillis());
+			if (event.getSentAtMillis() <= 0 || age > SYNC_MAX_AGE_MILLIS)
+			{
+				return;
+			}
+
+			BossDefence boss = event.toBossType();
+			if (boss == null || !incomingEncounterResetScopeMatches(event, boss))
+			{
+				return;
+			}
+
+			rememberSenderEncounterPresence(event.getMemberId(), event.getWorld(),
+				event.getScopeType(), event.getScopeId(), event.getSentAtMillis());
+			applyEncounterReset(boss, new SyncScope(event.getScopeType(), event.getScopeId()),
+				"party encounter reset from member " + event.getMemberId(), false);
+		});
+	}
+
 	private void maybeBroadcastEncounterPresence()
 	{
 		if (!config.syncWithOtherPartyDefenceUsers() || !partyService.isInParty()
@@ -728,6 +804,11 @@ public class BetterPartyDefencePlugin extends Plugin
 
 		BossDefence boss = sync.getBossType();
 		NPC localBoss = findLiveNpcForBoss(boss);
+		if (isBlockedByRecentEncounterReset(boss, event.getScopeType(), event.getScopeId()))
+		{
+			log.debug("Ignoring BPD sync for {} during the post-reset stale-snapshot barrier", boss);
+			return;
+		}
 
 		// A world-scoped boss cannot be position/HP-verified until it is rendered locally. Cache
 		// the fresh absolute snapshot silently, then bind it when that boss actually enters this
@@ -764,6 +845,172 @@ public class BetterPartyDefencePlugin extends Plugin
 		}
 
 		applyAcceptedSync(event, sync, localBoss);
+	}
+
+	/**
+	 * A concrete dead NPC is authoritative for non-raid encounters. The tracker already removed
+	 * its local state; this method atomically invalidates the remaining sync/history metadata and
+	 * tells BPD peers so an older, longer spec history cannot be restored onto the respawn.
+	 */
+	private void reconcileAuthoritativeNpcDeaths()
+	{
+		for (BossDefence boss : defenceTracker.consumeEndedBosses())
+		{
+			if (boss == null || isRaidEncounterBoss(boss))
+			{
+				continue;
+			}
+			resetEncounterAndBroadcast(boss, currentEncounterScope(), "local NPC death");
+		}
+	}
+
+	/**
+	 * ToA is intentionally special here. An individual death/runback keeps raid Defence state, but
+	 * when every occupied ToA party orb reports dead the room has wiped and the boss encounter is
+	 * restarting inside the same raid instance. Clear every remembered ToA target once on that
+	 * transition so Defence, spec history and the previous-target marker all restart together.
+	 */
+	private void reconcileToaFullWipe()
+	{
+		List<BossDefence> remembered = rememberedToaBosses();
+		boolean fullyDead = isToaPartyFullyDead();
+
+		if (!fullyDead)
+		{
+			toaPartyWasFullyDead = false;
+			return;
+		}
+		if (toaPartyWasFullyDead || remembered.isEmpty())
+		{
+			toaPartyWasFullyDead = true;
+			return;
+		}
+
+		toaPartyWasFullyDead = true;
+		for (BossDefence boss : remembered)
+		{
+			SyncScope scope = currentRaidScopeForBoss(boss);
+			resetEncounterAndBroadcast(boss, scope, "ToA full-party wipe");
+		}
+	}
+
+	private List<BossDefence> rememberedToaBosses()
+	{
+		List<BossDefence> bosses = new ArrayList<>();
+		for (BossDefence boss : BossDefence.values())
+		{
+			if (isToaBoss(boss) && defenceTracker.hasRememberedState(boss))
+			{
+				bosses.add(boss);
+			}
+		}
+		return bosses;
+	}
+
+	private boolean isToaPartyFullyDead()
+	{
+		WorldView worldView = client.getTopLevelWorldView();
+		if (worldView == null || !worldView.isInstance())
+		{
+			return false;
+		}
+
+		boolean anyOccupiedSlot = false;
+		for (int varbit : TOA_PARTY_HEALTH_VARBITS)
+		{
+			int health = client.getVarbitValue(varbit);
+			if (health == 0)
+			{
+				continue; // Hidden/unused party slot.
+			}
+			anyOccupiedSlot = true;
+			if (health != TOA_PARTY_MEMBER_DEAD)
+			{
+				return false;
+			}
+		}
+		return anyOccupiedSlot;
+	}
+
+	private void resetEncounterAndBroadcast(BossDefence boss, SyncScope scope, String reason)
+	{
+		if (!applyEncounterReset(boss, scope, reason, true))
+		{
+			return;
+		}
+
+		if (scope != null && config.syncWithOtherPartyDefenceUsers() && partyService.isInParty())
+		{
+			partyService.send(new BpdEncounterReset(client.getWorld(), boss, scope.getType(), scope.getId()));
+			log.debug("Broadcast BPD encounter reset boss={} scope={}:{} reason={}",
+				boss, scope.getType(), scope.getId(), reason);
+		}
+	}
+
+	/** Clear Defence + history + all reconciliation metadata as one encounter state. */
+	private boolean applyEncounterReset(BossDefence boss, SyncScope scope, String reason, boolean authoritativeLocal)
+	{
+		if (boss == null)
+		{
+			return false;
+		}
+
+		long now = System.currentTimeMillis();
+		EncounterResetKey key = scope == null ? null
+			: new EncounterResetKey(client.getWorld(), boss, scope.getType(), scope.getId());
+		if (key != null)
+		{
+			Long lastReset = recentEncounterResets.get(key);
+			if (!authoritativeLocal && lastReset != null && now - lastReset <= ENCOUNTER_RESET_DEDUP_MILLIS)
+			{
+				return false;
+			}
+			recentEncounterResets.put(key, now);
+		}
+
+		defenceTracker.clearBossState(boss, reason);
+		pendingWorldSyncs.remove(boss);
+		lastPartyEncounterPresenceMillis.remove(boss);
+		lastSoloSyncedEncounterPresenceMillis.remove(boss);
+		previouslySyncedBosses.remove(boss);
+		retainedRaidScopes.remove(boss);
+		if (activeSyncScope != null && activeSyncScope.getBoss() == boss)
+		{
+			activeSyncScope = null;
+		}
+		lastSyncSignature = null;
+		lastSyncBroadcastMillis = 0L;
+		log.debug("Reset encounter state for {}: {}", boss, reason);
+		return true;
+	}
+
+	private boolean isBlockedByRecentEncounterReset(BossDefence boss, int scopeType, int scopeId)
+	{
+		EncounterResetKey key = new EncounterResetKey(client.getWorld(), boss, scopeType, scopeId);
+		Long resetAt = recentEncounterResets.get(key);
+		return resetAt != null && System.currentTimeMillis() - resetAt <= ENCOUNTER_RESET_BARRIER_MILLIS;
+	}
+
+	private boolean incomingEncounterResetScopeMatches(BpdEncounterReset event, BossDefence boss)
+	{
+		int expectedRaidScope = raidScopeType(boss);
+		if (expectedRaidScope != -1)
+		{
+			return event.getScopeType() == expectedRaidScope
+				&& event.getScopeId() > 0
+				&& raidController(expectedRaidScope) == event.getScopeId();
+		}
+
+		WorldView worldView = client.getTopLevelWorldView();
+		if (worldView == null)
+		{
+			return false;
+		}
+		if (event.getScopeType() == BpdDefenceSync.SCOPE_INSTANCE)
+		{
+			return worldView.isInstance() && instanceFingerprint(worldView) == event.getScopeId();
+		}
+		return event.getScopeType() == BpdDefenceSync.SCOPE_WORLD && !worldView.isInstance();
 	}
 
 	/** Broadcast drained visible targets periodically; the refresh also acts as party encounter presence. */
@@ -1697,6 +1944,15 @@ public class BetterPartyDefencePlugin extends Plugin
 			infoBoxManager.removeInfoBox(magicDefenceBox);
 			magicDefenceBox = null;
 		}
+	}
+
+	@Value
+	private static class EncounterResetKey
+	{
+		int world;
+		BossDefence boss;
+		int scopeType;
+		int scopeId;
 	}
 
 	@Value
