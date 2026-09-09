@@ -4,12 +4,14 @@ import java.awt.Font;
 import java.io.File;
 import net.runelite.client.ui.FontManager;
 
-/** Loads the selected tracker font, including an optional local TTF/OTF file. */
+/** Loads the selected tracker fonts, including optional local TTF/OTF files. */
 final class TrackerFontManager
 {
 	private final BetterPartyDefenceConfig config;
 	private String cachedPath;
 	private Font cachedCustom;
+	private String cachedPreviousPath;
+	private Font cachedPreviousCustom;
 
 	TrackerFontManager(BetterPartyDefenceConfig config)
 	{
@@ -18,9 +20,20 @@ final class TrackerFontManager
 
 	Font font()
 	{
-		int size = Math.max(8, Math.min(48, config.defenceFontSize()));
+		return font(config.defenceFont(), config.defenceFontSize(), config.defenceBoldText(), false);
+	}
+
+	Font previousTargetFont()
+	{
+		return font(config.previousTargetFont(), config.previousTargetFontSize(),
+			config.previousTargetBoldText(), true);
+	}
+
+	private Font font(TrackerFont selection, int configuredSize, boolean bold, boolean previous)
+	{
+		int size = Math.max(8, Math.min(48, configuredSize));
 		Font base;
-		switch (config.defenceFont())
+		switch (selection)
 		{
 			case SANS_SERIF:
 				base = new Font(Font.SANS_SERIF, Font.PLAIN, size);
@@ -33,7 +46,7 @@ final class TrackerFontManager
 				break;
 			case ADD_CUSTOM:
 			case CUSTOM:
-				base = customFont();
+				base = customFont(previous);
 				if (base == null)
 				{
 					base = FontManager.getRunescapeSmallFont();
@@ -45,22 +58,39 @@ final class TrackerFontManager
 				base = FontManager.getRunescapeSmallFont().deriveFont((float) size);
 				break;
 		}
-		return config.defenceBoldText() ? base.deriveFont(Font.BOLD) : base.deriveFont(Font.PLAIN);
+		return bold ? base.deriveFont(Font.BOLD) : base.deriveFont(Font.PLAIN);
 	}
 
-	private Font customFont()
+	private Font customFont(boolean previous)
 	{
-		String path = config.customFontPath();
+		String path = previous ? config.previousTargetCustomFontPath() : config.customFontPath();
 		if (path == null || path.trim().isEmpty())
 		{
 			return null;
 		}
+
+		if (previous)
+		{
+			if (path.equals(cachedPreviousPath))
+			{
+				return cachedPreviousCustom;
+			}
+			cachedPreviousPath = path;
+			cachedPreviousCustom = loadFont(path);
+			return cachedPreviousCustom;
+		}
+
 		if (path.equals(cachedPath))
 		{
 			return cachedCustom;
 		}
 		cachedPath = path;
-		cachedCustom = null;
+		cachedCustom = loadFont(path);
+		return cachedCustom;
+	}
+
+	private static Font loadFont(String path)
+	{
 		File file = new File(path);
 		if (!file.isFile())
 		{
@@ -68,19 +98,18 @@ final class TrackerFontManager
 		}
 		try
 		{
-			cachedCustom = Font.createFont(Font.TRUETYPE_FONT, file);
+			return Font.createFont(Font.TRUETYPE_FONT, file);
 		}
 		catch (Exception ignored)
 		{
 			try
 			{
-				cachedCustom = Font.createFont(Font.TYPE1_FONT, file);
+				return Font.createFont(Font.TYPE1_FONT, file);
 			}
 			catch (Exception ignoredAgain)
 			{
-				cachedCustom = null;
+				return null;
 			}
 		}
-		return cachedCustom;
 	}
 }

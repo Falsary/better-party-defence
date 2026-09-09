@@ -1,6 +1,7 @@
 package net.betterpartydefence;
 
 import java.awt.Color;
+import java.awt.Dimension;
 import java.awt.FontMetrics;
 import java.awt.Graphics2D;
 import java.awt.Polygon;
@@ -14,20 +15,15 @@ import net.betterpartydefence.DefenceTracker.DefenceState;
 import net.runelite.api.Point;
 import net.runelite.client.ui.overlay.OverlayUtil;
 
-/**
- * Renderer for the optional previous-target marker.
- *
- * <p>This intentionally does not reuse the active-target presentation settings. The marker is
- * always an attached, above-HP-bar readout with a small independent set of styling controls,
- * while its values, drain formatting, colours, and magic-defence semantics remain identical to
- * the main tracker.
- */
+/** Draws the experimental previous-target display using its own independent UI profile. */
 final class PreviousTargetOverlayRenderer
 {
 	private static final Color PLATE_COLOR = new Color(0, 0, 0, 150);
 	private static final int GAP = 3;
 	private static final int SEGMENT_GAP = 8;
 	private static final int ARROW_WIDTH = 7;
+	private static final int EDGE_PADDING = 2;
+	private static final int PERCENT = 100;
 
 	private final BetterPartyDefenceConfig config;
 	private final SkillIconSource skillIcons;
@@ -57,15 +53,51 @@ final class PreviousTargetOverlayRenderer
 		}
 	}
 
+	Dimension renderDetached(Graphics2D graphics, DefenceState state)
+	{
+		FontMetrics fm = graphics.getFontMetrics();
+		List<List<Segment>> rows = rows(state);
+		if (rows.isEmpty())
+		{
+			return null;
+		}
+
+		int maxRowWidth = 0;
+		int maxIconHeight = 0;
+		for (List<Segment> row : rows)
+		{
+			maxRowWidth = Math.max(maxRowWidth, rowWidth(fm, row));
+			for (Segment segment : row)
+			{
+				if (segment.getIcon() != null)
+				{
+					maxIconHeight = Math.max(maxIconHeight, segment.getIcon().getHeight());
+				}
+			}
+		}
+
+		int firstBaseline = Math.max(fm.getAscent() + 1, maxIconHeight - 2) + EDGE_PADDING;
+		int width = maxRowWidth + EDGE_PADDING * 2;
+		int centreX = width / 2;
+		for (int i = 0; i < rows.size(); i++)
+		{
+			drawRow(graphics, fm, centreX, firstBaseline + i * fm.getHeight(), rows.get(i));
+		}
+
+		int lastBaseline = firstBaseline + (rows.size() - 1) * fm.getHeight();
+		int bottom = lastBaseline + Math.max(fm.getDescent() + 2, 3) + EDGE_PADDING;
+		return new Dimension(width, bottom);
+	}
+
 	private List<List<Segment>> rows(DefenceState state)
 	{
 		Segment defence = defenceSegment(state);
-		Segment magic = config.magicDefence() ? magicSegment(state) : null;
+		Segment magic = config.previousTargetMagicDefence() ? magicSegment(state) : null;
 		if (magic == null)
 		{
 			return Collections.singletonList(Collections.singletonList(defence));
 		}
-		if (config.magicDefenceSameRow())
+		if (config.previousTargetMagicDefenceSameRow())
 		{
 			return Collections.singletonList(Arrays.asList(defence, magic));
 		}
@@ -77,13 +109,13 @@ final class PreviousTargetOverlayRenderer
 
 	private Segment defenceSegment(DefenceState state)
 	{
-		boolean full = config.defenceShowFullLevel();
+		boolean full = config.previousTargetShowFullLevel();
 		long current = DefenceReadout.shownDefence(state, full);
 		long base = DefenceReadout.shownBaseDefence(state, full);
 		return new Segment(iconOrNull(skillIcons.defence(config.previousTargetUseThemeSkillIcons())),
-			DefenceReadout.value(config.defenceValueFormat(), current, base),
-			DefenceReadout.defenceColor(state, config),
-			DefenceReadout.drain(config.defenceDrainFormat(), current, base));
+			DefenceReadout.value(config.previousTargetValueFormat(), current, base),
+			defenceColor(state),
+			DefenceReadout.drain(config.previousTargetDrainFormat(), current, base));
 	}
 
 	private Segment magicSegment(DefenceState state)
@@ -91,32 +123,47 @@ final class PreviousTargetOverlayRenderer
 		long rollPercent = DefenceReadout.percentRemaining(state.getMagicRoll(), state.getMagicBaseRoll());
 		String text;
 		String drain = null;
-		switch (config.magicDefenceDisplay())
+		switch (config.previousTargetMagicDefenceDisplay())
 		{
 			case BONUS:
-				text = DefenceReadout.value(config.defenceValueFormat(), state.getMagicDef(), state.getMagicBaseDef());
-				drain = DefenceReadout.drain(config.defenceDrainFormat(), state.getMagicDef(), state.getMagicBaseDef());
+				text = DefenceReadout.value(config.previousTargetValueFormat(), state.getMagicDef(), state.getMagicBaseDef());
+				drain = DefenceReadout.drain(config.previousTargetDrainFormat(), state.getMagicDef(), state.getMagicBaseDef());
 				break;
 			case LEVEL:
-				text = DefenceReadout.value(config.defenceValueFormat(), state.getMagicLevel(), state.getMagicBaseLevel());
-				drain = DefenceReadout.drain(config.defenceDrainFormat(), state.getMagicLevel(), state.getMagicBaseLevel());
+				text = DefenceReadout.value(config.previousTargetValueFormat(), state.getMagicLevel(), state.getMagicBaseLevel());
+				drain = DefenceReadout.drain(config.previousTargetDrainFormat(), state.getMagicLevel(), state.getMagicBaseLevel());
 				break;
 			case PERCENT:
-				if (rollPercent >= 100)
+				if (rollPercent >= PERCENT)
 				{
 					return null;
 				}
 				text = rollPercent + "%";
 				break;
 			case BOTH:
-				text = rollPercent < 100 ? state.getMagicDef() + "  " + rollPercent + "%" : Long.toString(state.getMagicDef());
-				drain = DefenceReadout.drain(config.defenceDrainFormat(), state.getMagicDef(), state.getMagicBaseDef());
+				text = rollPercent < PERCENT
+					? state.getMagicDef() + "  " + rollPercent + "%"
+					: Long.toString(state.getMagicDef());
+				drain = DefenceReadout.drain(config.previousTargetDrainFormat(), state.getMagicDef(), state.getMagicBaseDef());
 				break;
 			default:
 				return null;
 		}
 		return new Segment(iconOrNull(skillIcons.magic(config.previousTargetUseThemeSkillIcons())),
-			text, config.magicDefenceColor(), drain);
+			text, config.previousTargetMagicDefenceColor(), drain);
+	}
+
+	private Color defenceColor(DefenceState state)
+	{
+		long aboveFloor = Math.max(state.getCurrent() - state.getMin(), 0);
+		if (aboveFloor == 0)
+		{
+			return config.previousTargetCappedColor();
+		}
+		long threshold = config.previousTargetLowThresholdUnit() == DefenceThresholdUnit.PERCENT
+			? (state.getBase() - state.getMin()) * Math.min(PERCENT, config.previousTargetLowThreshold()) / PERCENT
+			: config.previousTargetLowThreshold();
+		return aboveFloor <= threshold ? config.previousTargetLowColor() : config.previousTargetHighColor();
 	}
 
 	private BufferedImage iconOrNull(BufferedImage image)
@@ -179,7 +226,7 @@ final class PreviousTargetOverlayRenderer
 			cursor += GAP;
 			drawDownArrow(graphics, cursor, baseline, fm.getAscent());
 			cursor += ARROW_WIDTH + 2;
-			OverlayUtil.renderTextLocation(graphics, new Point(cursor, baseline), segment.getDrain(), config.defenceDrainColor());
+			OverlayUtil.renderTextLocation(graphics, new Point(cursor, baseline), segment.getDrain(), config.previousTargetDrainColor());
 			cursor += fm.stringWidth(segment.getDrain());
 		}
 		return cursor;
@@ -193,7 +240,7 @@ final class PreviousTargetOverlayRenderer
 		triangle.addPoint(x, top);
 		triangle.addPoint(x + ARROW_WIDTH, top);
 		triangle.addPoint(x + ARROW_WIDTH / 2, bottom);
-		graphics.setColor(config.defenceDrainColor());
+		graphics.setColor(config.previousTargetDrainColor());
 		graphics.fill(triangle);
 	}
 }

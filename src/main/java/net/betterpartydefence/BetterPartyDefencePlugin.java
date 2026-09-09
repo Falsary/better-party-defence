@@ -128,6 +128,8 @@ public class BetterPartyDefencePlugin extends Plugin
 
 	private NpcDefenceOverlay defenceOverlay;
 	private ScreenDefenceOverlay screenDefenceOverlay;
+	private PreviousTargetScreenOverlay previousTargetScreenOverlay;
+	private PreviousTargetDisplayState previousTargetDisplayState;
 	private SkillIconSource skillIconSource;
 	private TrackerFontManager trackerFontManager;
 	private DefenceInfoBox defenceBox;
@@ -201,10 +203,15 @@ public class BetterPartyDefencePlugin extends Plugin
 
 		skillIconSource = new SkillIconSource(client, skillIconManager, config);
 		trackerFontManager = new TrackerFontManager(config);
-		defenceOverlay = new NpcDefenceOverlay(client, defenceTracker, config, skillIconSource, trackerFontManager);
+		previousTargetDisplayState = new PreviousTargetDisplayState(client, defenceTracker, config);
+		defenceOverlay = new NpcDefenceOverlay(client, defenceTracker, config, skillIconSource,
+			trackerFontManager, previousTargetDisplayState);
 		screenDefenceOverlay = new ScreenDefenceOverlay(defenceTracker, config, skillIconSource, trackerFontManager);
+		previousTargetScreenOverlay = new PreviousTargetScreenOverlay(config, previousTargetDisplayState,
+			skillIconSource, trackerFontManager);
 		overlayManager.add(defenceOverlay);
 		overlayManager.add(screenDefenceOverlay);
+		overlayManager.add(previousTargetScreenOverlay);
 
 		wasInParty = partyService.isInParty();
 		log.info("Better Party Defence started; Hub Party session active={}", wasInParty);
@@ -229,6 +236,16 @@ public class BetterPartyDefencePlugin extends Plugin
 		{
 			overlayManager.remove(screenDefenceOverlay);
 			screenDefenceOverlay = null;
+		}
+		if (previousTargetScreenOverlay != null)
+		{
+			overlayManager.remove(previousTargetScreenOverlay);
+			previousTargetScreenOverlay = null;
+		}
+		if (previousTargetDisplayState != null)
+		{
+			previousTargetDisplayState.clear();
+			previousTargetDisplayState = null;
 		}
 		skillIconSource = null;
 		trackerFontManager = null;
@@ -296,6 +313,10 @@ public class BetterPartyDefencePlugin extends Plugin
 		reconcileRaidEncounterLifecycle();
 		reconcilePartyWideEncounterAbsence();
 		reconcileFormerSyncedSoloAbsence();
+		if (previousTargetDisplayState != null)
+		{
+			previousTargetDisplayState.update();
+		}
 		updateDefenceInfoBox();
 
 		// RuneLite's EventBus requires GameTick subscribers to be named exactly onGameTick.
@@ -513,6 +534,13 @@ public class BetterPartyDefencePlugin extends Plugin
 			return;
 		}
 
+		if (("previousTargetDisplay".equals(event.getKey()) || "defenceHpBar".equals(event.getKey()))
+			&& previousTargetDisplayState != null)
+		{
+			previousTargetDisplayState.clear();
+			return;
+		}
+
 		if ("syncWithOtherPartyDefenceUsers".equals(event.getKey()))
 		{
 			lastSyncSignature = null;
@@ -534,17 +562,32 @@ public class BetterPartyDefencePlugin extends Plugin
 			return;
 		}
 
-		if (!"defenceFont".equals(event.getKey()) || config.defenceFont() != TrackerFont.ADD_CUSTOM)
+		if ("defenceFont".equals(event.getKey()) && config.defenceFont() == TrackerFont.ADD_CUSTOM)
 		{
+			chooseCustomFont(false);
 			return;
 		}
 
+		if ("previousTargetFont".equals(event.getKey()) && config.previousTargetFont() == TrackerFont.ADD_CUSTOM)
+		{
+			chooseCustomFont(true);
+		}
+	}
+
+
+	private void chooseCustomFont(boolean previousTarget)
+	{
 		SwingUtilities.invokeLater(() ->
 		{
 			JFileChooser chooser = new JFileChooser();
-			chooser.setDialogTitle("Choose a font for Better Party Defence");
+			chooser.setDialogTitle(previousTarget
+				? "Choose a font for Better Party Defence sticky display"
+				: "Choose a font for Better Party Defence");
 			chooser.setFileFilter(new FileNameExtensionFilter("Font files (*.ttf, *.otf)", "ttf", "otf"));
-			String current = config.customFontPath();
+
+			String pathKey = previousTarget ? "previousTargetCustomFontPath" : "customFontPath";
+			String fontKey = previousTarget ? "previousTargetFont" : "defenceFont";
+			String current = previousTarget ? config.previousTargetCustomFontPath() : config.customFontPath();
 			if (current != null && !current.trim().isEmpty())
 			{
 				File file = new File(current);
@@ -553,17 +596,18 @@ public class BetterPartyDefencePlugin extends Plugin
 					chooser.setCurrentDirectory(file.getParentFile());
 				}
 			}
+
 			if (chooser.showOpenDialog(null) == JFileChooser.APPROVE_OPTION)
 			{
-				configManager.setConfiguration(BetterPartyDefenceConfig.GROUP, "customFontPath",
+				configManager.setConfiguration(BetterPartyDefenceConfig.GROUP, pathKey,
 					chooser.getSelectedFile().getAbsolutePath());
-				configManager.setConfiguration(BetterPartyDefenceConfig.GROUP, "defenceFont", TrackerFont.CUSTOM);
+				configManager.setConfiguration(BetterPartyDefenceConfig.GROUP, fontKey, TrackerFont.CUSTOM);
 			}
 			else
 			{
-				TrackerFont fallback = config.customFontPath() == null || config.customFontPath().trim().isEmpty()
+				TrackerFont fallback = current == null || current.trim().isEmpty()
 					? TrackerFont.RUNESCAPE : TrackerFont.CUSTOM;
-				configManager.setConfiguration(BetterPartyDefenceConfig.GROUP, "defenceFont", fallback);
+				configManager.setConfiguration(BetterPartyDefenceConfig.GROUP, fontKey, fallback);
 			}
 		});
 	}

@@ -30,6 +30,13 @@ public interface BetterPartyDefenceConfig extends Config
 	@ConfigSection(name = "Experimental", description = "Experimental Better Party Defence features.", position = 4)
 	String EXPERIMENTAL = "experimental";
 
+	@ConfigSection(
+		name = "Sticky Display UI",
+		description = "Appearance and placement for the experimental previous-target display.",
+		position = 5,
+		closedByDefault = true)
+	String STICKY_UI = "stickyDisplayUi";
+
 	@ConfigItem(keyName = "defenceHpBar", name = "Show defence tracker", description = "Display the tracked monster's live defence.", position = 1, section = DISPLAY)
 	default boolean defenceHpBar() { return true; }
 
@@ -143,50 +150,86 @@ public interface BetterPartyDefenceConfig extends Config
 	@ConfigItem(
 		keyName = "previousTargetDisplay",
 		name = "Previous target display",
-		description = "Keep the previously active drained target visible above its HP bar while another target is active.",
+		description = "Keep the previously active drained target visible using the independent Sticky Display UI settings.",
 		position = 2,
 		section = EXPERIMENTAL)
 	default boolean previousTargetDisplay() { return true; }
 
-	@Range(min = 8, max = 48)
-	@ConfigItem(
-		keyName = "previousTargetFontSizePx",
-		name = "Previous target font size",
-		description = "Font size used by the previous-target marker.",
-		position = 3,
-		section = EXPERIMENTAL)
-	default int previousTargetFontSize() { return 15; }
+	@ConfigItem(keyName = "previousTargetDisplayMode", name = "Display location", description = "Attach the sticky display to the previous NPC or detach it as its own movable overlay.", position = 1, section = STICKY_UI)
+	default DefenceDisplayMode previousTargetDisplayMode() { return DefenceDisplayMode.NPC; }
 
-	@ConfigItem(
-		keyName = "previousTargetBoldText",
-		name = "Previous target bold text",
-		description = "Use bold text for the previous-target marker.",
-		position = 4,
-		section = EXPERIMENTAL)
-	default boolean previousTargetBoldText() { return false; }
+	@ConfigItem(keyName = "previousTargetHpBarPosition", name = "Attached position", description = "Where the attached sticky display sits, including directly to the right of the HP bar.", position = 2, section = STICKY_UI)
+	default DefenceOverlayPosition previousTargetHpBarPosition() { return DefenceOverlayPosition.ABOVE_HP_BAR; }
 
-	@ConfigItem(
-		keyName = "previousTargetShowIcons",
-		name = "Previous target skill icons",
-		description = "Show Defence and Magic skill icons on the previous-target marker.",
-		position = 5,
-		section = EXPERIMENTAL)
+	@Range(min = -200, max = 200)
+	@Units(Units.PIXELS)
+	@ConfigItem(keyName = "previousTargetHpBarYOffset", name = "Vertical nudge", description = "Shift the attached sticky display up by this many pixels; negative values move it down.", position = 3, section = STICKY_UI)
+	default int previousTargetHpBarYOffset() { return 0; }
+
+	@ConfigItem(keyName = "previousTargetValueFormat", name = "Defence shown as", description = "Current value, current/base, percent remaining, or current with percent.", position = 4, section = STICKY_UI)
+	default DefenceValueFormat previousTargetValueFormat() { return DefenceValueFormat.CURRENT; }
+
+	@ConfigItem(keyName = "previousTargetDrainFormat", name = "Drain shown as", description = "Show drained levels, drained percent, or hide the drain suffix.", position = 5, section = STICKY_UI)
+	default DefenceDrainFormat previousTargetDrainFormat() { return DefenceDrainFormat.AMOUNT; }
+
+	@ConfigItem(keyName = "previousTargetShowFullLevel", name = "Show full level", description = "For monsters with a Defence floor, show the full level instead of only the drainable amount.", position = 6, section = STICKY_UI)
+	default boolean previousTargetShowFullLevel() { return true; }
+
+	@ConfigItem(keyName = "previousTargetShowIcons", name = "Show skill icons", description = "Draw Defence and Magic skill icons in front of the sticky readout.", position = 7, section = STICKY_UI)
 	default boolean previousTargetShowIcons() { return true; }
 
-	@ConfigItem(
-		keyName = "previousTargetUseThemeSkillIcons",
-		name = "Previous target theme icons",
-		description = "Use skill icons from the active RuneLite theme for the previous-target marker when available.",
-		position = 6,
-		section = EXPERIMENTAL)
+	@ConfigItem(keyName = "previousTargetUseThemeSkillIcons", name = "Use theme skill icons", description = "Use Defence and Magic icons from the active RuneLite theme when available; otherwise use the standard icons.", position = 8, section = STICKY_UI)
 	default boolean previousTargetUseThemeSkillIcons() { return true; }
 
-	@ConfigItem(
-		keyName = "previousTargetTextPlate",
-		name = "Previous target text background",
-		description = "Draw a translucent background behind the previous-target marker.",
-		position = 7,
-		section = EXPERIMENTAL)
-	default boolean previousTargetTextPlate() { return false; }
-}
+	@ConfigItem(keyName = "previousTargetFont", name = "Font", description = "Font used by the sticky display.", position = 9, section = STICKY_UI)
+	default TrackerFont previousTargetFont() { return TrackerFont.RUNESCAPE; }
 
+	@Range(min = 8, max = 48)
+	@ConfigItem(keyName = "previousTargetFontSizePx", name = "Font size", description = "Sticky display font size in pixels.", position = 10, section = STICKY_UI)
+	default int previousTargetFontSize() { return 15; }
+
+	@ConfigItem(keyName = "previousTargetBoldText", name = "Bold text", description = "Use bold text for the sticky display.", position = 11, section = STICKY_UI)
+	default boolean previousTargetBoldText() { return false; }
+
+	@ConfigItem(keyName = "previousTargetCustomFontPath", name = "Custom font file", description = "Local font selected by Add custom font for the sticky display.", position = 12, section = STICKY_UI, hidden = true)
+	default String previousTargetCustomFontPath() { return ""; }
+
+	@ConfigItem(keyName = "previousTargetTextPlate", name = "Text background", description = "Draw a translucent background behind the sticky display text.", position = 13, section = STICKY_UI)
+	default boolean previousTargetTextPlate() { return false; }
+
+	@Range(min = 0, max = 500)
+	@ConfigItem(keyName = "previousTargetLowThreshold", name = "Low defence threshold", description = "Defence at or below this threshold uses the sticky low-defence colour.", position = 14, section = STICKY_UI)
+	default int previousTargetLowThreshold() { return 10; }
+
+	@ConfigItem(keyName = "previousTargetLowThresholdUnit", name = "Threshold unit", description = "Interpret the sticky threshold as levels or percent of the drainable Defence.", position = 15, section = STICKY_UI)
+	default DefenceThresholdUnit previousTargetLowThresholdUnit() { return DefenceThresholdUnit.LEVELS; }
+
+	@Alpha
+	@ConfigItem(keyName = "previousTargetHighColor", name = "High defence colour", description = "Colour used above the sticky low-defence threshold.", position = 16, section = STICKY_UI)
+	default Color previousTargetHighColor() { return Color.WHITE; }
+
+	@Alpha
+	@ConfigItem(keyName = "previousTargetLowColor", name = "Low defence colour", description = "Colour used at or below the sticky low-defence threshold.", position = 17, section = STICKY_UI)
+	default Color previousTargetLowColor() { return new Color(0xC0, 0xAB, 0x46); }
+
+	@Alpha
+	@ConfigItem(keyName = "previousTargetCappedColor", name = "Capped defence colour", description = "Colour used when the sticky target has reached its Defence floor.", position = 18, section = STICKY_UI)
+	default Color previousTargetCappedColor() { return new Color(0x57, 0x95, 0x49); }
+
+	@Alpha
+	@ConfigItem(keyName = "previousTargetDrainColor", name = "Drain colour", description = "Colour used for the sticky drain arrow and drained amount.", position = 19, section = STICKY_UI)
+	default Color previousTargetDrainColor() { return new Color(0xAD, 0x14, 0x59); }
+
+	@ConfigItem(keyName = "previousTargetMagicDefence", name = "Show magic defence", description = "Also show magic-defence changes on the sticky display.", position = 20, section = STICKY_UI)
+	default boolean previousTargetMagicDefence() { return true; }
+
+	@ConfigItem(keyName = "previousTargetMagicDefenceDisplay", name = "Magic defence as", description = "Choose magic-defence bonus, Magic level, percent of starting roll, or bonus plus percent.", position = 21, section = STICKY_UI)
+	default MagicDefenceDisplay previousTargetMagicDefenceDisplay() { return MagicDefenceDisplay.BONUS; }
+
+	@ConfigItem(keyName = "previousTargetMagicDefenceSameRow", name = "Magic on same row", description = "Draw the sticky magic-defence readout beside Defence instead of on a second line.", position = 22, section = STICKY_UI)
+	default boolean previousTargetMagicDefenceSameRow() { return false; }
+
+	@Alpha
+	@ConfigItem(keyName = "previousTargetMagicDefenceColor", name = "Magic defence colour", description = "Colour used for the sticky magic-defence readout.", position = 23, section = STICKY_UI)
+	default Color previousTargetMagicDefenceColor() { return new Color(0x22, 0x5E, 0xA8); }
+}
