@@ -74,20 +74,23 @@ public interface BetterPartyDefenceConfig extends Config
 	@ConfigItem(keyName = "defenceUseThemeSkillIcons", name = "Use theme skill icons", description = "Use Defence and Magic icons from the active RuneLite theme when available; otherwise use the standard icons.", position = 2, section = TEXT)
 	default boolean defenceUseThemeSkillIcons() { return true; }
 
-	@ConfigItem(keyName = "defenceFont", name = "Font", description = "Font used by the Defence tracker.", position = 3, section = TEXT)
+	@ConfigItem(keyName = "defenceInfoBoxUseThemeSkillIcon", name = "InfoBox uses theme skill icon", description = "Use the active RuneLite theme's Defence and Magic skill icons in Better Party Defence info boxes when available.", position = 3, section = TEXT)
+	default boolean defenceInfoBoxUseThemeSkillIcon() { return false; }
+
+	@ConfigItem(keyName = "defenceFont", name = "Font", description = "Font used by the Defence tracker.", position = 4, section = TEXT)
 	default TrackerFont defenceFont() { return TrackerFont.RUNESCAPE; }
 
 	@Range(min = 8, max = 48)
-	@ConfigItem(keyName = "defenceFontSizePx", name = "Font size", description = "Tracker font size in pixels.", position = 4, section = TEXT)
+	@ConfigItem(keyName = "defenceFontSizePx", name = "Font size", description = "Tracker font size in pixels.", position = 5, section = TEXT)
 	default int defenceFontSize() { return 15; }
 
-	@ConfigItem(keyName = "defenceBoldText", name = "Bold text", description = "Use bold text for the Defence tracker.", position = 5, section = TEXT)
+	@ConfigItem(keyName = "defenceBoldText", name = "Bold text", description = "Use bold text for the Defence tracker.", position = 6, section = TEXT)
 	default boolean defenceBoldText() { return false; }
 
-	@ConfigItem(keyName = "customFontPath", name = "Custom font file", description = "Local font selected by Add custom font.", position = 6, section = TEXT, hidden = true)
+	@ConfigItem(keyName = "customFontPath", name = "Custom font file", description = "Local font selected by Add custom font.", position = 7, section = TEXT, hidden = true)
 	default String customFontPath() { return ""; }
 
-	@ConfigItem(keyName = "defenceTextPlate", name = "Text background", description = "Draw a translucent background behind the tracker text.", position = 7, section = TEXT)
+	@ConfigItem(keyName = "defenceTextPlate", name = "Text background", description = "Draw a translucent background behind the tracker text.", position = 8, section = TEXT)
 	default boolean defenceTextPlate() { return false; }
 
 	@Range(min = 0, max = 500)
@@ -136,5 +139,54 @@ public interface BetterPartyDefenceConfig extends Config
 		position = 1,
 		section = EXPERIMENTAL)
 	default boolean syncWithOtherPartyDefenceUsers() { return true; }
+
+	@ConfigItem(
+		keyName = "previousTargetDisplay",
+		name = "Previous target display",
+		description = "Keep the previously active drained target visible above its HP bar while another target is active.",
+		position = 2,
+		section = EXPERIMENTAL)
+	default boolean previousTargetDisplay() { return true; }
+
+	@Range(min = 8, max = 48)
+	@ConfigItem(
+		keyName = "previousTargetFontSizePx",
+		name = "Previous target font size",
+		description = "Font size used by the previous-target marker.",
+		position = 3,
+		section = EXPERIMENTAL)
+	default int previousTargetFontSize() { return 15; }
+
+	@ConfigItem(
+		keyName = "previousTargetBoldText",
+		name = "Previous target bold text",
+		description = "Use bold text for the previous-target marker.",
+		position = 4,
+		section = EXPERIMENTAL)
+	default boolean previousTargetBoldText() { return false; }
+
+	@ConfigItem(
+		keyName = "previousTargetShowIcons",
+		name = "Previous target skill icons",
+		description = "Show Defence and Magic skill icons on the previous-target marker.",
+		position = 5,
+		section = EXPERIMENTAL)
+	default boolean previousTargetShowIcons() { return true; }
+
+	@ConfigItem(
+		keyName = "previousTargetUseThemeSkillIcons",
+		name = "Previous target theme icons",
+		description = "Use skill icons from the active RuneLite theme for the previous-target marker when available.",
+		position = 6,
+		section = EXPERIMENTAL)
+	default boolean previousTargetUseThemeSkillIcons() { return true; }
+
+	@ConfigItem(
+		keyName = "previousTargetTextPlate",
+		name = "Previous target text background",
+		description = "Draw a translucent background behind the previous-target marker.",
+		position = 7,
+		section = EXPERIMENTAL)
+	default boolean previousTargetTextPlate() { return false; }
 }
 

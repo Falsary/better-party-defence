@@ -3,8 +3,8 @@ package net.betterpartydefence;
 import java.awt.image.BufferedImage;
 import net.runelite.api.Client;
 import net.runelite.api.Skill;
-import net.runelite.api.SpriteID;
 import net.runelite.api.SpritePixels;
+import net.runelite.api.gameval.SpriteID;
 import net.runelite.client.game.SkillIconManager;
 import net.runelite.client.util.ImageUtil;
 
@@ -31,17 +31,27 @@ final class SkillIconSource
 
 	BufferedImage defence()
 	{
-		return icon(Skill.DEFENCE, SpriteID.SKILL_DEFENCE, true);
+		return defence(config.defenceUseThemeSkillIcons());
+	}
+
+	BufferedImage defence(boolean useTheme)
+	{
+		return icon(Skill.DEFENCE, SpriteID.Staticons.DEFENCE, true, useTheme);
 	}
 
 	BufferedImage magic()
 	{
-		return icon(Skill.MAGIC, SpriteID.SKILL_MAGIC, false);
+		return magic(config.defenceUseThemeSkillIcons());
 	}
 
-	private BufferedImage icon(Skill skill, int spriteId, boolean defence)
+	BufferedImage magic(boolean useTheme)
 	{
-		if (config.defenceUseThemeSkillIcons())
+		return icon(Skill.MAGIC, SpriteID.Staticons.MAGIC, false, useTheme);
+	}
+
+	private BufferedImage icon(Skill skill, int spriteId, boolean defence, boolean useTheme)
+	{
+		if (useTheme)
 		{
 			SpritePixels override = client.getSpriteOverrides().get(spriteId);
 			if (override != null)

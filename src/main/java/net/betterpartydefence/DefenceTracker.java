@@ -1070,6 +1070,49 @@ public class DefenceTracker
 	}
 
 	/**
+	 * Cache an absolute party snapshot without changing the current/selected target. This is used
+	 * for a remote open-world target that is not yet rendered locally: the state is remembered for
+	 * later binding, but detached/InfoBox presentation remains on the user's current local target.
+	 */
+	public void cacheSyncState(SyncState sync)
+	{
+		if (sync == null || sync.getBossType() == null || !sync.isDrained())
+		{
+			return;
+		}
+
+		SavedState saved = new SavedState();
+		saved.npcIndex = -1;
+		saved.bossName = sync.getBossName() == null ? sync.getBossType().getNpcName() : sync.getBossName();
+		saved.bossType = sync.getBossType();
+		saved.bossNpcId = -1;
+		saved.kephriFinalResetApplied = false;
+		saved.sotetsegEncounterState = sync.getBossType() == BossDefence.SOTETSEG
+			? client.getVarbitValue(VarbitID.TOB_CLIENT_WAVEPROGRESS_TYPE) : -1;
+		saved.bossDef = sync.getCurrent();
+		saved.bossStartDef = sync.getBase();
+		saved.minDef = sync.getMin();
+		saved.atkLevel = sync.getAttackLevel();
+		saved.strLevel = sync.getStrengthLevel();
+		saved.magicLevel = sync.getMagicLevel();
+		saved.magicStartLevel = sync.getMagicBaseLevel();
+		saved.magicDefBonus = sync.getMagicDef();
+		saved.magicStartDefBonus = sync.getMagicBaseDef();
+		saved.magicUsesDefence = sync.isMagicUsesDefence();
+		saved.demon = sync.isDemon();
+		saved.accursedApplied = sync.isAccursedApplied();
+		saved.drained = true;
+		if (sync.getHistory() != null)
+		{
+			saved.history.addAll(sync.getHistory());
+		}
+
+		unboundTracked.put(saved.bossType, saved);
+		log.debug("Cached passive BPD sync for {} def={}/{} specs={}",
+			saved.bossType, saved.bossDef, saved.bossStartDef, saved.history.size());
+	}
+
+	/**
 	 * Seed/update one target from another BPD user. The previously active target is saved first,
 	 * so a DWH on one Olm hand followed by Ayak/Ralos/etc. on another target does not erase it.
 	 * A null localNpc stores the state unbound until that boss enters this client's scene.

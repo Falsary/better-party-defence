@@ -145,6 +145,7 @@ public class DefenceTrackerParityTest
 		assertTrue(tracker.hasMagicDefenceSpecHistory());
 	}
 
+
 	@Test
 	public void dwhSequentialUsesCurrentDefence()
 	{
