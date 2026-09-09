@@ -16,16 +16,34 @@ import net.runelite.client.ui.overlay.infobox.InfoBox;
  */
 public class DefenceInfoBox extends InfoBox
 {
+	public enum Stat
+	{
+		DEFENCE,
+		MAGIC_DEFENCE
+	}
+
 	private final DefenceTracker tracker;
 	private final BetterPartyDefenceConfig config;
+	private final Stat stat;
 	/** The last tooltip pushed, so a per-frame render only rebuilds it on a change. */
 	private String tooltip = "";
 
 	public DefenceInfoBox(BufferedImage image, Plugin plugin, DefenceTracker tracker, BetterPartyDefenceConfig config)
 	{
+		this(image, plugin, tracker, config, Stat.DEFENCE);
+	}
+
+	public DefenceInfoBox(
+		BufferedImage image,
+		Plugin plugin,
+		DefenceTracker tracker,
+		BetterPartyDefenceConfig config,
+		Stat stat)
+	{
 		super(image, plugin);
 		this.tracker = tracker;
 		this.config = config;
+		this.stat = stat;
 		setTooltip("Better Party Defence");
 	}
 
@@ -38,9 +56,36 @@ public class DefenceInfoBox extends InfoBox
 			return "";
 		}
 		updateTooltip();
+		if (stat == Stat.MAGIC_DEFENCE)
+		{
+			return magicText(state);
+		}
+
 		boolean full = config.defenceShowFullLevel();
 		long current = DefenceReadout.shownDefence(state, full);
 		long base = DefenceReadout.shownBaseDefence(state, full);
+		return infoBoxValue(current, base);
+	}
+
+	private String magicText(DefenceState state)
+	{
+		long rollPercent = DefenceReadout.percentRemaining(state.getMagicRoll(), state.getMagicBaseRoll());
+		switch (config.magicDefenceDisplay())
+		{
+			case LEVEL:
+				return infoBoxValue(state.getMagicLevel(), state.getMagicBaseLevel());
+			case PERCENT:
+				return rollPercent + "%";
+			case BOTH:
+				return state.getMagicDef() + " " + rollPercent + "%";
+			case BONUS:
+			default:
+				return infoBoxValue(state.getMagicDef(), state.getMagicBaseDef());
+		}
+	}
+
+	private String infoBoxValue(long current, long base)
+	{
 		switch (config.defenceInfoBoxValue())
 		{
 			case PERCENT:
@@ -63,7 +108,7 @@ public class DefenceInfoBox extends InfoBox
 		}
 		else
 		{
-			List<SpecHistoryEntry> history = tracker.specHistory();
+			List<SpecHistoryEntry> history = relevantHistory(tracker.specHistory());
 			if (history.isEmpty())
 			{
 				text = "No specs yet";
@@ -89,6 +134,26 @@ public class DefenceInfoBox extends InfoBox
 			tooltip = text;
 			setTooltip(text);
 		}
+	}
+
+	private List<SpecHistoryEntry> relevantHistory(List<SpecHistoryEntry> history)
+	{
+		List<SpecHistoryEntry> relevant = new ArrayList<>();
+		for (SpecHistoryEntry entry : history)
+		{
+			if (entry == null)
+			{
+				continue;
+			}
+			boolean include = stat == Stat.MAGIC_DEFENCE
+				? DefenceTracker.drainsMagicDefence(entry.getWeapon())
+				: DefenceTracker.drainsDefence(entry.getWeapon());
+			if (include)
+			{
+				relevant.add(entry);
+			}
+		}
+		return relevant;
 	}
 
 	/**
@@ -211,6 +276,10 @@ public class DefenceInfoBox extends InfoBox
 	@Override
 	public Color getTextColor()
 	{
+		if (stat == Stat.MAGIC_DEFENCE)
+		{
+			return config.magicDefenceColor();
+		}
 		DefenceState state = tracker.state();
 		return state == null ? Color.WHITE : DefenceReadout.defenceColor(state, config);
 	}

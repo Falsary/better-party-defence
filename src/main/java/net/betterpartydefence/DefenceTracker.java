@@ -3,7 +3,11 @@ package net.betterpartydefence;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Iterator;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentLinkedDeque;
 import javax.inject.Inject;
 import javax.inject.Singleton;
@@ -64,6 +68,11 @@ public class DefenceTracker
 
 	private final Client client;
 	private final BetterPartyDefenceConfig config;
+
+	/** Independent live state for every concrete NPC we have tracked. */
+	private final Map<Integer, SavedState> tracked = new LinkedHashMap<>();
+	/** Synced state received before this client has a concrete NPC actor for that boss. */
+	private final Map<BossDefence, SavedState> unboundTracked = new LinkedHashMap<>();
 
 	/** -1 = nothing tracked. */
 	private int bossIndex = -1;
@@ -131,6 +140,8 @@ public class DefenceTracker
 		/** The Magic level, which the accursed sceptre and Seercull drain. */
 		long magicLevel;
 		long magicBaseLevel;
+		/** Whether at least one supported defence-draining spec has landed on this target. */
+		boolean drained;
 	}
 
 	/** One accepted spec in the current tracked encounter, for the info-box hover history. */
@@ -164,6 +175,14 @@ public class DefenceTracker
 		List<SpecHistoryEntry> history;
 	}
 
+	/** One bound target plus its absolute sync state, used for periodic multi-target rebroadcast. */
+	@Value
+	public static class SyncTarget
+	{
+		int npcIndex;
+		SyncState state;
+	}
+
 	/** One defence-draining special attack landed on an NPC, from any party member. */
 	@Value
 	private static class Drain
@@ -173,6 +192,31 @@ public class DefenceTracker
 		int hit;
 		int world;
 		String playerName;
+	}
+
+	/** Mutable snapshot for one independently tracked target. */
+	private static class SavedState
+	{
+		int npcIndex;
+		String bossName;
+		BossDefence bossType;
+		int bossNpcId;
+		boolean kephriFinalResetApplied;
+		int sotetsegEncounterState;
+		long bossDef;
+		long bossStartDef;
+		long minDef;
+		long atkLevel;
+		long strLevel;
+		long magicLevel;
+		long magicStartLevel;
+		long magicDefBonus;
+		long magicStartDefBonus;
+		boolean magicUsesDefence;
+		boolean demon;
+		boolean accursedApplied;
+		boolean drained;
+		final List<SpecHistoryEntry> history = new ArrayList<>();
 	}
 
 	@Inject
@@ -209,6 +253,32 @@ public class DefenceTracker
 			default:
 				return false;
 		}
+	}
+
+	/** Whether this supported spec directly reduces the target's normal Defence level. */
+	public static boolean drainsDefence(SpecialWeapon weapon)
+	{
+		if (!isSupportedWeapon(weapon))
+		{
+			return false;
+		}
+
+		switch (weapon)
+		{
+			case SEERCULL:
+			case EYE_OF_AYAK:
+				return false;
+			default:
+				return true;
+		}
+	}
+
+	/** Whether this supported spec directly reduces Magic level or Magic-defence bonus. */
+	public static boolean drainsMagicDefence(SpecialWeapon weapon)
+	{
+		return weapon == SpecialWeapon.ACCURSED_SCEPTRE
+			|| weapon == SpecialWeapon.SEERCULL
+			|| weapon == SpecialWeapon.EYE_OF_AYAK;
 	}
 
 	/**
@@ -255,13 +325,17 @@ public class DefenceTracker
 				if (bossIndex != queuedIndex)
 				{
 					BossDefence queuedBoss = BossDefence.matchingNpcName(queuedNpc.getName());
-					if (shouldRebindSameEncounter(queuedBoss))
+					saveCurrent();
+					if (!restore(queuedIndex, queuedBoss) && !restoreForBoss(queuedBoss, queuedNpc))
 					{
-						rebindBoss(queuedNpc);
-					}
-					else
-					{
-						setBoss(queuedNpc.getName(), queuedIndex);
+						if (shouldRebindSameEncounter(queuedBoss))
+						{
+							rebindBoss(queuedNpc);
+						}
+						else
+						{
+							setBoss(queuedNpc.getName(), queuedIndex);
+						}
 					}
 				}
 				replayHeld(queuedIndex);
@@ -319,46 +393,43 @@ public class DefenceTracker
 				handlePhaseNpc(npc);
 				if (bossIndex != -1 && (npc.isDead() || npc.getHealthRatio() == 0))
 				{
-					reset("tracked NPC died");
+					removeCurrent("tracked NPC died");
 				}
 			}
 		}
 
-		if (config.defenceAlwaysShow())
-		{
-			followInteractingTarget();
-		}
+		// Always allow interaction to switch back to a target which already has remembered state.
+		// The config only controls creation of a brand-new pre-spec preview.
+		followInteractingTarget();
+		saveCurrent();
+		pruneInactiveTargets();
 	}
 
 	/**
-	 * With "show before any spec" on, display the monster we're attacking at its starting
-	 * levels. Once anything has actually been drained we stop following our target, so the
-	 * drained monster stays on screen until it dies even if we look away from it.
+	 * Interaction may select an already remembered target even when the pre-spec preview is off.
+	 * A brand-new undrained target is created only when "Show before first spec" is enabled.
 	 */
 	private void followInteractingTarget()
 	{
 		NPC target = interactingNpc();
 		BossDefence targetBoss = target == null || target.getName() == null
 			? null : BossDefence.matchingNpcName(target.getName());
-
-		// Keep the last supported target latched when the player yellow-clicks away, moves,
-		// or the NPC temporarily leaves render distance. Confirmed death/encounter resets clear it.
-		if (targetBoss == null)
+		if (targetBoss == null || target.getIndex() == bossIndex)
 		{
 			return;
 		}
 
-		if (target.getIndex() != bossIndex && shouldRebindSameEncounter(targetBoss))
+		saveCurrent();
+		if (restore(target.getIndex(), targetBoss) || restoreForBoss(targetBoss, target))
+		{
+			return;
+		}
+		if (shouldRebindSameEncounter(targetBoss))
 		{
 			rebindBoss(target);
 			return;
 		}
-
-		if (drained)
-		{
-			return;
-		}
-		if (target.getIndex() != bossIndex)
+		if (config.defenceAlwaysShow())
 		{
 			setBoss(target.getName(), target.getIndex());
 		}
@@ -402,13 +473,17 @@ public class DefenceTracker
 		}
 		if (bossIndex != index)
 		{
-			if (shouldRebindSameEncounter(incomingBoss))
+			saveCurrent();
+			if (!restore(index, incomingBoss) && !restoreForBoss(incomingBoss, npc))
 			{
-				rebindBoss(npc);
-			}
-			else
-			{
-				setBoss(name, index);
+				if (shouldRebindSameEncounter(incomingBoss))
+				{
+					rebindBoss(npc);
+				}
+				else
+				{
+					setBoss(name, index);
+				}
 			}
 			replayHeld(index);
 		}
@@ -479,6 +554,7 @@ public class DefenceTracker
 		sotetsegEncounterState = boss == BossDefence.SOTETSEG
 			? client.getVarbitValue(VarbitID.TOB_CLIENT_WAVEPROGRESS_TYPE) : -1;
 		initializeStats(boss);
+		saveCurrent();
 		log.debug("Tracking supported NPC '{}' index={} id={} baseDef={} floor={}",
 			bossName, bossIndex, bossNpcId, bossStartDef, minDef);
 	}
@@ -536,12 +612,21 @@ public class DefenceTracker
 		}
 		int oldIndex = bossIndex;
 		int oldId = bossNpcId;
+		if (oldIndex >= 0)
+		{
+			tracked.remove(oldIndex);
+		}
+		if (bossType != null)
+		{
+			unboundTracked.remove(bossType);
+		}
 		bossIndex = npc.getIndex();
 		bossName = npc.getName();
 		bossNpcId = npc.getId();
 		log.debug("Rebound {} encounter npc {}:{} -> {}:{} without clearing defence",
 			bossType, oldIndex, oldId, bossIndex, bossNpcId);
 		handlePhaseNpc(npc);
+		saveCurrent();
 	}
 
 	/**
@@ -663,6 +748,30 @@ public class DefenceTracker
 	public List<SpecHistoryEntry> specHistory()
 	{
 		return Collections.unmodifiableList(new ArrayList<>(specHistory));
+	}
+
+	public boolean hasDefenceSpecHistory()
+	{
+		for (SpecHistoryEntry entry : specHistory)
+		{
+			if (entry != null && drainsDefence(entry.getWeapon()))
+			{
+				return true;
+			}
+		}
+		return false;
+	}
+
+	public boolean hasMagicDefenceSpecHistory()
+	{
+		for (SpecHistoryEntry entry : specHistory)
+		{
+			if (entry != null && drainsMagicDefence(entry.getWeapon()))
+			{
+				return true;
+			}
+		}
+		return false;
 	}
 
 	private void calculateDefence(SpecialWeapon weapon, int hit, NPC npc)
@@ -818,59 +927,161 @@ public class DefenceTracker
 		return worldView == null ? null : worldView.npcs().byIndex(index);
 	}
 
+	private DefenceState toDefenceState(SavedState saved)
+	{
+		if (saved == null || saved.bossType == null || saved.bossDef < 0)
+		{
+			return null;
+		}
+		long roll = (MAGIC_ROLL_LEVEL_OFFSET + (saved.magicUsesDefence ? saved.bossDef : saved.magicLevel))
+			* (saved.magicDefBonus + MAGIC_ROLL_BONUS_OFFSET);
+		long baseRoll = (MAGIC_ROLL_LEVEL_OFFSET + (saved.magicUsesDefence ? saved.bossStartDef : saved.magicStartLevel))
+			* (saved.magicStartDefBonus + MAGIC_ROLL_BONUS_OFFSET);
+		return new DefenceState(saved.npcIndex, Text.removeTags(saved.bossName), saved.bossDef, saved.minDef,
+			saved.bossStartDef, roll, baseRoll, saved.magicDefBonus, saved.magicStartDefBonus,
+			saved.magicLevel, saved.magicStartLevel, saved.drained);
+	}
+
+	private SyncState toSyncState(SavedState saved)
+	{
+		if (saved == null || saved.bossType == null || saved.bossDef < 0)
+		{
+			return null;
+		}
+		return new SyncState(
+			Text.removeTags(saved.bossName),
+			saved.bossType,
+			saved.bossDef,
+			saved.minDef,
+			saved.bossStartDef,
+			saved.atkLevel,
+			saved.strLevel,
+			saved.magicLevel,
+			saved.magicStartLevel,
+			saved.magicDefBonus,
+			saved.magicStartDefBonus,
+			saved.magicUsesDefence,
+			saved.demon,
+			saved.accursedApplied,
+			saved.drained,
+			Collections.unmodifiableList(new ArrayList<>(saved.history)));
+	}
+
+	/** Current/most recently selected target, used by the detached display and info box. */
 	public DefenceState state()
 	{
 		if (bossType == null || bossDef < 0)
 		{
 			return null;
 		}
-		long roll = (MAGIC_ROLL_LEVEL_OFFSET + (magicUsesDefence ? bossDef : magicLevel))
-			* (magicDefBonus + MAGIC_ROLL_BONUS_OFFSET);
-		long baseRoll = (MAGIC_ROLL_LEVEL_OFFSET + (magicUsesDefence ? bossStartDef : magicStartLevel))
-			* (magicStartDefBonus + MAGIC_ROLL_BONUS_OFFSET);
-		return new DefenceState(bossIndex, Text.removeTags(bossName), bossDef, minDef, bossStartDef, roll, baseRoll,
-			magicDefBonus, magicStartDefBonus, magicLevel, magicStartLevel);
+		SavedState current = snapshotCurrent();
+		return toDefenceState(current);
 	}
 
-	/** Snapshot the exact mutable values needed to continue this encounter on another BPD client. */
+	/** Every concrete target retained in memory, used by the attached NPC display. */
+	public List<DefenceState> states()
+	{
+		saveCurrent();
+		List<DefenceState> out = new ArrayList<>();
+		for (SavedState saved : tracked.values())
+		{
+			DefenceState state = toDefenceState(saved);
+			if (state != null)
+			{
+				out.add(state);
+			}
+		}
+		return out;
+	}
+
+	/** Snapshot the active target for BPD-to-BPD party sync. */
 	public SyncState syncState()
 	{
-		if (bossType == null || bossDef < 0)
+		return toSyncState(snapshotCurrent());
+	}
+
+	/** Every bound drained target this client can authoritatively rebroadcast to the party. */
+	public List<SyncTarget> syncTargets()
+	{
+		saveCurrent();
+		List<SyncTarget> out = new ArrayList<>();
+		for (SavedState saved : tracked.values())
+		{
+			SyncState sync = toSyncState(saved);
+			if (sync != null && sync.isDrained())
+			{
+				out.add(new SyncTarget(saved.npcIndex, sync));
+			}
+		}
+		return out;
+	}
+
+	/** The remembered state for one logical boss, even when another target is currently active. */
+	public SyncState syncStateForBoss(BossDefence boss)
+	{
+		if (boss == null)
 		{
 			return null;
 		}
-		return new SyncState(
-			Text.removeTags(bossName),
-			bossType,
-			bossDef,
-			minDef,
-			bossStartDef,
-			atkLevel,
-			strLevel,
-			magicLevel,
-			magicStartLevel,
-			magicDefBonus,
-			magicStartDefBonus,
-			magicUsesDefence,
-			demon,
-			accursedApplied,
-			drained,
-			Collections.unmodifiableList(new ArrayList<>(specHistory)));
+		saveCurrent();
+		if (bossType == boss)
+		{
+			return toSyncState(snapshotCurrent());
+		}
+		SavedState unbound = unboundTracked.get(boss);
+		if (unbound != null)
+		{
+			return toSyncState(unbound);
+		}
+		SavedState best = null;
+		for (SavedState saved : tracked.values())
+		{
+			if (saved.bossType == boss && (best == null || saved.history.size() > best.history.size()))
+			{
+				best = saved;
+			}
+		}
+		return toSyncState(best);
+	}
+
+	/** Whether this target already has a live actor binding on this client. */
+	public boolean hasBoundNpc(BossDefence boss)
+	{
+		if (boss == null)
+		{
+			return false;
+		}
+		if (bossType == boss && hasBoundNpc())
+		{
+			return true;
+		}
+		for (SavedState saved : tracked.values())
+		{
+			if (saved.bossType == boss)
+			{
+				NPC npc = npcByIndex(saved.npcIndex);
+				if (npc != null && !npc.isDead() && npc.getHealthRatio() != 0)
+				{
+					return true;
+				}
+			}
+		}
+		return false;
 	}
 
 	/**
-	 * Seed/update this client's local tracker from another BPD user. A null localNpc means the
-	 * receiver is elsewhere in the same encounter; the state remains valid and will rebind if the
-	 * boss later enters this client's scene. Pending index-only SpecialCounter events are discarded
-	 * because this absolute snapshot already contains their result.
+	 * Seed/update one target from another BPD user. The previously active target is saved first,
+	 * so a DWH on one Olm hand followed by Ayak/Ralos/etc. on another target does not erase it.
+	 * A null localNpc stores the state unbound until that boss enters this client's scene.
 	 */
 	public void applySyncState(SyncState sync, NPC localNpc)
 	{
-		if (sync == null || sync.getBossType() == null)
+		if (sync == null || sync.getBossType() == null || !sync.isDrained())
 		{
 			return;
 		}
 
+		saveCurrent();
 		bossType = sync.getBossType();
 		bossName = sync.getBossName() == null ? bossType.getNpcName() : sync.getBossName();
 		bossIndex = localNpc == null ? -1 : localNpc.getIndex();
@@ -887,7 +1098,7 @@ public class DefenceTracker
 		magicUsesDefence = sync.isMagicUsesDefence();
 		demon = sync.isDemon();
 		accursedApplied = sync.isAccursedApplied();
-		drained = sync.isDrained();
+		drained = true;
 		kephriFinalResetApplied = bossType == BossDefence.KEPHRI && isKephriFinalPhaseId(bossNpcId);
 		sotetsegEncounterState = bossType == BossDefence.SOTETSEG
 			? client.getVarbitValue(VarbitID.TOB_CLIENT_WAVEPROGRESS_TYPE) : -1;
@@ -898,6 +1109,11 @@ public class DefenceTracker
 		{
 			specHistory.addAll(sync.getHistory());
 		}
+		if (localNpc != null)
+		{
+			unboundTracked.remove(bossType);
+		}
+		saveCurrent();
 		pending.clear();
 		clearHeld();
 		log.debug("Applied BPD sync for {} actor={} def={}/{} specs={}",
@@ -914,17 +1130,159 @@ public class DefenceTracker
 		return bossIndex >= 0 && npcByIndex(bossIndex) != null;
 	}
 
-	public void reset()
+	private SavedState snapshotCurrent()
 	{
-		reset("manual reset");
+		if (bossType == null || bossDef < 0)
+		{
+			return null;
+		}
+		SavedState s = new SavedState();
+		s.npcIndex = bossIndex;
+		s.bossName = bossName;
+		s.bossType = bossType;
+		s.bossNpcId = bossNpcId;
+		s.kephriFinalResetApplied = kephriFinalResetApplied;
+		s.sotetsegEncounterState = sotetsegEncounterState;
+		s.bossDef = bossDef;
+		s.bossStartDef = bossStartDef;
+		s.minDef = minDef;
+		s.atkLevel = atkLevel;
+		s.strLevel = strLevel;
+		s.magicLevel = magicLevel;
+		s.magicStartLevel = magicStartLevel;
+		s.magicDefBonus = magicDefBonus;
+		s.magicStartDefBonus = magicStartDefBonus;
+		s.magicUsesDefence = magicUsesDefence;
+		s.demon = demon;
+		s.accursedApplied = accursedApplied;
+		s.drained = drained;
+		s.history.addAll(specHistory);
+		return s;
 	}
 
-	public void reset(String reason)
+	private void saveCurrent()
 	{
-		if (bossType != null || bossIndex != -1 || !pending.isEmpty() || queuedIndex != -1)
+		SavedState s = snapshotCurrent();
+		if (s == null)
 		{
-			log.debug("Reset defence tracker: {}", reason);
+			return;
 		}
+		if (s.npcIndex >= 0)
+		{
+			tracked.put(s.npcIndex, s);
+			unboundTracked.remove(s.bossType);
+		}
+		else
+		{
+			unboundTracked.put(s.bossType, s);
+		}
+	}
+
+	private boolean restore(int index, BossDefence expectedBoss)
+	{
+		SavedState s = tracked.get(index);
+		if (s == null || (expectedBoss != null && s.bossType != expectedBoss))
+		{
+			return false;
+		}
+		loadSavedState(s);
+		return true;
+	}
+
+	/** Bind a previously unbound/out-of-scene state to the newly rendered matching boss. */
+	private boolean restoreForBoss(BossDefence boss, NPC npc)
+	{
+		if (boss == null || npc == null)
+		{
+			return false;
+		}
+
+		SavedState unbound = unboundTracked.remove(boss);
+		if (unbound != null)
+		{
+			loadSavedState(unbound);
+			bossIndex = npc.getIndex();
+			bossNpcId = npc.getId();
+			bossName = npc.getName();
+			saveCurrent();
+			return true;
+		}
+
+		// If an actor left render distance and came back with another index, only auto-move a
+		// unique missing state of the same logical boss. This avoids conflating two live copies.
+		Integer oldKey = null;
+		SavedState candidate = null;
+		for (Map.Entry<Integer, SavedState> entry : tracked.entrySet())
+		{
+			SavedState saved = entry.getValue();
+			if (saved.bossType == boss && npcByIndex(saved.npcIndex) == null)
+			{
+				if (candidate != null)
+				{
+					return false;
+				}
+				candidate = saved;
+				oldKey = entry.getKey();
+			}
+		}
+		if (candidate == null)
+		{
+			return false;
+		}
+		tracked.remove(oldKey);
+		loadSavedState(candidate);
+		bossIndex = npc.getIndex();
+		bossNpcId = npc.getId();
+		bossName = npc.getName();
+		saveCurrent();
+		return true;
+	}
+
+	private void loadSavedState(SavedState s)
+	{
+		bossIndex = s.npcIndex;
+		bossName = s.bossName;
+		bossType = s.bossType;
+		bossNpcId = s.bossNpcId;
+		kephriFinalResetApplied = s.kephriFinalResetApplied;
+		sotetsegEncounterState = s.sotetsegEncounterState;
+		bossDef = s.bossDef;
+		bossStartDef = s.bossStartDef;
+		minDef = s.minDef;
+		atkLevel = s.atkLevel;
+		strLevel = s.strLevel;
+		magicLevel = s.magicLevel;
+		magicStartLevel = s.magicStartLevel;
+		magicDefBonus = s.magicDefBonus;
+		magicStartDefBonus = s.magicStartDefBonus;
+		magicUsesDefence = s.magicUsesDefence;
+		demon = s.demon;
+		accursedApplied = s.accursedApplied;
+		drained = s.drained;
+		specHistory.clear();
+		specHistory.addAll(s.history);
+	}
+
+	private void pruneInactiveTargets()
+	{
+		Iterator<Map.Entry<Integer, SavedState>> it = tracked.entrySet().iterator();
+		while (it.hasNext())
+		{
+			Map.Entry<Integer, SavedState> entry = it.next();
+			if (entry.getKey() == bossIndex)
+			{
+				continue;
+			}
+			NPC npc = npcByIndex(entry.getKey());
+			if (npc != null && (npc.isDead() || npc.getHealthRatio() == 0))
+			{
+				it.remove();
+			}
+		}
+	}
+
+	private void clearActiveFields()
+	{
 		bossIndex = -1;
 		bossName = "";
 		bossType = null;
@@ -945,7 +1303,142 @@ public class DefenceTracker
 		accursedApplied = false;
 		drained = false;
 		specHistory.clear();
+	}
+
+	private void removeCurrent(String reason)
+	{
+		BossDefence removedBoss = bossType;
+		int removedIndex = bossIndex;
+		if (removedIndex >= 0)
+		{
+			tracked.remove(removedIndex);
+		}
+		if (removedBoss != null)
+		{
+			unboundTracked.remove(removedBoss);
+		}
+		log.debug("Remove tracked target {}:{}: {}", removedBoss, removedIndex, reason);
+		clearActiveFields();
+
+		List<SavedState> remaining = new ArrayList<>(tracked.values());
+		for (int i = remaining.size() - 1; i >= 0; i--)
+		{
+			SavedState saved = remaining.get(i);
+			NPC npc = npcByIndex(saved.npcIndex);
+			if (npc != null && !npc.isDead() && npc.getHealthRatio() != 0)
+			{
+				loadSavedState(saved);
+				return;
+			}
+		}
+	}
+
+	/** Every logical boss with remembered drained state, bound or temporarily out of scene. */
+	public Set<BossDefence> drainedBosses()
+	{
+		saveCurrent();
+		Set<BossDefence> bosses = new LinkedHashSet<>();
+		for (SavedState saved : tracked.values())
+		{
+			if (saved != null && saved.bossType != null && saved.drained)
+			{
+				bosses.add(saved.bossType);
+			}
+		}
+		for (SavedState saved : unboundTracked.values())
+		{
+			if (saved != null && saved.bossType != null && saved.drained)
+			{
+				bosses.add(saved.bossType);
+			}
+		}
+		return bosses;
+	}
+
+	public boolean hasRememberedState(BossDefence boss)
+	{
+		if (boss == null)
+		{
+			return false;
+		}
+		if (bossType == boss && bossDef >= 0)
+		{
+			return true;
+		}
+		if (unboundTracked.containsKey(boss))
+		{
+			return true;
+		}
+		for (SavedState saved : tracked.values())
+		{
+			if (saved != null && saved.bossType == boss)
+			{
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/** Remove only one logical boss while retaining other simultaneous/remembered targets. */
+	public void clearBossState(BossDefence boss, String reason)
+	{
+		if (boss == null)
+		{
+			return;
+		}
+
+		boolean clearingActive = bossType == boss;
+		tracked.entrySet().removeIf(entry -> entry.getValue() != null && entry.getValue().bossType == boss);
+		unboundTracked.remove(boss);
+
+		if (!clearingActive)
+		{
+			return;
+		}
+
+		log.debug("Clear tracked boss {}: {}", boss, reason);
+		clearActiveFields();
+
+		List<SavedState> remaining = new ArrayList<>(tracked.values());
+		for (int i = remaining.size() - 1; i >= 0; i--)
+		{
+			SavedState saved = remaining.get(i);
+			NPC npc = npcByIndex(saved.npcIndex);
+			if (npc != null && !npc.isDead() && npc.getHealthRatio() != 0)
+			{
+				loadSavedState(saved);
+				return;
+			}
+		}
+
+		SavedState fallback = null;
+		for (SavedState saved : unboundTracked.values())
+		{
+			fallback = saved;
+		}
+		if (fallback != null)
+		{
+			loadSavedState(fallback);
+		}
+	}
+
+	public void reset()
+	{
+		reset("manual reset");
+	}
+
+	public void reset(String reason)
+	{
+		if (bossType != null || bossIndex != -1 || !tracked.isEmpty() || !unboundTracked.isEmpty()
+			|| !pending.isEmpty() || queuedIndex != -1)
+		{
+			log.debug("Reset defence tracker: {}", reason);
+		}
+		clearActiveFields();
+		tracked.clear();
+		unboundTracked.clear();
 		pending.clear();
 		clearHeld();
 	}
+
 }

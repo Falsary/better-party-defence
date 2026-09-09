@@ -37,7 +37,7 @@ public class ScreenDefenceOverlay extends Overlay
 			return null;
 		}
 		DefenceState state = tracker.state();
-		if (state == null)
+		if (state == null || (!state.isDrained() && !config.defenceAlwaysShow()))
 		{
 			return null;
 		}

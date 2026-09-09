@@ -116,14 +116,17 @@ public interface BetterPartyDefenceConfig extends Config
 	@ConfigItem(keyName = "magicDefence", name = "Show magic defence", description = "Also show magic-defence changes from supported special attacks.", position = 1, section = MAGIC)
 	default boolean magicDefence() { return true; }
 
-	@ConfigItem(keyName = "magicDefenceDisplay", name = "Magic defence as", description = "Choose magic-defence bonus, Magic level, percent of starting roll, or bonus plus percent.", position = 2, section = MAGIC)
+	@ConfigItem(keyName = "magicDefenceInfoBox", name = "Show magic info box", description = "Also show the tracked Magic-defence value in the RuneLite info-box bar.", position = 2, section = MAGIC)
+	default boolean magicDefenceInfoBox() { return true; }
+
+	@ConfigItem(keyName = "magicDefenceDisplay", name = "Magic defence as", description = "Choose magic-defence bonus, Magic level, percent of starting roll, or bonus plus percent.", position = 3, section = MAGIC)
 	default MagicDefenceDisplay magicDefenceDisplay() { return MagicDefenceDisplay.BONUS; }
 
-	@ConfigItem(keyName = "magicDefenceSameRow", name = "Magic on same row", description = "Draw the magic-defence readout beside Defence instead of on a second line.", position = 3, section = MAGIC)
+	@ConfigItem(keyName = "magicDefenceSameRow", name = "Magic on same row", description = "Draw the magic-defence readout beside Defence instead of on a second line.", position = 4, section = MAGIC)
 	default boolean magicDefenceSameRow() { return false; }
 
 	@Alpha
-	@ConfigItem(keyName = "magicDefenceColor", name = "Magic defence colour", description = "Colour used for the magic-defence readout.", position = 4, section = MAGIC)
+	@ConfigItem(keyName = "magicDefenceColor", name = "Magic defence colour", description = "Colour used for the magic-defence readout.", position = 5, section = MAGIC)
 	default Color magicDefenceColor() { return new Color(0x22, 0x5E, 0xA8); }
 
 	@ConfigItem(
@@ -132,6 +135,6 @@ public interface BetterPartyDefenceConfig extends Config
 		description = "Share Better Party Defence tracker state with other BPD users in the same party and encounter.",
 		position = 1,
 		section = EXPERIMENTAL)
-	default boolean syncWithOtherPartyDefenceUsers() { return false; }
+	default boolean syncWithOtherPartyDefenceUsers() { return true; }
 }
 

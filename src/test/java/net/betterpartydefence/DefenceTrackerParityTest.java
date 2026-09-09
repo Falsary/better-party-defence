@@ -105,6 +105,47 @@ public class DefenceTrackerParityTest
 	}
 
 	@Test
+	public void infoBoxWeaponClassificationSeparatesDefenceAndMagic()
+	{
+		assertTrue(DefenceTracker.drainsDefence(SpecialWeapon.DRAGON_WARHAMMER));
+		assertTrue(DefenceTracker.drainsDefence(SpecialWeapon.TONALZTICS_OF_RALOS));
+		assertFalse(DefenceTracker.drainsMagicDefence(SpecialWeapon.DRAGON_WARHAMMER));
+		assertFalse(DefenceTracker.drainsMagicDefence(SpecialWeapon.TONALZTICS_OF_RALOS));
+
+		assertFalse(DefenceTracker.drainsDefence(SpecialWeapon.SEERCULL));
+		assertFalse(DefenceTracker.drainsDefence(SpecialWeapon.EYE_OF_AYAK));
+		assertTrue(DefenceTracker.drainsMagicDefence(SpecialWeapon.SEERCULL));
+		assertTrue(DefenceTracker.drainsMagicDefence(SpecialWeapon.EYE_OF_AYAK));
+
+		assertTrue(DefenceTracker.drainsDefence(SpecialWeapon.ACCURSED_SCEPTRE));
+		assertTrue(DefenceTracker.drainsMagicDefence(SpecialWeapon.ACCURSED_SCEPTRE));
+	}
+
+	@Test
+	public void magicOnlySpecDoesNotCreateDefenceHistory()
+	{
+		fakeNpc("Corporeal Beast", 7);
+		DefenceTracker tracker = makeTracker();
+		tracker.queue(SpecialWeapon.EYE_OF_AYAK, 7, 30, WORLD);
+		tracker.onGameTick();
+
+		assertFalse(tracker.hasDefenceSpecHistory());
+		assertTrue(tracker.hasMagicDefenceSpecHistory());
+	}
+
+	@Test
+	public void accursedCreatesBothDefenceAndMagicHistory()
+	{
+		fakeNpc("Corporeal Beast", 7);
+		DefenceTracker tracker = makeTracker();
+		tracker.queue(SpecialWeapon.ACCURSED_SCEPTRE, 7, 1, WORLD);
+		tracker.onGameTick();
+
+		assertTrue(tracker.hasDefenceSpecHistory());
+		assertTrue(tracker.hasMagicDefenceSpecHistory());
+	}
+
+	@Test
 	public void dwhSequentialUsesCurrentDefence()
 	{
 		fakeNpc("Chaos Elemental", 3);
@@ -445,6 +486,31 @@ public class DefenceTrackerParityTest
 
 		tracker.reset("test");
 		assertTrue(tracker.specHistory().isEmpty());
+	}
+
+	@Test
+	public void simultaneousOlmTargetsKeepIndependentMemory()
+	{
+		fakeNpc("Great Olm (Right claw)", 50);
+		fakeNpc("Great Olm (Left claw)", 51);
+		DefenceTracker tracker = makeTracker();
+
+		tracker.queue(SpecialWeapon.DRAGON_WARHAMMER, 50, 1, WORLD, "Melee");
+		tracker.onGameTick();
+		long rightAfterDwh = tracker.state().getCurrent();
+
+		tracker.queue(SpecialWeapon.EYE_OF_AYAK, 51, 20, WORLD, "Mage");
+		tracker.onGameTick();
+
+		assertEquals(2, tracker.states().size());
+		DefenceTracker.DefenceState right = tracker.states().stream()
+			.filter(state -> state.getNpcIndex() == 50).findFirst().orElse(null);
+		DefenceTracker.DefenceState left = tracker.states().stream()
+			.filter(state -> state.getNpcIndex() == 51).findFirst().orElse(null);
+		assertTrue(right != null && right.isDrained());
+		assertTrue(left != null && left.isDrained());
+		assertEquals(rightAfterDwh, right.getCurrent());
+		assertEquals(2, tracker.syncTargets().size());
 	}
 
 }

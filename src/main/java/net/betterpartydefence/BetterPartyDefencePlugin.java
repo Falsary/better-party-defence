@@ -128,18 +128,29 @@ public class BetterPartyDefencePlugin extends Plugin
 	private SkillIconSource skillIconSource;
 	private TrackerFontManager trackerFontManager;
 	private DefenceInfoBox defenceBox;
+	private DefenceInfoBox magicDefenceBox;
 	private static final int DUPLICATE_WINDOW_TICKS = 1;
 	private static final int SYNC_HISTORY_DUPLICATE_WINDOW_TICKS = 2;
-	private static final int NON_INSTANCE_HP_TOLERANCE = 5;
-	private static final int NON_INSTANCE_POSITION_TOLERANCE = 8;
+	private static final int NON_INSTANCE_HP_TOLERANCE = 20;
+	private static final int NON_INSTANCE_POSITION_TOLERANCE = 16;
 	private static final long SYNC_MAX_AGE_MILLIS = 5_000L;
+	private static final long SYNC_REBROADCAST_INTERVAL_MILLIS = 2_000L;
+	private static final long SYNC_PARTY_WIDE_ABSENCE_TIMEOUT_MILLIS = 20_000L;
+	private static final long ENCOUNTER_PRESENCE_INTERVAL_MILLIS = 2_000L;
+	private static final long ENCOUNTER_PRESENCE_MAX_AGE_MILLIS = 6_000L;
 	private final Map<SpecEventKey, Integer> recentSpecEvents = new HashMap<>();
 	private final Map<SyncedSpecKey, Integer> recentSyncedSpecs = new HashMap<>();
 	private final List<InfoBox> hiddenSpecialCounterInfoBoxes = new ArrayList<>();
 	private Integer hiddenSpecialCounterNpcIndex;
 	private boolean wasInParty;
 	private Integer lastSyncSignature;
+	private long lastSyncBroadcastMillis;
+	private final Map<BossDefence, PendingWorldSync> pendingWorldSyncs = new HashMap<>();
+	private final Map<BossDefence, Long> lastPartyEncounterPresenceMillis = new HashMap<>();
+	private final Map<Long, SenderEncounterPresence> senderEncounterPresence = new HashMap<>();
 	private ActiveSyncScope activeSyncScope;
+	private SyncScope lastPresenceScope;
+	private long lastPresenceBroadcastMillis;
 
 	@Provides
 	@Singleton
@@ -161,6 +172,7 @@ public class BetterPartyDefencePlugin extends Plugin
 		// The experimental richer BPD message is harmless when the option is off; registering it
 		// simply allows clients with the option enabled to decode one another's snapshots.
 		wsClient.registerMessage(BpdDefenceSync.class);
+		wsClient.registerMessage(BpdEncounterPresence.class);
 
 		skillIconSource = new SkillIconSource(client, skillIconManager, config);
 		trackerFontManager = new TrackerFontManager(config);
@@ -198,8 +210,15 @@ public class BetterPartyDefencePlugin extends Plugin
 		removeInfoBox();
 		recentSpecEvents.clear();
 		recentSyncedSpecs.clear();
+		pendingWorldSyncs.clear();
+		lastPartyEncounterPresenceMillis.clear();
+		senderEncounterPresence.clear();
 		activeSyncScope = null;
+		lastPresenceScope = null;
+		lastPresenceBroadcastMillis = 0L;
 		lastSyncSignature = null;
+		lastSyncBroadcastMillis = 0L;
+		wsClient.unregisterMessage(BpdEncounterPresence.class);
 		wsClient.unregisterMessage(BpdDefenceSync.class);
 		// Do not unregister a message class that the active core Special Attack Counter still needs.
 		if (!isSpecialCounterActive())
@@ -226,13 +245,19 @@ public class BetterPartyDefencePlugin extends Plugin
 		recentSpecEvents.entrySet().removeIf(entry -> tick - entry.getValue() > DUPLICATE_WINDOW_TICKS);
 		recentSyncedSpecs.entrySet().removeIf(
 			entry -> tick - entry.getValue() > SYNC_HISTORY_DUPLICATE_WINDOW_TICKS);
+		long now = System.currentTimeMillis();
+		senderEncounterPresence.entrySet().removeIf(
+			entry -> now - entry.getValue().getReceivedAtMillis() > ENCOUNTER_PRESENCE_MAX_AGE_MILLIS);
 
 		// Local defence tracking is intentionally independent of party membership. Hub Party is
 		// the transport for remote specs, not a prerequisite for drawing our own tracked target.
 		localSpecDetector.onGameTick();
 		defenceTracker.onGameTick();
+		reconcilePendingWorldSyncs();
 		reconcileActiveSyncScope();
+		maybeBroadcastEncounterPresence();
 		maybeBroadcastDefenceSync();
+		reconcilePartyWideEncounterAbsence();
 		updateDefenceInfoBox();
 
 		// RuneLite's EventBus requires GameTick subscribers to be named exactly onGameTick.
@@ -275,6 +300,12 @@ public class BetterPartyDefencePlugin extends Plugin
 		recentSyncedSpecs.clear();
 		wasInParty = event.getPartyId() != null;
 		lastSyncSignature = null;
+		lastSyncBroadcastMillis = 0L;
+		pendingWorldSyncs.clear();
+		lastPartyEncounterPresenceMillis.clear();
+		senderEncounterPresence.clear();
+		lastPresenceScope = null;
+		lastPresenceBroadcastMillis = 0L;
 		if (!wasInParty && activeSyncScope != null && !defenceTracker.hasBoundNpc())
 		{
 			defenceTracker.reset("left party while using remote BPD sync");
@@ -297,7 +328,13 @@ public class BetterPartyDefencePlugin extends Plugin
 			recentSpecEvents.clear();
 			recentSyncedSpecs.clear();
 			activeSyncScope = null;
+			pendingWorldSyncs.clear();
+			lastPartyEncounterPresenceMillis.clear();
+			senderEncounterPresence.clear();
+			lastPresenceScope = null;
+			lastPresenceBroadcastMillis = 0L;
 			lastSyncSignature = null;
+			lastSyncBroadcastMillis = 0L;
 		}
 	}
 
@@ -367,6 +404,11 @@ public class BetterPartyDefencePlugin extends Plugin
 				return;
 			}
 
+			if (!standardPartySpecScopeMatches(event.getMemberId(), event.getWorld()))
+			{
+				return;
+			}
+
 			SpecEventKey key = new SpecEventKey(
 				event.getMemberId(), event.getWorld(), event.getNpcIndex(), event.getPlayerId(), weapon, event.getHit());
 			int tick = client.getTickCount();
@@ -411,6 +453,7 @@ public class BetterPartyDefencePlugin extends Plugin
 		if ("syncWithOtherPartyDefenceUsers".equals(event.getKey()))
 		{
 			lastSyncSignature = null;
+			lastSyncBroadcastMillis = 0L;
 			recentSyncedSpecs.clear();
 			if (!config.syncWithOtherPartyDefenceUsers())
 			{
@@ -419,6 +462,11 @@ public class BetterPartyDefencePlugin extends Plugin
 					defenceTracker.reset("experimental BPD sync disabled");
 				}
 				activeSyncScope = null;
+				pendingWorldSyncs.clear();
+				lastPartyEncounterPresenceMillis.clear();
+				senderEncounterPresence.clear();
+				lastPresenceScope = null;
+				lastPresenceBroadcastMillis = 0L;
 			}
 			return;
 		}
@@ -458,6 +506,110 @@ public class BetterPartyDefencePlugin extends Plugin
 	}
 
 
+	@Subscribe
+	public void onBpdEncounterPresence(BpdEncounterPresence event)
+	{
+		if (!config.syncWithOtherPartyDefenceUsers() || !partyService.isInParty()
+			|| event == null || event.getProtocolVersion() != BpdEncounterPresence.PROTOCOL_VERSION)
+		{
+			return;
+		}
+
+		PartyMember localMember = partyService.getLocalMember();
+		if (localMember != null && localMember.getMemberId() == event.getMemberId())
+		{
+			return;
+		}
+		if (partyService.getMemberById(event.getMemberId()) == null)
+		{
+			return;
+		}
+
+		clientThread.invoke(() -> rememberSenderEncounterPresence(event.getMemberId(), event.getWorld(),
+			event.getScopeType(), event.getScopeId(), event.getSentAtMillis()));
+	}
+
+	private void maybeBroadcastEncounterPresence()
+	{
+		if (!config.syncWithOtherPartyDefenceUsers() || !partyService.isInParty()
+			|| client.getGameState() != GameState.LOGGED_IN)
+		{
+			lastPresenceScope = null;
+			lastPresenceBroadcastMillis = 0L;
+			return;
+		}
+
+		SyncScope scope = currentEncounterScope();
+		if (scope == null)
+		{
+			return;
+		}
+
+		long now = System.currentTimeMillis();
+		boolean changed = !scope.equals(lastPresenceScope);
+		if (!changed && now - lastPresenceBroadcastMillis < ENCOUNTER_PRESENCE_INTERVAL_MILLIS)
+		{
+			return;
+		}
+
+		partyService.send(new BpdEncounterPresence(client.getWorld(), scope.getType(), scope.getId()));
+		lastPresenceScope = scope;
+		lastPresenceBroadcastMillis = now;
+	}
+
+	private void rememberSenderEncounterPresence(long memberId, int world, int scopeType, int scopeId, long sentAtMillis)
+	{
+		if (world != client.getWorld() || sentAtMillis <= 0)
+		{
+			return;
+		}
+		long age = Math.abs(System.currentTimeMillis() - sentAtMillis);
+		if (age > ENCOUNTER_PRESENCE_MAX_AGE_MILLIS)
+		{
+			return;
+		}
+		senderEncounterPresence.put(memberId, new SenderEncounterPresence(
+			world, scopeType, scopeId, System.currentTimeMillis()));
+	}
+
+	/**
+	 * For another BPD client, normal SpecialCounterUpdate events are accepted only when both
+	 * clients advertise the same concrete encounter scope. Members without a fresh BPD presence
+	 * heartbeat are treated as legacy/non-BPD senders and retain RuneLite's standard fallback.
+	 */
+	private boolean standardPartySpecScopeMatches(long memberId, int eventWorld)
+	{
+		SenderEncounterPresence senderScope = senderEncounterPresence.get(memberId);
+		if (senderScope == null)
+		{
+			return true;
+		}
+
+		long age = System.currentTimeMillis() - senderScope.getReceivedAtMillis();
+		if (age > ENCOUNTER_PRESENCE_MAX_AGE_MILLIS)
+		{
+			senderEncounterPresence.remove(memberId);
+			return true;
+		}
+		if (eventWorld != client.getWorld() || senderScope.getWorld() != client.getWorld())
+		{
+			log.debug("Ignoring BPD party spec from member={} due to world mismatch sender={} event={} local={}",
+				memberId, senderScope.getWorld(), eventWorld, client.getWorld());
+			return false;
+		}
+
+		SyncScope localScope = currentEncounterScope();
+		boolean match = localScope != null
+			&& localScope.getType() == senderScope.getScopeType()
+			&& localScope.getId() == senderScope.getScopeId();
+		if (!match)
+		{
+			log.debug("Ignoring BPD party spec from member={} due to encounter mismatch sender={}:{} local={}",
+				memberId, senderScope.getScopeType(), senderScope.getScopeId(), localScope);
+		}
+		return match;
+	}
+
 	/** Receive the optional absolute BPD tracker snapshot from another member of this PartyService party. */
 	@Subscribe
 	public void onBpdDefenceSync(BpdDefenceSync event)
@@ -478,7 +630,12 @@ public class BetterPartyDefencePlugin extends Plugin
 			return;
 		}
 
-		clientThread.invoke(() -> acceptBpdDefenceSync(event));
+		clientThread.invoke(() ->
+		{
+			rememberSenderEncounterPresence(event.getMemberId(), event.getWorld(),
+				event.getScopeType(), event.getScopeId(), event.getSentAtMillis());
+			acceptBpdDefenceSync(event);
+		});
 	}
 
 	private void acceptBpdDefenceSync(BpdDefenceSync event)
@@ -501,78 +658,284 @@ public class BetterPartyDefencePlugin extends Plugin
 			return;
 		}
 
-		// Never let the experimental path override a normal live local encounter. It is a fallback
-		// for clients which cannot currently resolve the boss actor themselves.
-		if (defenceTracker.hasBoundNpc())
+		BossDefence boss = sync.getBossType();
+		NPC localBoss = findLiveNpcForBoss(boss);
+
+		// A world-scoped boss cannot be position/HP-verified until it is rendered locally. Still
+		// seed an unbound tracker from a fresh snapshot sent by a current party member on this
+		// world so InfoBox/Detached users get the shared state immediately. The tracker will bind
+		// itself to the matching NPC as soon as that boss enters this client's scene, which also
+		// makes the attached NPC display reappear without requiring an interact/click. Keep the
+		// snapshot cached too so the first local render can run the stricter world position/HP
+		// reconciliation path. Never displace a different live local encounter.
+		if (event.getScopeType() == BpdDefenceSync.SCOPE_WORLD && localBoss == null)
 		{
+			markPartyEncounterPresent(boss);
+			cachePendingWorldSync(event, sync);
+
+			if (incomingSyncAddsState(sync))
+			{
+				// Multi-target memory saves the previously active target before this synced one
+				// becomes active, so a party spec on another boss/Olm hand never erases it.
+				applyAcceptedSync(event, sync, null);
+			}
 			return;
 		}
 
-		BossDefence boss = sync.getBossType();
-		NPC localBoss = findLiveNpcForBoss(boss);
 		if (!incomingScopeMatches(event, boss, localBoss))
 		{
 			return;
 		}
 
-		defenceTracker.applySyncState(sync, localBoss);
-		activeSyncScope = new ActiveSyncScope(event.getScopeType(), event.getScopeId(), boss);
-		lastSyncSignature = syncSignature(sync);
-		rememberSyncedSpecs(sync);
-		log.debug("Accepted BPD sync from member={} boss={} scope={}:{} actor={}",
-			event.getMemberId(), boss, event.getScopeType(), event.getScopeId(),
-			localBoss == null ? -1 : localBoss.getIndex());
+		markPartyEncounterPresent(boss);
+
+		// Different supported targets are independent. The tracker remembers the current one
+		// before activating this target, so simultaneous encounters such as both Olm hands retain
+		// their own defence/history instead of overwriting each other.
+		if (!incomingSyncIsUseful(sync, localBoss))
+		{
+			return;
+		}
+
+		applyAcceptedSync(event, sync, localBoss);
 	}
 
-	/** Broadcast only after the normal/local tracker has changed and while this client can see the boss. */
+	/** Broadcast drained visible targets periodically; the refresh also acts as party encounter presence. */
 	private void maybeBroadcastDefenceSync()
 	{
 		if (!config.syncWithOtherPartyDefenceUsers() || !partyService.isInParty())
 		{
 			lastSyncSignature = null;
+			lastSyncBroadcastMillis = 0L;
 			return;
 		}
 
-		DefenceTracker.SyncState sync = defenceTracker.syncState();
-		if (sync == null || !sync.isDrained())
+		List<DefenceTracker.SyncTarget> targets = defenceTracker.syncTargets();
+		if (targets.isEmpty())
 		{
 			lastSyncSignature = null;
+			lastSyncBroadcastMillis = 0L;
 			return;
 		}
 
-		NPC npc = findBoundNpc();
-		if (npc == null || npc.isDead() || npc.getHealthRatio() == 0)
+		int signature = targets.hashCode();
+		long now = System.currentTimeMillis();
+		if (lastSyncSignature != null && lastSyncSignature == signature
+			&& now - lastSyncBroadcastMillis < SYNC_REBROADCAST_INTERVAL_MILLIS)
 		{
 			return;
 		}
 
-		int signature = syncSignature(sync);
-		if (lastSyncSignature != null && lastSyncSignature == signature)
+		WorldView worldView = client.getTopLevelWorldView();
+		if (worldView == null || worldView.npcs() == null)
 		{
 			return;
 		}
 
-		SyncScope scope = localSyncScope(sync.getBossType(), npc);
-		if (scope == null)
+		boolean sentAny = false;
+		for (DefenceTracker.SyncTarget target : targets)
+		{
+			DefenceTracker.SyncState sync = target.getState();
+			NPC npc = target.getNpcIndex() < 0 ? null : worldView.npcs().byIndex(target.getNpcIndex());
+			if (sync == null || !sync.isDrained() || npc == null || npc.isDead() || npc.getHealthRatio() == 0)
+			{
+				continue;
+			}
+
+			SyncScope scope = localSyncScope(sync.getBossType(), npc);
+			if (scope == null)
+			{
+				continue;
+			}
+
+			WorldPoint point = npc.getWorldLocation();
+			int x = point == null ? 0 : point.getX();
+			int y = point == null ? 0 : point.getY();
+			int plane = point == null ? 0 : point.getPlane();
+			int hp = healthPercent(npc);
+
+			partyService.send(new BpdDefenceSync(
+				client.getWorld(), sync, scope.getType(), scope.getId(), x, y, plane, hp));
+			markPartyEncounterPresent(sync.getBossType());
+			sentAny = true;
+			log.debug("Broadcast BPD sync boss={} scope={}:{} def={}/{}",
+				sync.getBossType(), scope.getType(), scope.getId(), sync.getCurrent(), sync.getBase());
+		}
+
+		if (sentAny)
+		{
+			lastSyncSignature = signature;
+			lastSyncBroadcastMillis = now;
+		}
+	}
+
+	private void markPartyEncounterPresent(BossDefence boss)
+	{
+		if (boss != null)
+		{
+			lastPartyEncounterPresenceMillis.put(boss, System.currentTimeMillis());
+		}
+	}
+
+	/**
+	 * A drained target is retained while at least one participating BPD client still has that
+	 * encounter rendered. Visible clients rebroadcast the absolute state every couple of seconds,
+	 * which doubles as a lightweight presence heartbeat. If nobody in the party can see the target
+	 * for twenty continuous seconds, expire only that target's remembered state. This avoids stale
+	 * defence carrying indefinitely into a later encounter without resetting on brief burrows,
+	 * phases, room transitions, or temporary loss of render.
+	 */
+	private void reconcilePartyWideEncounterAbsence()
+	{
+		if (!config.syncWithOtherPartyDefenceUsers() || !partyService.isInParty())
+		{
+			lastPartyEncounterPresenceMillis.clear();
+			return;
+		}
+
+		long now = System.currentTimeMillis();
+		for (BossDefence boss : new ArrayList<>(defenceTracker.drainedBosses()))
+		{
+			if (defenceTracker.hasBoundNpc(boss))
+			{
+				markPartyEncounterPresent(boss);
+				continue;
+			}
+
+			Long lastPresent = lastPartyEncounterPresenceMillis.get(boss);
+			if (lastPresent == null)
+			{
+				lastPartyEncounterPresenceMillis.put(boss, now);
+				continue;
+			}
+
+			if (now - lastPresent >= SYNC_PARTY_WIDE_ABSENCE_TIMEOUT_MILLIS)
+			{
+				log.debug("Clearing {} after {}ms of party-wide encounter absence",
+					boss, now - lastPresent);
+				defenceTracker.clearBossState(boss, "20s party-wide encounter absence");
+				pendingWorldSyncs.remove(boss);
+				lastPartyEncounterPresenceMillis.remove(boss);
+				if (activeSyncScope != null && activeSyncScope.getBoss() == boss)
+				{
+					activeSyncScope = null;
+				}
+				lastSyncSignature = null;
+			}
+		}
+
+		lastPartyEncounterPresenceMillis.keySet().removeIf(
+			boss -> !defenceTracker.hasRememberedState(boss));
+	}
+
+	private void cachePendingWorldSync(BpdDefenceSync event, DefenceTracker.SyncState sync)
+	{
+		WorldView worldView = client.getTopLevelWorldView();
+		if (worldView == null || worldView.isInstance())
 		{
 			return;
 		}
 
-		WorldPoint point = npc.getWorldLocation();
-		int x = point == null ? 0 : point.getX();
-		int y = point == null ? 0 : point.getY();
-		int plane = point == null ? 0 : point.getPlane();
-		int hp = healthPercent(npc);
-		if (scope.getType() == BpdDefenceSync.SCOPE_WORLD && hp < 0)
+		PendingWorldSync existing = pendingWorldSyncs.get(sync.getBossType());
+		if (existing == null || event.getSentAtMillis() >= existing.getEvent().getSentAtMillis())
+		{
+			pendingWorldSyncs.put(sync.getBossType(), new PendingWorldSync(event, sync));
+			log.debug("Cached BPD world sync from member={} boss={} def={}/{}",
+				event.getMemberId(), sync.getBossType(), sync.getCurrent(), sync.getBase());
+		}
+	}
+
+	private void reconcilePendingWorldSyncs()
+	{
+		if (pendingWorldSyncs.isEmpty())
 		{
 			return;
 		}
+		if (!config.syncWithOtherPartyDefenceUsers() || !partyService.isInParty())
+		{
+			pendingWorldSyncs.clear();
+			return;
+		}
 
-		partyService.send(new BpdDefenceSync(
-			client.getWorld(), sync, scope.getType(), scope.getId(), x, y, plane, hp));
-		lastSyncSignature = signature;
-		log.debug("Broadcast BPD sync boss={} scope={}:{} def={}/{}",
-			sync.getBossType(), scope.getType(), scope.getId(), sync.getCurrent(), sync.getBase());
+		long now = System.currentTimeMillis();
+		Iterator<Map.Entry<BossDefence, PendingWorldSync>> iterator = pendingWorldSyncs.entrySet().iterator();
+		while (iterator.hasNext())
+		{
+			Map.Entry<BossDefence, PendingWorldSync> entry = iterator.next();
+			PendingWorldSync pending = entry.getValue();
+			BpdDefenceSync event = pending.getEvent();
+			DefenceTracker.SyncState sync = pending.getSync();
+
+			if (event.getWorld() != client.getWorld() || event.getSentAtMillis() <= 0
+				|| now - event.getSentAtMillis() > SYNC_MAX_AGE_MILLIS)
+			{
+				iterator.remove();
+				continue;
+			}
+
+			NPC localBoss = findLiveNpcForBoss(entry.getKey());
+			if (localBoss == null || !incomingScopeMatches(event, entry.getKey(), localBoss))
+			{
+				continue;
+			}
+
+			if (!incomingSyncIsUseful(sync, localBoss))
+			{
+				iterator.remove();
+				continue;
+			}
+
+			applyAcceptedSync(event, sync, localBoss);
+			iterator.remove();
+		}
+	}
+
+	/**
+	 * A snapshot can be useful even when it carries the exact same defence/history: if this
+	 * client previously accepted it while the boss was out of scene, the newly rendered NPC
+	 * still needs to be bound to that already-correct absolute state. Treat that bind-only
+	 * transition as reconciliation instead of rejecting the snapshot as a duplicate.
+	 */
+	private boolean incomingSyncIsUseful(DefenceTracker.SyncState incoming, NPC localBoss)
+	{
+		if (incomingSyncAddsState(incoming))
+		{
+			return true;
+		}
+
+		return localBoss != null
+			&& !defenceTracker.hasBoundNpc(incoming.getBossType());
+	}
+
+	private boolean incomingSyncAddsState(DefenceTracker.SyncState incoming)
+	{
+		DefenceTracker.SyncState local = defenceTracker.syncStateForBoss(incoming.getBossType());
+		if (local == null)
+		{
+			return true;
+		}
+
+		int localHistory = local.getHistory() == null ? 0 : local.getHistory().size();
+		int incomingHistory = incoming.getHistory() == null ? 0 : incoming.getHistory().size();
+		if (incomingHistory != localHistory)
+		{
+			return incomingHistory > localHistory;
+		}
+		return !local.isDrained() && incoming.isDrained();
+	}
+
+	private void applyAcceptedSync(BpdDefenceSync event, DefenceTracker.SyncState sync, NPC localBoss)
+	{
+		defenceTracker.applySyncState(sync, localBoss);
+		activeSyncScope = new ActiveSyncScope(event.getScopeType(), event.getScopeId(), sync.getBossType());
+		lastSyncSignature = defenceTracker.syncTargets().hashCode();
+		// Treat a received snapshot as recent activity so this client does not immediately echo it
+		// back on the same tick. It may still refresh the state later if it remains the live tracker.
+		lastSyncBroadcastMillis = System.currentTimeMillis();
+		rememberSyncedSpecs(sync);
+		log.debug("Accepted BPD sync from member={} boss={} scope={}:{} actor={} def={}/{}",
+			event.getMemberId(), sync.getBossType(), event.getScopeType(), event.getScopeId(),
+			localBoss == null ? -1 : localBoss.getIndex(), sync.getCurrent(), sync.getBase());
 	}
 
 	private int syncSignature(DefenceTracker.SyncState sync)
@@ -612,6 +975,32 @@ public class BetterPartyDefencePlugin extends Plugin
 			return "";
 		}
 		return Text.removeTags(name).trim().toLowerCase();
+	}
+
+	private SyncScope currentEncounterScope()
+	{
+		int coxController = raidController(BpdDefenceSync.SCOPE_COX);
+		if (coxController > 0)
+		{
+			return new SyncScope(BpdDefenceSync.SCOPE_COX, coxController);
+		}
+
+		int tobController = raidController(BpdDefenceSync.SCOPE_TOB);
+		if (tobController > 0)
+		{
+			return new SyncScope(BpdDefenceSync.SCOPE_TOB, tobController);
+		}
+
+		WorldView worldView = client.getTopLevelWorldView();
+		if (worldView == null)
+		{
+			return null;
+		}
+		if (worldView.isInstance())
+		{
+			return new SyncScope(BpdDefenceSync.SCOPE_INSTANCE, instanceFingerprint(worldView));
+		}
+		return new SyncScope(BpdDefenceSync.SCOPE_WORLD, 0);
 	}
 
 	private SyncScope localSyncScope(BossDefence boss, NPC npc)
@@ -662,19 +1051,24 @@ public class BetterPartyDefencePlugin extends Plugin
 			return false;
 		}
 
-		int localHp = healthPercent(localBoss);
-		if (localHp < 0 || event.getHealthPercent() < 0
-			|| Math.abs(localHp - event.getHealthPercent()) > NON_INSTANCE_HP_TOLERANCE)
-		{
-			return false;
-		}
+		// Open-world NPC health is not guaranteed to be known merely because the actor is
+		// rendered. Giant Mole is a common example: a late-arriving party member may see the
+		// NPC before RuneLite has a usable health ratio, and the ratio becomes available only
+		// after combat starts. Do not make HP a prerequisite for binding an already-authenticated
+		// party snapshot. First require the same world-scene location; when both clients do know
+		// HP, keep the HP tolerance as an additional anti-mismatch check.
 		WorldPoint point = localBoss.getWorldLocation();
-		if (point == null || point.getPlane() != event.getBossPlane())
+		if (point == null || point.getPlane() != event.getBossPlane()
+			|| Math.abs(point.getX() - event.getBossX()) > NON_INSTANCE_POSITION_TOLERANCE
+			|| Math.abs(point.getY() - event.getBossY()) > NON_INSTANCE_POSITION_TOLERANCE)
 		{
 			return false;
 		}
-		return Math.abs(point.getX() - event.getBossX()) <= NON_INSTANCE_POSITION_TOLERANCE
-			&& Math.abs(point.getY() - event.getBossY()) <= NON_INSTANCE_POSITION_TOLERANCE;
+
+		int localHp = healthPercent(localBoss);
+		int remoteHp = event.getHealthPercent();
+		return localHp < 0 || remoteHp < 0
+			|| Math.abs(localHp - remoteHp) <= NON_INSTANCE_HP_TOLERANCE;
 	}
 
 	private void reconcileActiveSyncScope()
@@ -938,16 +1332,35 @@ public class BetterPartyDefencePlugin extends Plugin
 	private void updateDefenceInfoBox()
 	{
 		DefenceTracker.DefenceState state = defenceTracker.state();
-		boolean show = config.defenceInfoBox() && state != null && trackedNpcIsLive(state);
-		if (show && defenceBox == null)
+		boolean live = state != null && trackedNpcIsLive(state);
+		boolean showDefence = config.defenceInfoBox() && live
+			&& (defenceTracker.hasDefenceSpecHistory() || config.defenceAlwaysShow());
+		boolean showMagic = config.magicDefence() && config.magicDefenceInfoBox() && live
+			&& (defenceTracker.hasMagicDefenceSpecHistory() || config.defenceAlwaysShow());
+
+		if (showDefence && defenceBox == null)
 		{
 			defenceBox = new DefenceInfoBox(
 				skillIconManager.getSkillImage(Skill.DEFENCE), this, defenceTracker, config);
 			infoBoxManager.addInfoBox(defenceBox);
 		}
-		else if (!show)
+		else if (!showDefence && defenceBox != null)
 		{
-			removeInfoBox();
+			infoBoxManager.removeInfoBox(defenceBox);
+			defenceBox = null;
+		}
+
+		if (showMagic && magicDefenceBox == null)
+		{
+			magicDefenceBox = new DefenceInfoBox(
+				skillIconManager.getSkillImage(Skill.MAGIC), this, defenceTracker, config,
+				DefenceInfoBox.Stat.MAGIC_DEFENCE);
+			infoBoxManager.addInfoBox(magicDefenceBox);
+		}
+		else if (!showMagic && magicDefenceBox != null)
+		{
+			infoBoxManager.removeInfoBox(magicDefenceBox);
+			magicDefenceBox = null;
 		}
 	}
 
@@ -960,7 +1373,10 @@ public class BetterPartyDefencePlugin extends Plugin
 	{
 		if (state.getNpcIndex() < 0)
 		{
-			return activeSyncScope != null && syncScopeStillValid(activeSyncScope);
+			// Remote party sync may seed/cache the drained state before this client has
+			// the boss rendered. Keep that state for late binding, but do not surface an
+			// infobox until the matching NPC actually exists in this client's scene.
+			return false;
 		}
 		WorldView worldView = client.getTopLevelWorldView();
 		if (worldView == null || worldView.npcs() == null)
@@ -979,6 +1395,18 @@ public class BetterPartyDefencePlugin extends Plugin
 			infoBoxManager.removeInfoBox(defenceBox);
 			defenceBox = null;
 		}
+		if (magicDefenceBox != null)
+		{
+			infoBoxManager.removeInfoBox(magicDefenceBox);
+			magicDefenceBox = null;
+		}
+	}
+
+	@Value
+	private static class PendingWorldSync
+	{
+		BpdDefenceSync event;
+		DefenceTracker.SyncState sync;
 	}
 
 	@Value
@@ -994,6 +1422,15 @@ public class BetterPartyDefencePlugin extends Plugin
 		int type;
 		int id;
 		BossDefence boss;
+	}
+
+	@Value
+	private static class SenderEncounterPresence
+	{
+		int world;
+		int scopeType;
+		int scopeId;
+		long receivedAtMillis;
 	}
 
 	@Value

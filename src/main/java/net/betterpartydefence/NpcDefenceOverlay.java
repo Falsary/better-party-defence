@@ -38,30 +38,32 @@ public class NpcDefenceOverlay extends Overlay
 		{
 			return null;
 		}
-		DefenceState state = tracker.state();
-		if (state == null || state.getNpcIndex() < 0)
-		{
-			// A synced encounter can exist before this client has the boss actor loaded.
-			// Attached rendering requires an actor; Detached/InfoBox can still show the state.
-			return null;
-		}
-		NPC npc = npcByIndex(state.getNpcIndex());
-		if (npc == null)
-		{
-			return null;
-		}
-
 		graphics.setFont(fontManager.font());
 		DefenceOverlayPosition position = config.defenceHpBarPosition();
-		int zOffset = (int) (npc.getLogicalHeight() * position.getHeightFactor()) + position.getHeightOffset();
-		Point anchor = npc.getCanvasTextLocation(graphics, "", zOffset);
-		if (anchor == null)
+		for (DefenceState state : tracker.states())
 		{
-			return null;
+			// The checkbox controls only the optional pre-spec preview. Any real local/party
+			// drain forces the target visible because drained=true is part of the shared state.
+			if (state == null || (!state.isDrained() && !config.defenceAlwaysShow()) || state.getNpcIndex() < 0)
+			{
+				continue;
+			}
+			NPC npc = npcByIndex(state.getNpcIndex());
+			if (npc == null)
+			{
+				continue;
+			}
+
+			int zOffset = (int) (npc.getLogicalHeight() * position.getHeightFactor()) + position.getHeightOffset();
+			Point anchor = npc.getCanvasTextLocation(graphics, "", zOffset);
+			if (anchor == null)
+			{
+				continue;
+			}
+			int centreX = anchor.getX() + position.getXNudge();
+			int baseline = anchor.getY() - config.defenceHpBarYOffset();
+			renderer.renderAt(graphics, state, centreX, baseline);
 		}
-		int centreX = anchor.getX() + position.getXNudge();
-		int baseline = anchor.getY() - config.defenceHpBarYOffset();
-		renderer.renderAt(graphics, state, centreX, baseline);
 		return null;
 	}
 
