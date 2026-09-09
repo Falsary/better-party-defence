@@ -15,282 +15,111 @@ public interface BetterPartyDefenceConfig extends Config
 {
 	String GROUP = "betterpartydefence";
 
-	@ConfigSection(
-		name = "Defence display",
-		description = "How the tracked boss defence is displayed.",
-		position = 0
-	)
-	String DEFENCE = "defence";
+	@ConfigSection(name = "Display", description = "Where and when the tracker is shown.", position = 0)
+	String DISPLAY = "display";
 
-	@ConfigItem(
-		keyName = "defenceHpBar",
-		name = "Show next to HP bar",
-		description = "Display the tracked monster's live defence in the scene.",
-		position = 1,
-		section = DEFENCE
-	)
-	default boolean defenceHpBar()
-	{
-		return true;
-	}
+	@ConfigSection(name = "Text & icons", description = "Font and icon appearance.", position = 1)
+	String TEXT = "text";
 
-	@ConfigItem(
-		keyName = "defenceHpBarPosition",
-		name = "Overlay position",
-		description = "Where the scene defence display sits relative to the monster.",
-		position = 2,
-		section = DEFENCE
-	)
-	default DefenceOverlayPosition defenceHpBarPosition()
-	{
-		return DefenceOverlayPosition.ABOVE_HP_BAR;
-	}
+	@ConfigSection(name = "Colours", description = "Tracker colours and thresholds.", position = 2)
+	String COLOURS = "colours";
+
+	@ConfigSection(name = "Magic defence", description = "Magic-defence display options.", position = 3)
+	String MAGIC = "magic";
+
+	@ConfigItem(keyName = "defenceHpBar", name = "Show defence tracker", description = "Display the tracked monster's live defence.", position = 1, section = DISPLAY)
+	default boolean defenceHpBar() { return true; }
+
+	@ConfigItem(keyName = "defenceDisplayMode", name = "Display location", description = "Attach the tracker to the NPC or detach it as a movable overlay.", position = 2, section = DISPLAY)
+	default DefenceDisplayMode defenceDisplayMode() { return DefenceDisplayMode.NPC; }
+
+	@ConfigItem(keyName = "defenceHpBarPosition", name = "Attached position", description = "Where the attached display sits, including directly to the right of the HP bar.", position = 3, section = DISPLAY)
+	default DefenceOverlayPosition defenceHpBarPosition() { return DefenceOverlayPosition.ABOVE_HP_BAR; }
 
 	@Range(min = -200, max = 200)
 	@Units(Units.PIXELS)
-	@ConfigItem(
-		keyName = "defenceHpBarYOffset",
-		name = "Vertical nudge",
-		description = "Shift the scene defence display up by this many pixels; negative values move it down.",
-		position = 3,
-		section = DEFENCE
-	)
-	default int defenceHpBarYOffset()
-	{
-		return 0;
-	}
+	@ConfigItem(keyName = "defenceHpBarYOffset", name = "Vertical nudge", description = "Shift the attached display up by this many pixels; negative values move it down.", position = 4, section = DISPLAY)
+	default int defenceHpBarYOffset() { return 0; }
 
-	@ConfigItem(
-		keyName = "defenceInfoBox",
-		name = "Show info box",
-		description = "Also show the tracked Defence value in the RuneLite info-box bar.",
-		position = 4,
-		section = DEFENCE
-	)
-	default boolean defenceInfoBox()
-	{
-		return false;
-	}
+	@ConfigItem(keyName = "hideOverlappingDefenceDisplays", name = "Hide overlapping defence displays", description = "Hide RuneLite Special Attack Counter infoboxes that overlap with Better Party Defence without disabling its spec detection or party messages.", position = 5, section = DISPLAY)
+	default boolean hideOverlappingDefenceDisplays() { return true; }
 
-	@ConfigItem(
-		keyName = "defenceInfoBoxValue",
-		name = "Info box shows",
-		description = "Choose the single value displayed in the info box.",
-		position = 5,
-		section = DEFENCE
-	)
-	default DefenceInfoBoxValue defenceInfoBoxValue()
-	{
-		return DefenceInfoBoxValue.CURRENT;
-	}
+	@ConfigItem(keyName = "defenceInfoBox", name = "Show info box", description = "Also show the tracked Defence value in the RuneLite info-box bar.", position = 6, section = DISPLAY)
+	default boolean defenceInfoBox() { return true; }
 
-	@ConfigItem(
-		keyName = "defenceAlwaysShow",
-		name = "Show before first spec",
-		description = "Show a supported monster's starting Defence while you are interacting with it, before the first drain lands.",
-		position = 6,
-		section = DEFENCE
-	)
-	default boolean defenceAlwaysShow()
-	{
-		return true;
-	}
+	@ConfigItem(keyName = "defenceInfoBoxValue", name = "Info box shows", description = "Choose the single value displayed in the info box.", position = 7, section = DISPLAY)
+	default DefenceInfoBoxValue defenceInfoBoxValue() { return DefenceInfoBoxValue.CURRENT; }
 
-	@ConfigItem(
-		keyName = "defenceValueFormat",
-		name = "Defence shown as",
-		description = "Current value, current/base, percent remaining, or current with percent.",
-		position = 7,
-		section = DEFENCE
-	)
-	default DefenceValueFormat defenceValueFormat()
-	{
-		return DefenceValueFormat.CURRENT;
-	}
+	@ConfigItem(keyName = "extraInfoInInfoBox", name = "Extra info in info box", description = "Show who used each tracked defence-draining special attack when you hover the info box.", position = 8, section = DISPLAY)
+	default boolean extraInfoInInfoBox() { return true; }
 
-	@ConfigItem(
-		keyName = "defenceDrainFormat",
-		name = "Drain shown as",
-		description = "Show drained levels, drained percent, or hide the drain suffix.",
-		position = 8,
-		section = DEFENCE
-	)
-	default DefenceDrainFormat defenceDrainFormat()
-	{
-		return DefenceDrainFormat.AMOUNT;
-	}
+	@ConfigItem(keyName = "defenceAlwaysShow", name = "Show before first spec", description = "Show the last supported monster you targeted at its starting Defence before the first drain lands.", position = 9, section = DISPLAY)
+	default boolean defenceAlwaysShow() { return false; }
 
-	@ConfigItem(
-		keyName = "defenceShowFullLevel",
-		name = "Show full level",
-		description = "For monsters with a Defence floor, show the full level instead of only the drainable amount.",
-		position = 9,
-		section = DEFENCE
-	)
-	default boolean defenceShowFullLevel()
-	{
-		return false;
-	}
+	@ConfigItem(keyName = "defenceValueFormat", name = "Defence shown as", description = "Current value, current/base, percent remaining, or current with percent.", position = 10, section = DISPLAY)
+	default DefenceValueFormat defenceValueFormat() { return DefenceValueFormat.CURRENT; }
 
-	@ConfigItem(
-		keyName = "defenceShowIcons",
-		name = "Show skill icons",
-		description = "Draw Defence and Magic skill icons in front of their readouts.",
-		position = 10,
-		section = DEFENCE
-	)
-	default boolean defenceShowIcons()
-	{
-		return true;
-	}
+	@ConfigItem(keyName = "defenceDrainFormat", name = "Drain shown as", description = "Show drained levels, drained percent, or hide the drain suffix.", position = 11, section = DISPLAY)
+	default DefenceDrainFormat defenceDrainFormat() { return DefenceDrainFormat.AMOUNT; }
 
-	@ConfigItem(
-		keyName = "defenceFontSize",
-		name = "Scene text size",
-		description = "Font size for the on-scene defence display.",
-		position = 11,
-		section = DEFENCE
-	)
-	default SceneFontSize defenceFontSize()
-	{
-		return SceneFontSize.SMALL;
-	}
+	@ConfigItem(keyName = "defenceShowFullLevel", name = "Show full level", description = "For monsters with a Defence floor, show the full level instead of only the drainable amount.", position = 12, section = DISPLAY)
+	default boolean defenceShowFullLevel() { return true; }
 
-	@ConfigItem(
-		keyName = "defenceTextPlate",
-		name = "Text background",
-		description = "Draw a translucent background behind the scene text.",
-		position = 12,
-		section = DEFENCE
-	)
-	default boolean defenceTextPlate()
-	{
-		return false;
-	}
+	@ConfigItem(keyName = "defenceShowIcons", name = "Show skill icons", description = "Draw Defence and Magic skill icons in front of their readouts.", position = 1, section = TEXT)
+	default boolean defenceShowIcons() { return true; }
+
+	@ConfigItem(keyName = "defenceUseThemeSkillIcons", name = "Use theme skill icons", description = "Use Defence and Magic icons from the active RuneLite theme when available; otherwise use the standard icons.", position = 2, section = TEXT)
+	default boolean defenceUseThemeSkillIcons() { return true; }
+
+	@ConfigItem(keyName = "defenceFont", name = "Font", description = "Font used by the Defence tracker.", position = 3, section = TEXT)
+	default TrackerFont defenceFont() { return TrackerFont.RUNESCAPE; }
+
+	@Range(min = 8, max = 48)
+	@ConfigItem(keyName = "defenceFontSizePx", name = "Font size", description = "Tracker font size in pixels.", position = 4, section = TEXT)
+	default int defenceFontSize() { return 15; }
+
+	@ConfigItem(keyName = "defenceBoldText", name = "Bold text", description = "Use bold text for the Defence tracker.", position = 5, section = TEXT)
+	default boolean defenceBoldText() { return false; }
+
+	@ConfigItem(keyName = "customFontPath", name = "Custom font file", description = "Local font selected by Add custom font.", position = 6, section = TEXT, hidden = true)
+	default String customFontPath() { return ""; }
+
+	@ConfigItem(keyName = "defenceTextPlate", name = "Text background", description = "Draw a translucent background behind the tracker text.", position = 7, section = TEXT)
+	default boolean defenceTextPlate() { return false; }
 
 	@Range(min = 0, max = 500)
-	@ConfigItem(
-		keyName = "defenceLowThreshold",
-		name = "Low defence threshold",
-		description = "Defence at or below this threshold is drawn using the low-defence colour.",
-		position = 13,
-		section = DEFENCE
-	)
-	default int defenceLowThreshold()
-	{
-		return 10;
-	}
+	@ConfigItem(keyName = "defenceLowThreshold", name = "Low defence threshold", description = "Defence at or below this threshold uses the low-defence colour.", position = 1, section = COLOURS)
+	default int defenceLowThreshold() { return 10; }
 
-	@ConfigItem(
-		keyName = "defenceLowThresholdUnit",
-		name = "Threshold unit",
-		description = "Interpret the threshold as levels or percent of the drainable Defence.",
-		position = 14,
-		section = DEFENCE
-	)
-	default DefenceThresholdUnit defenceLowThresholdUnit()
-	{
-		return DefenceThresholdUnit.LEVELS;
-	}
+	@ConfigItem(keyName = "defenceLowThresholdUnit", name = "Threshold unit", description = "Interpret the threshold as levels or percent of the drainable Defence.", position = 2, section = COLOURS)
+	default DefenceThresholdUnit defenceLowThresholdUnit() { return DefenceThresholdUnit.LEVELS; }
 
 	@Alpha
-	@ConfigItem(
-		keyName = "defenceHighColor",
-		name = "High defence colour",
-		description = "Colour used above the low-defence threshold.",
-		position = 15,
-		section = DEFENCE
-	)
-	default Color defenceHighColor()
-	{
-		return Color.WHITE;
-	}
+	@ConfigItem(keyName = "defenceHighColor", name = "High defence colour", description = "Colour used above the low-defence threshold.", position = 3, section = COLOURS)
+	default Color defenceHighColor() { return Color.WHITE; }
 
 	@Alpha
-	@ConfigItem(
-		keyName = "defenceLowColor",
-		name = "Low defence colour",
-		description = "Colour used at or below the low-defence threshold.",
-		position = 16,
-		section = DEFENCE
-	)
-	default Color defenceLowColor()
-	{
-		return Color.YELLOW;
-	}
+	@ConfigItem(keyName = "defenceLowColor", name = "Low defence colour", description = "Colour used at or below the low-defence threshold.", position = 4, section = COLOURS)
+	default Color defenceLowColor() { return new Color(0xC0, 0xAB, 0x46); }
 
 	@Alpha
-	@ConfigItem(
-		keyName = "defenceCappedColor",
-		name = "Capped defence colour",
-		description = "Colour used when the target has reached its Defence floor.",
-		position = 17,
-		section = DEFENCE
-	)
-	default Color defenceCappedColor()
-	{
-		return Color.GREEN;
-	}
+	@ConfigItem(keyName = "defenceCappedColor", name = "Capped defence colour", description = "Colour used when the target has reached its Defence floor.", position = 5, section = COLOURS)
+	default Color defenceCappedColor() { return new Color(0x57, 0x95, 0x49); }
 
 	@Alpha
-	@ConfigItem(
-		keyName = "defenceDrainColor",
-		name = "Drain colour",
-		description = "Colour used for the drain arrow and drained amount.",
-		position = 18,
-		section = DEFENCE
-	)
-	default Color defenceDrainColor()
-	{
-		return new Color(255, 80, 80);
-	}
+	@ConfigItem(keyName = "defenceDrainColor", name = "Drain colour", description = "Colour used for the drain arrow and drained amount.", position = 6, section = COLOURS)
+	default Color defenceDrainColor() { return new Color(0xAD, 0x14, 0x59); }
 
-	@ConfigItem(
-		keyName = "magicDefence",
-		name = "Show magic defence",
-		description = "Also show magic-defence changes from supported special attacks.",
-		position = 19,
-		section = DEFENCE
-	)
-	default boolean magicDefence()
-	{
-		return true;
-	}
+	@ConfigItem(keyName = "magicDefence", name = "Show magic defence", description = "Also show magic-defence changes from supported special attacks.", position = 1, section = MAGIC)
+	default boolean magicDefence() { return true; }
 
-	@ConfigItem(
-		keyName = "magicDefenceDisplay",
-		name = "Magic defence as",
-		description = "Choose magic-defence bonus, Magic level, percent of starting roll, or bonus plus percent.",
-		position = 20,
-		section = DEFENCE
-	)
-	default MagicDefenceDisplay magicDefenceDisplay()
-	{
-		return MagicDefenceDisplay.BONUS;
-	}
+	@ConfigItem(keyName = "magicDefenceDisplay", name = "Magic defence as", description = "Choose magic-defence bonus, Magic level, percent of starting roll, or bonus plus percent.", position = 2, section = MAGIC)
+	default MagicDefenceDisplay magicDefenceDisplay() { return MagicDefenceDisplay.BONUS; }
 
-	@ConfigItem(
-		keyName = "magicDefenceSameRow",
-		name = "Magic on same row",
-		description = "Draw the magic-defence readout beside Defence instead of on a second line.",
-		position = 21,
-		section = DEFENCE
-	)
-	default boolean magicDefenceSameRow()
-	{
-		return false;
-	}
+	@ConfigItem(keyName = "magicDefenceSameRow", name = "Magic on same row", description = "Draw the magic-defence readout beside Defence instead of on a second line.", position = 3, section = MAGIC)
+	default boolean magicDefenceSameRow() { return false; }
 
 	@Alpha
-	@ConfigItem(
-		keyName = "magicDefenceColor",
-		name = "Magic defence colour",
-		description = "Colour used for the magic-defence readout.",
-		position = 22,
-		section = DEFENCE
-	)
-	default Color magicDefenceColor()
-	{
-		return new Color(120, 180, 255);
-	}
+	@ConfigItem(keyName = "magicDefenceColor", name = "Magic defence colour", description = "Colour used for the magic-defence readout.", position = 4, section = MAGIC)
+	default Color magicDefenceColor() { return new Color(0x22, 0x5E, 0xA8); }
 }

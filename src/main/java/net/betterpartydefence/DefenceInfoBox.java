@@ -1,16 +1,17 @@
 package net.betterpartydefence;
 
-import net.betterpartydefence.DefenceTracker.DefenceState;
 import java.awt.Color;
 import java.awt.image.BufferedImage;
+import java.util.List;
+import net.betterpartydefence.DefenceTracker.DefenceState;
+import net.betterpartydefence.DefenceTracker.SpecHistoryEntry;
 import net.runelite.client.plugins.Plugin;
+import net.runelite.client.plugins.specialcounter.SpecialWeapon;
 import net.runelite.client.ui.overlay.infobox.InfoBox;
 
 /**
- * Status-bar (info-box) display of the monster's live defence, an alternative or
- * complement to the {@link NpcDefenceOverlay} scene display. Reads the value from
- * {@link DefenceTracker} on every render so it stays current without per-tick updates.
- * The box only fits a few characters, so the full picture lives in its tooltip.
+ * Status-bar (info-box) display of the monster's live defence. The box itself shows the
+ * configured single value; its optional tooltip is reserved for per-encounter spec history.
  */
 public class DefenceInfoBox extends InfoBox
 {
@@ -24,7 +25,7 @@ public class DefenceInfoBox extends InfoBox
 		super(image, plugin);
 		this.tracker = tracker;
 		this.config = config;
-		setTooltip("Monster defence");
+		setTooltip("Better Party Defence");
 	}
 
 	@Override
@@ -35,7 +36,7 @@ public class DefenceInfoBox extends InfoBox
 		{
 			return "";
 		}
-		updateTooltip(state);
+		updateTooltip();
 		boolean full = config.defenceShowFullLevel();
 		long current = DefenceReadout.shownDefence(state, full);
 		long base = DefenceReadout.shownBaseDefence(state, full);
@@ -51,32 +52,81 @@ public class DefenceInfoBox extends InfoBox
 		}
 	}
 
-	/** e.g. {@code Great Olm: Defence 142/200 (71%, -58) | Magic level 250/250, bonus 180/200 (84% of starting roll)}. */
-	private void updateTooltip(DefenceState state)
+	/** Tooltip intentionally contains only spec history; current Defence/Magic data is not repeated here. */
+	private void updateTooltip()
 	{
-		boolean full = config.defenceShowFullLevel();
-		long current = DefenceReadout.shownDefence(state, full);
-		long base = DefenceReadout.shownBaseDefence(state, full);
-		StringBuilder tip = new StringBuilder(state.getName()).append(": Defence ")
-			.append(current).append('/').append(base)
-			.append(" (").append(DefenceReadout.percentRemaining(current, base)).append('%');
-		if (base > current)
+		String text;
+		if (!config.extraInfoInInfoBox())
 		{
-			tip.append(", -").append(base - current);
+			text = "Better Party Defence";
 		}
-		tip.append(')');
-		if (config.magicDefence())
+		else
 		{
-			tip.append(" | Magic level ").append(state.getMagicLevel()).append('/').append(state.getMagicBaseLevel())
-				.append(", bonus ").append(state.getMagicDef()).append('/').append(state.getMagicBaseDef())
-				.append(" (").append(DefenceReadout.percentRemaining(state.getMagicRoll(), state.getMagicBaseRoll()))
-				.append("% of starting roll)");
+			List<SpecHistoryEntry> history = tracker.specHistory();
+			if (history.isEmpty())
+			{
+				text = "No specs yet";
+			}
+			else
+			{
+				StringBuilder tip = new StringBuilder("Spec history:");
+				for (SpecHistoryEntry entry : history)
+				{
+					tip.append("<br>")
+						.append(entry.getPlayerName())
+						.append(": ")
+						.append(shortWeaponName(entry.getWeapon()))
+						.append(' ')
+						.append(entry.getHit());
+				}
+				text = tip.toString();
+			}
 		}
-		String text = tip.toString();
+
 		if (!text.equals(tooltip))
 		{
 			tooltip = text;
 			setTooltip(text);
+		}
+	}
+
+	private static String shortWeaponName(SpecialWeapon weapon)
+	{
+		if (weapon == null)
+		{
+			return "Spec";
+		}
+
+		switch (weapon)
+		{
+			case DRAGON_WARHAMMER:
+				return "DWH";
+			case BANDOS_GODSWORD:
+				return "BGS";
+			case ELDER_MAUL:
+				return "Elder maul";
+			case TONALZTICS_OF_RALOS:
+				return "Ralos";
+			case BARRELCHEST_ANCHOR:
+				return "Anchor";
+			case BONE_DAGGER:
+				return "Bone dagger";
+			case DORGESHUUN_CROSSBOW:
+				return "Dorgeshuun cbow";
+			case ACCURSED_SCEPTRE:
+				return "Accursed";
+			case EYE_OF_AYAK:
+				return "Eye of ayak";
+			case ARCLIGHT:
+				return "Arclight";
+			case DARKLIGHT:
+				return "Darklight";
+			case EMBERLIGHT:
+				return "Emberlight";
+			case SEERCULL:
+				return "Seercull";
+			default:
+				return weapon.name();
 		}
 	}
 

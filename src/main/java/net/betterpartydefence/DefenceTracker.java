@@ -1,6 +1,7 @@
 package net.betterpartydefence;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Iterator;
 import java.util.List;
 import java.util.concurrent.ConcurrentLinkedDeque;
@@ -93,6 +94,9 @@ public class DefenceTracker
 	/** True once a special attack has actually landed on the tracked monster. */
 	private boolean drained;
 
+	/** Specs which contributed to the current tracked encounter, shown in the info-box tooltip. */
+	private final List<SpecHistoryEntry> specHistory = new ArrayList<>();
+
 	/** Filled from the socket reader thread, drained on the client thread. */
 	private final ConcurrentLinkedDeque<Drain> pending = new ConcurrentLinkedDeque<>();
 
@@ -106,6 +110,8 @@ public class DefenceTracker
 	private int queuedIndex = -1;
 	private int queuedAtTick = -1;
 	private final List<Drain> queuedDrains = new ArrayList<>();
+	/** Tracks the CoX in-raid varbit so cleanup only fires on a real 1 -> 0 raid exit. */
+	private boolean wasInCoxRaid;
 
 	@Value
 	public static class DefenceState
@@ -127,6 +133,15 @@ public class DefenceTracker
 		long magicBaseLevel;
 	}
 
+	/** One accepted spec in the current tracked encounter, for the info-box hover history. */
+	@Value
+	public static class SpecHistoryEntry
+	{
+		String playerName;
+		SpecialWeapon weapon;
+		int hit;
+	}
+
 	/** One defence-draining special attack landed on an NPC, from any party member. */
 	@Value
 	private static class Drain
@@ -135,6 +150,7 @@ public class DefenceTracker
 		int npcIndex;
 		int hit;
 		int world;
+		String playerName;
 	}
 
 	@Inject
@@ -180,11 +196,16 @@ public class DefenceTracker
 	 */
 	public void queue(SpecialWeapon weapon, int npcIndex, int hit, int world)
 	{
+		queue(weapon, npcIndex, hit, world, null);
+	}
+
+	public void queue(SpecialWeapon weapon, int npcIndex, int hit, int world, String playerName)
+	{
 		if (!isSupportedWeapon(weapon))
 		{
 			return;
 		}
-		Drain drain = new Drain(weapon, npcIndex, hit, world);
+		Drain drain = new Drain(weapon, npcIndex, hit, world, playerName);
 		if (weapon == SpecialWeapon.ELDER_MAUL)
 		{
 			pending.addFirst(drain);
@@ -212,7 +233,7 @@ public class DefenceTracker
 				if (bossIndex != queuedIndex)
 				{
 					BossDefence queuedBoss = BossDefence.matchingNpcName(queuedNpc.getName());
-					if (queuedBoss == bossType && isPhasePersistentBoss(queuedBoss))
+					if (shouldRebindSameEncounter(queuedBoss))
 					{
 						rebindBoss(queuedNpc);
 					}
@@ -230,6 +251,14 @@ public class DefenceTracker
 			}
 		}
 
+		boolean inCoxRaid = client.getVarbitValue(VarbitID.RAIDS_CLIENT_INDUNGEON) == 1;
+		if (bossType != null && bossType.has(BossDefence.Flag.COX_SCALED)
+			&& wasInCoxRaid && !inCoxRaid)
+		{
+			reset("Chambers raid ended");
+		}
+		wasInCoxRaid = inCoxRaid;
+
 		if (bossType == BossDefence.SOTETSEG)
 		{
 			updateSotetsegEncounterState();
@@ -240,15 +269,14 @@ public class DefenceTracker
 			NPC npc = npcByIndex(bossIndex);
 			if (npc == null)
 			{
-				NPC replacement = isPhasePersistentBoss(bossType) ? findNpcForBoss(bossType) : null;
+				// NPCs are removed from the client's scene when they leave render distance. That is
+				// not an encounter reset. Preserve the drained values/history and try to rebind to
+				// the same logical boss if its actor is currently visible under another index.
+				NPC replacement = findNpcForBoss(bossType);
 				if (replacement != null)
 				{
 					rebindBoss(replacement);
 					npc = replacement;
-				}
-				else if (!isPhasePersistentBoss(bossType))
-				{
-					reset("tracked NPC left the scene");
 				}
 			}
 
@@ -279,18 +307,14 @@ public class DefenceTracker
 		BossDefence targetBoss = target == null || target.getName() == null
 			? null : BossDefence.matchingNpcName(target.getName());
 
-		// Kephri and Sotetseg intentionally stop being interactable while their encounter
-		// continues. Never clear those encounters just because the local player has no target.
+		// Keep the last supported target latched when the player yellow-clicks away, moves,
+		// or the NPC temporarily leaves render distance. Confirmed death/encounter resets clear it.
 		if (targetBoss == null)
 		{
-			if (bossIndex != -1 && !isPhasePersistentBoss(bossType) && !drained)
-			{
-				reset("no longer interacting with a supported NPC");
-			}
 			return;
 		}
 
-		if (targetBoss == bossType && isPhasePersistentBoss(bossType) && target.getIndex() != bossIndex)
+		if (target.getIndex() != bossIndex && shouldRebindSameEncounter(targetBoss))
 		{
 			rebindBoss(target);
 			return;
@@ -344,7 +368,7 @@ public class DefenceTracker
 		}
 		if (bossIndex != index)
 		{
-			if (incomingBoss != null && incomingBoss == bossType && isPhasePersistentBoss(incomingBoss))
+			if (shouldRebindSameEncounter(incomingBoss))
 			{
 				rebindBoss(npc);
 			}
@@ -368,6 +392,7 @@ public class DefenceTracker
 		drained = true;
 		long before = bossDef;
 		calculateDefence(drain.getWeapon(), hit, npc);
+		recordSpecHistory(drain);
 		log.debug("{} hit {} on {}: def {} -> {} (base {}, floor {})",
 			drain.getWeapon(), hit, bossName, before, bossDef, bossStartDef, minDef);
 	}
@@ -410,6 +435,7 @@ public class DefenceTracker
 	private void setBoss(String name, int index)
 	{
 		BossDefence boss = BossDefence.matchingNpcName(name);
+		specHistory.clear();
 		bossName = name;
 		bossIndex = index;
 		bossType = boss;
@@ -506,6 +532,7 @@ public class DefenceTracker
 			}
 			if (isKephriFinalPhaseId(bossNpcId) && !kephriFinalResetApplied)
 			{
+				specHistory.clear();
 				initializeStats(bossType);
 				kephriFinalResetApplied = true;
 				log.debug("Kephri entered final phase; Defence restored to {}", bossDef);
@@ -529,6 +556,7 @@ public class DefenceTracker
 
 		if (state == 2 && sotetsegEncounterState != 2)
 		{
+			specHistory.clear();
 			initializeStats(bossType);
 			log.debug("Sotetseg maze started; Defence restored to {} without clearing encounter", bossDef);
 		}
@@ -538,6 +566,12 @@ public class DefenceTracker
 			return;
 		}
 		sotetsegEncounterState = state;
+	}
+
+	private boolean shouldRebindSameEncounter(BossDefence incomingBoss)
+	{
+		return bossIndex != -1 && incomingBoss != null && incomingBoss == bossType
+			&& (isPhasePersistentBoss(incomingBoss) || npcByIndex(bossIndex) == null);
 	}
 
 	private static boolean isPhasePersistentBoss(BossDefence boss)
@@ -576,6 +610,25 @@ public class DefenceTracker
 			}
 		}
 		return null;
+	}
+
+	private void recordSpecHistory(Drain drain)
+	{
+		String playerName = drain.getPlayerName();
+		if (playerName == null || playerName.trim().isEmpty())
+		{
+			playerName = "Unknown";
+		}
+		else
+		{
+			playerName = Text.removeTags(playerName).trim();
+		}
+		specHistory.add(new SpecHistoryEntry(playerName, drain.getWeapon(), drain.getHit()));
+	}
+
+	public List<SpecHistoryEntry> specHistory()
+	{
+		return Collections.unmodifiableList(new ArrayList<>(specHistory));
 	}
 
 	private void calculateDefence(SpecialWeapon weapon, int hit, NPC npc)
@@ -775,6 +828,7 @@ public class DefenceTracker
 		demon = false;
 		accursedApplied = false;
 		drained = false;
+		specHistory.clear();
 		pending.clear();
 		clearHeld();
 	}

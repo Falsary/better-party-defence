@@ -3,17 +3,13 @@ package net.betterpartydefence;
 import lombok.Getter;
 import lombok.RequiredArgsConstructor;
 
-/**
- * Where the scene defence display sits relative to the monster. {@code heightFactor}
- * and {@code heightOffset} produce a z-offset of {@code logicalHeight * factor +
- * offset} for the text; {@code xNudge} shifts it sideways (used to sit beside the
- * health bar without covering it).
- */
+/** Where the attached Defence display sits relative to the monster. */
 @Getter
 @RequiredArgsConstructor
 public enum DefenceOverlayPosition
 {
 	ABOVE_HP_BAR("Above HP bar", 1.0, 55, 0),
+	RIGHT_OF_HP_BAR("Right of HP bar", 1.0, 55, 38),
 	CENTRE_OF_NPC("Centre of NPC", 0.5, 0, 0),
 	AT_NPC_FEET("At NPC feet", 0.0, 0, 0);
 

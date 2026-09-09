@@ -16,16 +16,24 @@
 package net.betterpartydefence;
 
 import com.google.inject.Provides;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.io.File;
+import javax.swing.JFileChooser;
+import javax.swing.SwingUtilities;
+import javax.swing.filechooser.FileNameExtensionFilter;
 import javax.inject.Inject;
 import javax.inject.Singleton;
 import lombok.Value;
 import lombok.extern.slf4j.Slf4j;
 import net.runelite.api.Client;
 import net.runelite.api.GameState;
+import net.runelite.api.NPC;
 import net.runelite.api.Skill;
+import net.runelite.api.WorldView;
 import net.runelite.api.events.FakeXpDrop;
 import net.runelite.api.events.GameStateChanged;
 import net.runelite.api.events.GameTick;
@@ -36,6 +44,7 @@ import net.runelite.client.callback.ClientThread;
 import net.runelite.client.config.ConfigManager;
 import net.runelite.client.eventbus.Subscribe;
 import net.runelite.client.events.PartyChanged;
+import net.runelite.client.events.ConfigChanged;
 import net.runelite.client.events.PluginChanged;
 import net.runelite.client.game.SkillIconManager;
 import net.runelite.client.party.PartyMember;
@@ -48,8 +57,8 @@ import net.runelite.client.plugins.specialcounter.SpecialCounterPlugin;
 import net.runelite.client.plugins.specialcounter.SpecialCounterUpdate;
 import net.runelite.client.plugins.specialcounter.SpecialWeapon;
 import net.runelite.client.ui.overlay.OverlayManager;
+import net.runelite.client.ui.overlay.infobox.InfoBox;
 import net.runelite.client.ui.overlay.infobox.InfoBoxManager;
-import net.runelite.client.util.ImageUtil;
 
 /**
  * Displays a boss's live Defence using special-attack events shared by members of the
@@ -105,12 +114,20 @@ public class BetterPartyDefencePlugin extends Plugin
 	private BetterPartyDefenceConfig config;
 
 	@Inject
+	private ConfigManager configManager;
+
+	@Inject
 	private InfoBoxManager infoBoxManager;
 
 	private NpcDefenceOverlay defenceOverlay;
+	private ScreenDefenceOverlay screenDefenceOverlay;
+	private SkillIconSource skillIconSource;
+	private TrackerFontManager trackerFontManager;
 	private DefenceInfoBox defenceBox;
 	private static final int DUPLICATE_WINDOW_TICKS = 1;
 	private final Map<SpecEventKey, Integer> recentSpecEvents = new HashMap<>();
+	private final List<InfoBox> hiddenSpecialCounterInfoBoxes = new ArrayList<>();
+	private Integer hiddenSpecialCounterNpcIndex;
 	private boolean wasInParty;
 
 	@Provides
@@ -123,18 +140,20 @@ public class BetterPartyDefencePlugin extends Plugin
 	@Override
 	protected void startUp()
 	{
+		migrateLegacyHealthBarDisplayMode();
+		syncOverlappingDefenceDisplays();
+
 		// Register the core SpecialCounterUpdate message ourselves so remote party drains can
 		// still be decoded even when this client's Special Attack Counter UI is disabled.
 		// WSClient de-duplicates registrations by message class.
 		wsClient.registerMessage(SpecialCounterUpdate.class);
 
-		defenceOverlay = new NpcDefenceOverlay(
-			client,
-			defenceTracker,
-			config,
-			ImageUtil.resizeImage(skillIconManager.getSkillImage(Skill.DEFENCE), 16, 16),
-			ImageUtil.resizeImage(skillIconManager.getSkillImage(Skill.MAGIC), 16, 16));
+		skillIconSource = new SkillIconSource(client, skillIconManager, config);
+		trackerFontManager = new TrackerFontManager(config);
+		defenceOverlay = new NpcDefenceOverlay(client, defenceTracker, config, skillIconSource, trackerFontManager);
+		screenDefenceOverlay = new ScreenDefenceOverlay(defenceTracker, config, skillIconSource, trackerFontManager);
 		overlayManager.add(defenceOverlay);
+		overlayManager.add(screenDefenceOverlay);
 
 		wasInParty = partyService.isInParty();
 		log.info("Better Party Defence started; Hub Party session active={}", wasInParty);
@@ -148,11 +167,20 @@ public class BetterPartyDefencePlugin extends Plugin
 	@Override
 	protected void shutDown()
 	{
+		restoreOverlappingDefenceDisplays();
+
 		if (defenceOverlay != null)
 		{
 			overlayManager.remove(defenceOverlay);
 			defenceOverlay = null;
 		}
+		if (screenDefenceOverlay != null)
+		{
+			overlayManager.remove(screenDefenceOverlay);
+			screenDefenceOverlay = null;
+		}
+		skillIconSource = null;
+		trackerFontManager = null;
 		removeInfoBox();
 		recentSpecEvents.clear();
 		// Do not unregister a message class that the active core Special Attack Counter still needs.
@@ -166,7 +194,7 @@ public class BetterPartyDefencePlugin extends Plugin
 		log.info("Better Party Defence shut down");
 	}
 
-	@Subscribe
+	@Subscribe(priority = -100f)
 	public void onGameTick(GameTick event)
 	{
 		boolean inParty = partyService.isInParty();
@@ -184,6 +212,14 @@ public class BetterPartyDefencePlugin extends Plugin
 		localSpecDetector.onGameTick();
 		defenceTracker.onGameTick();
 		updateDefenceInfoBox();
+
+		// RuneLite's EventBus requires GameTick subscribers to be named exactly onGameTick.
+		// Run the visual suppression at the end of our low-priority tick so Special Attack
+		// Counter can continue its normal detection/broadcast work first.
+		if (config.hideOverlappingDefenceDisplays())
+		{
+			hideExistingSpecialCounterInfoBoxes();
+		}
 	}
 
 	@Subscribe
@@ -227,6 +263,8 @@ public class BetterPartyDefencePlugin extends Plugin
 			localSpecDetector.reset();
 			defenceTracker.reset("game state " + state);
 			removeInfoBox();
+			hiddenSpecialCounterInfoBoxes.clear();
+			hiddenSpecialCounterNpcIndex = null;
 			recentSpecEvents.clear();
 		}
 	}
@@ -242,11 +280,18 @@ public class BetterPartyDefencePlugin extends Plugin
 		if (event.isLoaded())
 		{
 			log.debug("Special Attack Counter enabled: it will own the standard party spec broadcast");
+			if (config.hideOverlappingDefenceDisplays())
+			{
+				hideExistingSpecialCounterInfoBoxes();
+			}
 		}
 		else
 		{
 			// Its shutdown unregisters SpecialCounterUpdate. Re-register so BPD can continue
-			// decoding messages sent by other party members.
+			// decoding messages sent by other party members. Any boxes captured from the old
+			// Special Counter session are no longer valid after that plugin shuts down.
+			hiddenSpecialCounterInfoBoxes.clear();
+			hiddenSpecialCounterNpcIndex = null;
 			wsClient.registerMessage(SpecialCounterUpdate.class);
 			log.debug("Special Attack Counter disabled: Better Party Defence will broadcast supported local drains itself");
 		}
@@ -305,8 +350,145 @@ public class BetterPartyDefencePlugin extends Plugin
 				event.getMemberId(), Objects.toString(senderName, "unknown"), weapon,
 				event.getHit(), event.getNpcIndex(), event.getWorld());
 
-			defenceTracker.queue(weapon, event.getNpcIndex(), event.getHit(), event.getWorld());
+			defenceTracker.queue(weapon, event.getNpcIndex(), event.getHit(), event.getWorld(),
+				Objects.toString(senderName, "Party member"));
 		});
+	}
+
+	@Subscribe
+	public void onConfigChanged(ConfigChanged event)
+	{
+		if (!BetterPartyDefenceConfig.GROUP.equals(event.getGroup()))
+		{
+			return;
+		}
+
+		if ("hideOverlappingDefenceDisplays".equals(event.getKey()))
+		{
+			syncOverlappingDefenceDisplays();
+			return;
+		}
+
+		if (!"defenceFont".equals(event.getKey()) || config.defenceFont() != TrackerFont.ADD_CUSTOM)
+		{
+			return;
+		}
+
+		SwingUtilities.invokeLater(() ->
+		{
+			JFileChooser chooser = new JFileChooser();
+			chooser.setDialogTitle("Choose a font for Better Party Defence");
+			chooser.setFileFilter(new FileNameExtensionFilter("Font files (*.ttf, *.otf)", "ttf", "otf"));
+			String current = config.customFontPath();
+			if (current != null && !current.trim().isEmpty())
+			{
+				File file = new File(current);
+				if (file.getParentFile() != null)
+				{
+					chooser.setCurrentDirectory(file.getParentFile());
+				}
+			}
+			if (chooser.showOpenDialog(null) == JFileChooser.APPROVE_OPTION)
+			{
+				configManager.setConfiguration(BetterPartyDefenceConfig.GROUP, "customFontPath",
+					chooser.getSelectedFile().getAbsolutePath());
+				configManager.setConfiguration(BetterPartyDefenceConfig.GROUP, "defenceFont", TrackerFont.CUSTOM);
+			}
+			else
+			{
+				TrackerFont fallback = config.customFontPath() == null || config.customFontPath().trim().isEmpty()
+					? TrackerFont.RUNESCAPE : TrackerFont.CUSTOM;
+				configManager.setConfiguration(BetterPartyDefenceConfig.GROUP, "defenceFont", fallback);
+			}
+		});
+	}
+
+	private void syncOverlappingDefenceDisplays()
+	{
+		if (config.hideOverlappingDefenceDisplays())
+		{
+			hideExistingSpecialCounterInfoBoxes();
+		}
+		else
+		{
+			restoreOverlappingDefenceDisplays();
+		}
+	}
+
+	/**
+	 * Hide only the visual infoboxes owned by RuneLite's Special Attack Counter. The core plugin
+	 * remains enabled, so its spec detection, party SpecialCounterUpdate messages and thresholds
+	 * continue to work. BPD never disables the other plugin or rewrites its settings.
+	 */
+	private void hideExistingSpecialCounterInfoBoxes()
+	{
+		DefenceTracker.DefenceState state = defenceTracker.state();
+		Integer currentNpcIndex = state == null ? null : state.getNpcIndex();
+
+		if (!Objects.equals(hiddenSpecialCounterNpcIndex, currentNpcIndex)
+			&& !hiddenSpecialCounterInfoBoxes.isEmpty())
+		{
+			// The tracked encounter changed while the boxes were hidden. Do not keep stale
+			// Special Counter boxes around for a later restore.
+			hiddenSpecialCounterInfoBoxes.clear();
+		}
+		hiddenSpecialCounterNpcIndex = currentNpcIndex;
+
+		for (InfoBox infoBox : new ArrayList<>(infoBoxManager.getInfoBoxes()))
+		{
+			// InfoBox#getPlugin() is package-private in RuneLite, so Plugin Hub plugins
+			// cannot use it to determine ownership. Special Attack Counter's infobox
+			// implementations live in its own package, which is safe to inspect via
+			// the public runtime class.
+			if (isSpecialCounterInfoBox(infoBox)
+				&& !hiddenSpecialCounterInfoBoxes.contains(infoBox))
+			{
+				hiddenSpecialCounterInfoBoxes.add(infoBox);
+				infoBoxManager.removeInfoBox(infoBox);
+			}
+		}
+	}
+
+	private static boolean isSpecialCounterInfoBox(InfoBox infoBox)
+	{
+		return infoBox != null
+			&& infoBox.getClass().getName().startsWith("net.runelite.client.plugins.specialcounter.");
+	}
+
+	private void restoreOverlappingDefenceDisplays()
+	{
+		DefenceTracker.DefenceState state = defenceTracker.state();
+		Integer currentNpcIndex = state == null ? null : state.getNpcIndex();
+		boolean sameLiveEncounter = state != null
+			&& Objects.equals(hiddenSpecialCounterNpcIndex, currentNpcIndex)
+			&& isSpecialCounterActive();
+
+		if (sameLiveEncounter)
+		{
+			for (InfoBox infoBox : hiddenSpecialCounterInfoBoxes)
+			{
+				infoBoxManager.addInfoBox(infoBox);
+			}
+		}
+
+		hiddenSpecialCounterInfoBoxes.clear();
+		hiddenSpecialCounterNpcIndex = null;
+	}
+
+	/**
+	 * The display-polish build briefly exposed health-bar pinning as a third display mode.
+	 * Migrate that saved value to the attached-position setting so existing users keep the
+	 * same placement while Display location now contains only Attached and Detached.
+	 */
+	private void migrateLegacyHealthBarDisplayMode()
+	{
+		String savedMode = configManager.getConfiguration(BetterPartyDefenceConfig.GROUP, "defenceDisplayMode");
+		if ("NPC_HEALTH_BAR".equals(savedMode))
+		{
+			configManager.setConfiguration(BetterPartyDefenceConfig.GROUP, "defenceDisplayMode", DefenceDisplayMode.NPC);
+			configManager.setConfiguration(BetterPartyDefenceConfig.GROUP, "defenceHpBarPosition",
+				DefenceOverlayPosition.RIGHT_OF_HP_BAR);
+		}
 	}
 
 	private boolean isSpecialCounterActive()
@@ -323,7 +505,8 @@ public class BetterPartyDefencePlugin extends Plugin
 
 	private void updateDefenceInfoBox()
 	{
-		boolean show = config.defenceInfoBox() && defenceTracker.state() != null;
+		DefenceTracker.DefenceState state = defenceTracker.state();
+		boolean show = config.defenceInfoBox() && state != null && trackedNpcIsLive(state);
 		if (show && defenceBox == null)
 		{
 			defenceBox = new DefenceInfoBox(
@@ -334,6 +517,23 @@ public class BetterPartyDefencePlugin extends Plugin
 		{
 			removeInfoBox();
 		}
+	}
+
+	/**
+	 * Info boxes live outside scene rendering, so a stale tracker snapshot can otherwise
+	 * remain visible after the boss actor has died or the raid room has unloaded. Keep
+	 * the box tied to the same concrete NPC actor the attached display requires.
+	 */
+	private boolean trackedNpcIsLive(DefenceTracker.DefenceState state)
+	{
+		WorldView worldView = client.getTopLevelWorldView();
+		if (worldView == null || worldView.npcs() == null)
+		{
+			return false;
+		}
+
+		NPC npc = worldView.npcs().byIndex(state.getNpcIndex());
+		return npc != null && !npc.isDead() && npc.getHealthRatio() != 0;
 	}
 
 	private void removeInfoBox()

@@ -412,4 +412,39 @@ public class DefenceTrackerParityTest
 		assertEquals(287, tracker.state().getBase());
 		assertEquals(201, tracker.state().getCurrent());
 	}
+	@Test
+	public void leavingRenderDistancePreservesDefenceAndHistory()
+	{
+		fakeNpc("Chaos Elemental", 40);
+		DefenceTracker tracker = makeTracker();
+		tracker.queue(SpecialWeapon.DRAGON_WARHAMMER, 40, 1, WORLD, "Heisty");
+		tracker.onGameTick();
+		assertEquals(189, tracker.state().getCurrent());
+		assertEquals(1, tracker.specHistory().size());
+
+		removeNpc(40);
+		tracker.onGameTick();
+		assertEquals(189, tracker.state().getCurrent());
+		assertEquals(1, tracker.specHistory().size());
+
+		fakeNpc("Chaos Elemental", 41);
+		tracker.onGameTick();
+		assertEquals(41, tracker.state().getNpcIndex());
+		assertEquals(189, tracker.state().getCurrent());
+		assertEquals("Heisty", tracker.specHistory().get(0).getPlayerName());
+	}
+
+	@Test
+	public void resetClearsSpecHistory()
+	{
+		fakeNpc("Chaos Elemental", 42);
+		DefenceTracker tracker = makeTracker();
+		tracker.queue(SpecialWeapon.BANDOS_GODSWORD, 42, 49, WORLD, "Other Party Member");
+		tracker.onGameTick();
+		assertEquals(1, tracker.specHistory().size());
+
+		tracker.reset("test");
+		assertTrue(tracker.specHistory().isEmpty());
+	}
+
 }

@@ -238,14 +238,18 @@ class LocalDefenceSpecDetector
 		log.debug("Local defence spec: weapon={} hit={} target={} npc={} world={}",
 			used, rawHit, npc.getName(), npcIndex, world);
 
+		Player local = client.getLocalPlayer();
+		String playerName = local != null && local.getName() != null ? local.getName() : "You";
+
 		// Apply locally immediately; no party or websocket round-trip is required for our own overlay.
-		defenceTracker.queue(used, npcIndex, rawHit, world);
+		// Pass the player name with the drain so the info-box hover history is tied to the same
+		// accepted event as the Defence calculation.
+		defenceTracker.queue(used, npcIndex, rawHit, world, playerName);
 
 		// Hub Party Panel uses this same PartyService session. If RuneLite's core Special Attack
 		// Counter is active it already sends this exact message, so never duplicate it.
 		if (partyService.isInParty() && !isSpecialCounterActive())
 		{
-			Player local = client.getLocalPlayer();
 			if (local != null)
 			{
 				partyService.send(new SpecialCounterUpdate(npcIndex, used, rawHit, world, local.getId()));
