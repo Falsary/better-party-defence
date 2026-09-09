@@ -202,9 +202,10 @@ class LocalDefenceSpecDetector
 				{
 					return;
 				}
-				Hitsplat last = hitsplats.get(hitsplats.size() - 1);
-				Hitsplat previous = hitsplats.get(hitsplats.size() - 2);
-				int connected = Math.min(last.getAmount(), 1) + Math.min(previous.getAmount(), 1);
+
+				Hitsplat first = hitsplats.get(0);
+				Hitsplat second = hitsplats.get(1);
+				int connected = Math.min(first.getAmount(), 1) + Math.min(second.getAmount(), 1);
 				record(weapon, connected, target);
 			}
 			else
@@ -213,9 +214,12 @@ class LocalDefenceSpecDetector
 				{
 					return;
 				}
-				// The weapon hitsplat is the last mine hitsplat on the target for the expected tick.
-				int rawHit = hitsplats.get(hitsplats.size() - 1).getAmount();
-				record(weapon, rawHit, target);
+
+				// Delayed ranged/magic specs arrive before same-tick thrall/veng hits;
+				// instant melee specs arrive after them.
+				boolean delayedHit = weapon.getHitDelay(1) > 1;
+				Hitsplat specHitsplat = hitsplats.get(delayedHit ? 0 : hitsplats.size() - 1);
+				record(weapon, specHitsplat.getAmount(), target);
 			}
 			clearPending();
 		}
