@@ -18,7 +18,6 @@ import net.runelite.api.Client;
 import net.runelite.api.NPC;
 import net.runelite.api.Player;
 import net.runelite.api.WorldView;
-import net.runelite.api.gameval.NpcID;
 import net.runelite.api.gameval.VarbitID;
 import net.runelite.client.plugins.specialcounter.SpecialWeapon;
 import net.runelite.client.util.Text;
@@ -395,11 +394,19 @@ public class DefenceTracker
 				handlePhaseNpc(npc);
 				if (bossIndex != -1 && (npc.isDead() || npc.getHealthRatio() == 0))
 				{
-					if (bossType != null)
+					BossMechanics mechanics = BossMechanics.forBoss(bossType);
+					if (mechanics.preserveStateAtZeroHp(npc.getId()))
 					{
-						endedBosses.add(bossType);
+						log.debug("Keeping {} state while transitional actor {} is at 0 HP", bossType, npc.getId());
 					}
-					removeCurrent("tracked NPC died");
+					else
+					{
+						if (bossType != null)
+						{
+							endedBosses.add(bossType);
+						}
+						removeCurrent("tracked NPC died");
+					}
 				}
 			}
 		}
@@ -648,20 +655,19 @@ public class DefenceTracker
 		}
 
 		bossNpcId = npc.getId();
-		if (bossType == BossDefence.KEPHRI)
+		BossMechanics mechanics = BossMechanics.forBoss(bossType);
+		if (mechanics.endsEncounterOnActorEntry(bossNpcId))
 		{
-			if (bossNpcId == NpcID.TOA_KEPHRI_BOSS_DEAD)
-			{
-				reset("Kephri final phase ended");
-				return;
-			}
-			if (isKephriFinalPhaseId(bossNpcId) && !kephriFinalResetApplied)
-			{
-				specHistory.clear();
-				initializeStats(bossType);
-				kephriFinalResetApplied = true;
-				log.debug("Kephri entered final phase; Defence restored to {}", bossDef);
-			}
+			reset("boss final phase ended");
+			return;
+		}
+		if (bossType == BossDefence.KEPHRI
+			&& mechanics.resetsStatsOnActorEntry(bossNpcId) && !kephriFinalResetApplied)
+		{
+			specHistory.clear();
+			initializeStats(bossType);
+			kephriFinalResetApplied = true;
+			log.debug("Kephri entered final phase; Defence restored to {}", bossDef);
 		}
 	}
 
@@ -701,12 +707,12 @@ public class DefenceTracker
 
 	private static boolean isPhasePersistentBoss(BossDefence boss)
 	{
-		return boss == BossDefence.KEPHRI || boss == BossDefence.SOTETSEG;
+		return BossMechanics.forBoss(boss).isPhasePersistent();
 	}
 
 	private static boolean isKephriFinalPhaseId(int npcId)
 	{
-		return npcId == NpcID.TOA_KEPHRI_BOSS_ENRAGE;
+		return BossMechanics.KEPHRI.resetsStatsOnActorEntry(npcId);
 	}
 
 	/** Find the current actor for the same logical encounter after Jagex replaces its NPC index/id. */
@@ -1340,6 +1346,11 @@ public class DefenceTracker
 			if (npc != null && (npc.isDead() || npc.getHealthRatio() == 0))
 			{
 				SavedState ended = entry.getValue();
+				BossMechanics mechanics = BossMechanics.forBoss(ended == null ? null : ended.bossType);
+				if (mechanics.preserveStateAtZeroHp(npc.getId()))
+				{
+					continue;
+				}
 				if (ended != null && ended.bossType != null)
 				{
 					endedBosses.add(ended.bossType);

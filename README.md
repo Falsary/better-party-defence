@@ -22,7 +22,7 @@ Local tracking continues to work normally when you are not in a party.
 
 ## Display
 
-Better Party Defence can display the current estimated Defence directly on supported NPCs and through an InfoBoxfor magic and an infobox for melee.
+Better Party Defence can display the current estimated Defence directly on supported NPCs and through an InfoBox for magic, and an infobox for melee.
 
 Display options include attached and detached layouts, configurable fonts and sizing, skill icons, Defence formatting, and optional previous-target display behaviour and it ships by default by hiding conflicting infoboxes.
 
