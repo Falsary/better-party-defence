@@ -31,7 +31,7 @@ public interface BetterPartyDefenceConfig extends Config
 	String EXPERIMENTAL = "experimental";
 
 	@ConfigSection(
-		name = "Sticky Display UI",
+		name = "Previous Target UI",
 		description = "Appearance and placement for the experimental previous-target display.",
 		position = 5,
 		closedByDefault = true)
@@ -150,7 +150,7 @@ public interface BetterPartyDefenceConfig extends Config
 	@ConfigItem(
 		keyName = "previousTargetDisplay",
 		name = "Previous target display",
-		description = "Keep the previously active drained target visible using the independent Sticky Display UI settings.",
+		description = "Keep the previously active drained target visible using the independent Previous Target UI settings.",
 		position = 2,
 		section = EXPERIMENTAL)
 	default boolean previousTargetDisplay() { return true; }
