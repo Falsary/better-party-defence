@@ -57,6 +57,20 @@ final class PreviousTargetDisplayState
 		}
 
 		int currentIndex = boundIndex(current);
+		BossDefence currentBoss = current == null ? null : tracker.trackedBossType();
+
+		// Sotetseg's combat/maze actor replacements belong to one logical encounter and its
+		// Defence is intentionally restored by DefenceTracker at each maze. Never let those
+		// actor swaps enter the experimental previous-target display, otherwise a stale pre-maze
+		// snapshot can appear beside the authoritative current Sotetseg state.
+		if (currentBoss == BossDefence.SOTETSEG || lastActiveBoss == BossDefence.SOTETSEG)
+		{
+			previousTargetNpcIndex = null;
+			lastActiveNpcIndex = currentIndex;
+			lastActiveBoss = currentBoss;
+			return;
+		}
+
 		if (currentIndex < 0 || currentIndex == lastActiveNpcIndex)
 		{
 			if (stateByIndex(states, previousTargetNpcIndex) == null)
@@ -66,7 +80,6 @@ final class PreviousTargetDisplayState
 			return;
 		}
 
-		BossDefence currentBoss = tracker.trackedBossType();
 		DefenceState prior = stateByIndex(states, lastActiveNpcIndex);
 		NPC priorNpc = prior == null ? null : liveNpc(prior.getNpcIndex());
 

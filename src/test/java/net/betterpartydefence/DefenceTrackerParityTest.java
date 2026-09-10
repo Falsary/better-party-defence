@@ -405,9 +405,10 @@ public class DefenceTrackerParityTest
 		when(client.getVarbitValue(VarbitID.TOB_CLIENT_WAVEPROGRESS_TYPE)).thenReturn(1);
 		fakeNpc("Sotetseg", 30, NpcID.TOB_SOTETSEG_COMBAT);
 		DefenceTracker tracker = makeTracker();
-		tracker.queue(SpecialWeapon.DRAGON_WARHAMMER, 30, 1, WORLD);
+		tracker.queue(SpecialWeapon.DRAGON_WARHAMMER, 30, 1, WORLD, "Before maze");
 		tracker.onGameTick();
 		assertEquals(140, tracker.state().getCurrent());
+		assertEquals(1, tracker.specHistoryForCurrentTarget(30).size());
 
 		when(client.getVarbitValue(VarbitID.TOB_CLIENT_WAVEPROGRESS_TYPE)).thenReturn(2);
 		removeNpc(30);
@@ -415,6 +416,8 @@ public class DefenceTrackerParityTest
 		tracker.onGameTick();
 		assertEquals(31, tracker.state().getNpcIndex());
 		assertEquals(200, tracker.state().getCurrent());
+		assertTrue(tracker.specHistoryForCurrentTarget(31).isEmpty());
+		assertTrue(tracker.specHistoryForCurrentTarget(30).isEmpty());
 
 		when(client.getVarbitValue(VarbitID.TOB_CLIENT_WAVEPROGRESS_TYPE)).thenReturn(1);
 		removeNpc(31);
@@ -422,6 +425,13 @@ public class DefenceTrackerParityTest
 		tracker.onGameTick();
 		assertEquals(32, tracker.state().getNpcIndex());
 		assertEquals(200, tracker.state().getCurrent());
+		assertTrue(tracker.specHistoryForCurrentTarget(32).isEmpty());
+
+		tracker.queue(SpecialWeapon.DRAGON_WARHAMMER, 32, 1, WORLD, "After maze");
+		tracker.onGameTick();
+		assertEquals(140, tracker.state().getCurrent());
+		assertEquals(1, tracker.specHistoryForCurrentTarget(32).size());
+		assertEquals("After maze", tracker.specHistoryForCurrentTarget(32).get(0).getPlayerName());
 
 		when(client.getVarbitValue(VarbitID.TOB_CLIENT_WAVEPROGRESS_TYPE)).thenReturn(0);
 		tracker.onGameTick();
@@ -487,6 +497,26 @@ public class DefenceTrackerParityTest
 
 		tracker.reset("test");
 		assertTrue(tracker.specHistory().isEmpty());
+	}
+
+	@Test
+	public void currentTargetHistoryNeverIncludesPreviousTargetHistory()
+	{
+		fakeNpc("Chaos Elemental", 43);
+		fakeNpc("Corporeal Beast", 44);
+		DefenceTracker tracker = makeTracker();
+
+		tracker.queue(SpecialWeapon.DRAGON_WARHAMMER, 43, 1, WORLD, "Previous target");
+		tracker.queue(SpecialWeapon.DRAGON_WARHAMMER, 43, 1, WORLD, "Previous target");
+		tracker.onGameTick();
+		assertEquals(2, tracker.specHistoryForCurrentTarget(43).size());
+
+		tracker.queue(SpecialWeapon.DRAGON_WARHAMMER, 44, 1, WORLD, "Current target");
+		tracker.onGameTick();
+		assertEquals(44, tracker.state().getNpcIndex());
+		assertEquals(1, tracker.specHistoryForCurrentTarget(44).size());
+		assertEquals("Current target", tracker.specHistoryForCurrentTarget(44).get(0).getPlayerName());
+		assertTrue(tracker.specHistoryForCurrentTarget(43).isEmpty());
 	}
 
 	@Test

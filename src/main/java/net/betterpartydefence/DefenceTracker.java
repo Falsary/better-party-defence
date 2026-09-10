@@ -751,9 +751,23 @@ public class DefenceTracker
 		specHistory.add(new SpecHistoryEntry(playerName, drain.getWeapon(), drain.getHit()));
 	}
 
+	/**
+	 * Spec history for the exact target which is current at the time the caller renders it.
+	 * A stale/previous display target must never inherit the active InfoBox history.
+	 */
+	public List<SpecHistoryEntry> specHistoryForCurrentTarget(int npcIndex)
+	{
+		if (bossType == null || bossDef < 0 || npcIndex < 0 || npcIndex != bossIndex)
+		{
+			return Collections.emptyList();
+		}
+		return Collections.unmodifiableList(new ArrayList<>(specHistory));
+	}
+
+	/** Current active target history. Kept for tracker/tests and sync-facing callers. */
 	public List<SpecHistoryEntry> specHistory()
 	{
-		return Collections.unmodifiableList(new ArrayList<>(specHistory));
+		return bossIndex < 0 ? Collections.emptyList() : specHistoryForCurrentTarget(bossIndex);
 	}
 
 	public boolean hasDefenceSpecHistory()

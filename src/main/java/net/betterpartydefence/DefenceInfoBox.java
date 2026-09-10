@@ -55,7 +55,7 @@ public class DefenceInfoBox extends InfoBox
 		{
 			return "";
 		}
-		updateTooltip();
+		updateTooltip(state);
 		if (stat == Stat.MAGIC_DEFENCE)
 		{
 			return magicText(state);
@@ -99,7 +99,7 @@ public class DefenceInfoBox extends InfoBox
 	}
 
 	/** Tooltip intentionally contains only spec history; current Defence/Magic data is not repeated here. */
-	private void updateTooltip()
+	private void updateTooltip(DefenceState state)
 	{
 		String text;
 		if (!config.extraInfoInInfoBox())
@@ -108,7 +108,10 @@ public class DefenceInfoBox extends InfoBox
 		}
 		else
 		{
-			List<SpecHistoryEntry> history = relevantHistory(tracker.specHistory());
+			// Read history for the exact NPC state rendered above. If selection changes between
+			// reads, fail closed to an empty tooltip rather than showing a previous target's count.
+			List<SpecHistoryEntry> history = relevantHistory(
+				tracker.specHistoryForCurrentTarget(state.getNpcIndex()));
 			if (history.isEmpty())
 			{
 				text = "No specs yet";
