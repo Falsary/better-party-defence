@@ -1,4 +1,6 @@
-﻿# Better Party Defence
+﻿![Better Party Def Banner](images/banner.png)
+
+# Better Party Defence
 
 Better Party Defence tracks the estimated live Defence of supported bosses and NPCs after defence-draining special attacks.
 
