@@ -4,14 +4,12 @@ import java.awt.Font;
 import java.io.File;
 import net.runelite.client.ui.FontManager;
 
-/** Loads the selected tracker fonts, including optional local TTF/OTF files. */
+/** Loads the selected tracker font, including an optional local TTF/OTF file. */
 final class TrackerFontManager
 {
 	private final BetterPartyDefenceConfig config;
 	private String cachedPath;
 	private Font cachedCustom;
-	private String cachedPreviousPath;
-	private Font cachedPreviousCustom;
 
 	TrackerFontManager(BetterPartyDefenceConfig config)
 	{
@@ -20,16 +18,10 @@ final class TrackerFontManager
 
 	Font font()
 	{
-		return font(config.defenceFont(), config.defenceFontSize(), config.defenceBoldText(), false);
+		return font(config.defenceFont(), config.defenceFontSize(), config.defenceBoldText());
 	}
 
-	Font previousTargetFont()
-	{
-		return font(config.previousTargetFont(), config.previousTargetFontSize(),
-			config.previousTargetBoldText(), true);
-	}
-
-	private Font font(TrackerFont selection, int configuredSize, boolean bold, boolean previous)
+	private Font font(TrackerFont selection, int configuredSize, boolean bold)
 	{
 		int size = Math.max(8, Math.min(48, configuredSize));
 		Font base;
@@ -46,7 +38,7 @@ final class TrackerFontManager
 				break;
 			case ADD_CUSTOM:
 			case CUSTOM:
-				base = customFont(previous);
+				base = customFont();
 				if (base == null)
 				{
 					base = FontManager.getRunescapeSmallFont();
@@ -61,25 +53,13 @@ final class TrackerFontManager
 		return bold ? base.deriveFont(Font.BOLD) : base.deriveFont(Font.PLAIN);
 	}
 
-	private Font customFont(boolean previous)
+	private Font customFont()
 	{
-		String path = previous ? config.previousTargetCustomFontPath() : config.customFontPath();
+		String path = config.customFontPath();
 		if (path == null || path.trim().isEmpty())
 		{
 			return null;
 		}
-
-		if (previous)
-		{
-			if (path.equals(cachedPreviousPath))
-			{
-				return cachedPreviousCustom;
-			}
-			cachedPreviousPath = path;
-			cachedPreviousCustom = loadFont(path);
-			return cachedPreviousCustom;
-		}
-
 		if (path.equals(cachedPath))
 		{
 			return cachedCustom;

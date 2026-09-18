@@ -127,8 +127,6 @@ public class BetterPartyDefencePlugin extends Plugin
 	private InfoBoxManager infoBoxManager;
 
 	private NpcDefenceOverlay defenceOverlay;
-	private ScreenDefenceOverlay screenDefenceOverlay;
-	private PreviousTargetScreenOverlay previousTargetScreenOverlay;
 	private PreviousTargetDisplayState previousTargetDisplayState;
 	private SkillIconSource skillIconSource;
 	private TrackerFontManager trackerFontManager;
@@ -206,12 +204,7 @@ public class BetterPartyDefencePlugin extends Plugin
 		previousTargetDisplayState = new PreviousTargetDisplayState(client, defenceTracker, config);
 		defenceOverlay = new NpcDefenceOverlay(client, defenceTracker, config, skillIconSource,
 			trackerFontManager, previousTargetDisplayState);
-		screenDefenceOverlay = new ScreenDefenceOverlay(defenceTracker, config, skillIconSource, trackerFontManager);
-		previousTargetScreenOverlay = new PreviousTargetScreenOverlay(config, previousTargetDisplayState,
-			skillIconSource, trackerFontManager);
 		overlayManager.add(defenceOverlay);
-		overlayManager.add(screenDefenceOverlay);
-		overlayManager.add(previousTargetScreenOverlay);
 
 		wasInParty = partyService.isInParty();
 		log.info("Better Party Defence started; Hub Party session active={}", wasInParty);
@@ -231,16 +224,6 @@ public class BetterPartyDefencePlugin extends Plugin
 		{
 			overlayManager.remove(defenceOverlay);
 			defenceOverlay = null;
-		}
-		if (screenDefenceOverlay != null)
-		{
-			overlayManager.remove(screenDefenceOverlay);
-			screenDefenceOverlay = null;
-		}
-		if (previousTargetScreenOverlay != null)
-		{
-			overlayManager.remove(previousTargetScreenOverlay);
-			previousTargetScreenOverlay = null;
 		}
 		if (previousTargetDisplayState != null)
 		{
@@ -564,30 +547,20 @@ public class BetterPartyDefencePlugin extends Plugin
 
 		if ("defenceFont".equals(event.getKey()) && config.defenceFont() == TrackerFont.ADD_CUSTOM)
 		{
-			chooseCustomFont(false);
-			return;
-		}
-
-		if ("previousTargetFont".equals(event.getKey()) && config.previousTargetFont() == TrackerFont.ADD_CUSTOM)
-		{
-			chooseCustomFont(true);
+			chooseCustomFont();
 		}
 	}
 
 
-	private void chooseCustomFont(boolean previousTarget)
+	private void chooseCustomFont()
 	{
 		SwingUtilities.invokeLater(() ->
 		{
 			JFileChooser chooser = new JFileChooser();
-			chooser.setDialogTitle(previousTarget
-				? "Choose a font for Better Party Defence sticky display"
-				: "Choose a font for Better Party Defence");
+			chooser.setDialogTitle("Choose a font for Better Party Defence");
 			chooser.setFileFilter(new FileNameExtensionFilter("Font files (*.ttf, *.otf)", "ttf", "otf"));
 
-			String pathKey = previousTarget ? "previousTargetCustomFontPath" : "customFontPath";
-			String fontKey = previousTarget ? "previousTargetFont" : "defenceFont";
-			String current = previousTarget ? config.previousTargetCustomFontPath() : config.customFontPath();
+			String current = config.customFontPath();
 			if (current != null && !current.trim().isEmpty())
 			{
 				File file = new File(current);
@@ -599,15 +572,15 @@ public class BetterPartyDefencePlugin extends Plugin
 
 			if (chooser.showOpenDialog(null) == JFileChooser.APPROVE_OPTION)
 			{
-				configManager.setConfiguration(BetterPartyDefenceConfig.GROUP, pathKey,
+				configManager.setConfiguration(BetterPartyDefenceConfig.GROUP, "customFontPath",
 					chooser.getSelectedFile().getAbsolutePath());
-				configManager.setConfiguration(BetterPartyDefenceConfig.GROUP, fontKey, TrackerFont.CUSTOM);
+				configManager.setConfiguration(BetterPartyDefenceConfig.GROUP, "defenceFont", TrackerFont.CUSTOM);
 			}
 			else
 			{
 				TrackerFont fallback = current == null || current.trim().isEmpty()
 					? TrackerFont.RUNESCAPE : TrackerFont.CUSTOM;
-				configManager.setConfiguration(BetterPartyDefenceConfig.GROUP, fontKey, fallback);
+				configManager.setConfiguration(BetterPartyDefenceConfig.GROUP, "defenceFont", fallback);
 			}
 		});
 	}
@@ -1885,16 +1858,14 @@ public class BetterPartyDefencePlugin extends Plugin
 	}
 
 	/**
-	 * The display-polish build briefly exposed health-bar pinning as a third display mode.
-	 * Migrate that saved value to the attached-position setting so existing users keep the
-	 * same placement while Display location now contains only Attached and Detached.
+	 * The display-polish build briefly exposed health-bar pinning as a display mode.
+	 * Preserve that saved placement now that the tracker is always attached to the NPC.
 	 */
 	private void migrateLegacyHealthBarDisplayMode()
 	{
 		String savedMode = configManager.getConfiguration(BetterPartyDefenceConfig.GROUP, "defenceDisplayMode");
 		if ("NPC_HEALTH_BAR".equals(savedMode))
 		{
-			configManager.setConfiguration(BetterPartyDefenceConfig.GROUP, "defenceDisplayMode", DefenceDisplayMode.NPC);
 			configManager.setConfiguration(BetterPartyDefenceConfig.GROUP, "defenceHpBarPosition",
 				DefenceOverlayPosition.RIGHT_OF_HP_BAR);
 		}

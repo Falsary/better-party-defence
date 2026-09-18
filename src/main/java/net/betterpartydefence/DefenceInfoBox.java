@@ -61,6 +61,7 @@ public class DefenceInfoBox extends InfoBox
 			return magicText(state);
 		}
 
+		// Intentionally share the exact same full-vs-drainable toggle as the NPC readout.
 		boolean full = config.defenceShowFullLevel();
 		long current = DefenceReadout.shownDefence(state, full);
 		long base = DefenceReadout.shownBaseDefence(state, full);

@@ -19,7 +19,6 @@ public class NpcDefenceOverlay extends Overlay
 	private final BetterPartyDefenceConfig config;
 	private final TrackerFontManager fontManager;
 	private final DefenceOverlayRenderer renderer;
-	private final PreviousTargetOverlayRenderer previousRenderer;
 	private final PreviousTargetDisplayState previousTargetState;
 
 	public NpcDefenceOverlay(Client client, DefenceTracker tracker, BetterPartyDefenceConfig config,
@@ -31,7 +30,6 @@ public class NpcDefenceOverlay extends Overlay
 		this.config = config;
 		this.fontManager = fontManager;
 		this.renderer = new DefenceOverlayRenderer(config, skillIcons);
-		this.previousRenderer = new PreviousTargetOverlayRenderer(config, skillIcons);
 		this.previousTargetState = previousTargetState;
 		setPosition(OverlayPosition.DYNAMIC);
 		setLayer(OverlayLayer.ABOVE_SCENE);
@@ -45,39 +43,26 @@ public class NpcDefenceOverlay extends Overlay
 			return null;
 		}
 
+		graphics.setFont(fontManager.font());
 		DefenceState current = tracker.state();
 		List<DefenceState> states = tracker.states();
+
 		if (!config.previousTargetDisplay())
 		{
-			if (config.defenceDisplayMode() == DefenceDisplayMode.NPC)
-			{
-				renderLegacyAttached(graphics, states);
-			}
+			renderLegacyAttached(graphics, states);
 			return null;
 		}
 
-		// Current target retains the established main-display behavior. If the main display is
-		// detached, ScreenDefenceOverlay owns it and this overlay never duplicates it above the NPC.
-		if (config.defenceDisplayMode() == DefenceDisplayMode.NPC)
-		{
-			graphics.setFont(fontManager.font());
-			renderMainTarget(graphics, current);
-		}
+		renderMainTarget(graphics, current);
 
-		// The sticky target has a completely independent presentation profile. Attached mode is
-		// rendered here; detached mode is owned by PreviousTargetScreenOverlay.
-		if (config.previousTargetDisplayMode() == DefenceDisplayMode.NPC)
+		DefenceState previous = previousTargetState.previousState();
+		if (previous != null)
 		{
-			DefenceState previous = previousTargetState.previousState();
-			if (previous != null)
+			NPC npc = liveNpc(previous.getNpcIndex());
+			if (npc != null)
 			{
-				NPC npc = liveNpc(previous.getNpcIndex());
-				if (npc != null)
-				{
-					graphics.setFont(fontManager.previousTargetFont());
-					renderAtNpc(graphics, previousRenderer, previous, npc,
-						config.previousTargetHpBarPosition(), config.previousTargetHpBarYOffset());
-				}
+				renderAtNpc(graphics, previous, npc,
+					config.defenceHpBarPosition(), config.defenceHpBarYOffset());
 			}
 		}
 		return null;
@@ -86,7 +71,6 @@ public class NpcDefenceOverlay extends Overlay
 	/** Exact pre-feature attached rendering path, used whenever the experiment is disabled. */
 	private void renderLegacyAttached(Graphics2D graphics, List<DefenceState> states)
 	{
-		graphics.setFont(fontManager.font());
 		DefenceOverlayPosition position = config.defenceHpBarPosition();
 		for (DefenceState state : states)
 		{
@@ -97,7 +81,7 @@ public class NpcDefenceOverlay extends Overlay
 			NPC npc = liveNpc(state.getNpcIndex());
 			if (npc != null)
 			{
-				renderAtNpc(graphics, renderer, state, npc, position, config.defenceHpBarYOffset());
+				renderAtNpc(graphics, state, npc, position, config.defenceHpBarYOffset());
 			}
 		}
 	}
@@ -111,13 +95,13 @@ public class NpcDefenceOverlay extends Overlay
 		NPC npc = liveNpc(current.getNpcIndex());
 		if (npc != null)
 		{
-			renderAtNpc(graphics, renderer, current, npc,
+			renderAtNpc(graphics, current, npc,
 				config.defenceHpBarPosition(), config.defenceHpBarYOffset());
 		}
 	}
 
-	private void renderAtNpc(Graphics2D graphics, DefenceOverlayRenderer targetRenderer,
-		DefenceState state, NPC npc, DefenceOverlayPosition position, int yOffset)
+	private void renderAtNpc(Graphics2D graphics, DefenceState state, NPC npc,
+		DefenceOverlayPosition position, int yOffset)
 	{
 		int zOffset = (int) (npc.getLogicalHeight() * position.getHeightFactor()) + position.getHeightOffset();
 		Point anchor = npc.getCanvasTextLocation(graphics, "", zOffset);
@@ -127,21 +111,7 @@ public class NpcDefenceOverlay extends Overlay
 		}
 		int centreX = anchor.getX() + position.getXNudge();
 		int baseline = anchor.getY() - yOffset;
-		targetRenderer.renderAt(graphics, state, centreX, baseline);
-	}
-
-	private void renderAtNpc(Graphics2D graphics, PreviousTargetOverlayRenderer targetRenderer,
-		DefenceState state, NPC npc, DefenceOverlayPosition position, int yOffset)
-	{
-		int zOffset = (int) (npc.getLogicalHeight() * position.getHeightFactor()) + position.getHeightOffset();
-		Point anchor = npc.getCanvasTextLocation(graphics, "", zOffset);
-		if (anchor == null)
-		{
-			return;
-		}
-		int centreX = anchor.getX() + position.getXNudge();
-		int baseline = anchor.getY() - yOffset;
-		targetRenderer.renderAt(graphics, state, centreX, baseline);
+		renderer.renderAt(graphics, state, centreX, baseline);
 	}
 
 	private boolean isDisplayable(DefenceState state)
