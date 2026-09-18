@@ -1876,7 +1876,7 @@ public class BetterPartyDefencePlugin extends Plugin
 	}
 
 	/**
-	 * Hide only the visual infoboxes owned by RuneLite's Special Attack Counter. The core plugin
+	 * Hide RuneLite Special Attack Counter infoboxes plus Party Defence Tracker's DefenceInfoBox only. The core plugin
 	 * remains enabled, so its spec detection, party SpecialCounterUpdate messages and thresholds
 	 * continue to work. BPD never disables the other plugin or rewrites its settings.
 	 */
@@ -1911,8 +1911,14 @@ public class BetterPartyDefencePlugin extends Plugin
 
 	private static boolean isSpecialCounterInfoBox(InfoBox infoBox)
 	{
-		return infoBox != null
-			&& infoBox.getClass().getName().startsWith("net.runelite.client.plugins.specialcounter.");
+		if (infoBox == null)
+		{
+			return false;
+		}
+
+		String className = infoBox.getClass().getName();
+		return className.startsWith("net.runelite.client.plugins.specialcounter.")
+			|| className.equals("com.partydefencetracker.DefenceInfoBox");
 	}
 
 	private void restoreOverlappingDefenceDisplays()
