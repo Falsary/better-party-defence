@@ -122,12 +122,24 @@ public class DefenceInfoBox extends InfoBox
 				StringBuilder tip = new StringBuilder("Spec history:");
 				for (SpecSummary summary : aggregateHistory(history))
 				{
-					tip.append("<br>")
-						.append(summary.playerName)
+					tip.append("<br>");
+					if (summary.miss)
+					{
+						tip.append("<col=ff0000>");
+					}
+					tip.append(summary.playerName)
 						.append(": ")
-						.append(shortWeaponName(summary.weapon))
-						.append(' ')
-						.append(summary.value);
+						.append(shortWeaponName(summary.weapon));
+					if (summary.miss)
+					{
+						tip.append(" miss: ")
+							.append(summary.value)
+							.append("</col>");
+					}
+					else
+					{
+						tip.append(' ').append(summary.value);
+					}
 				}
 				text = tip.toString();
 			}
@@ -163,7 +175,9 @@ public class DefenceInfoBox extends InfoBox
 	/**
 	 * Aggregate the hover the way the specs actually work. Percentage/fixed-effect specs are
 	 * useful as a number of uses (DWH 1, 2, 3...), while damage/effect-magnitude specs such as
-	 * BGS are useful as the total amount landed. Preserve first-seen order for a stable tooltip.
+	 * BGS are useful as the total amount landed. Misses are always counted separately from
+	 * successful specs, so they never inflate a use count or damage total. Preserve first-seen
+	 * order for a stable tooltip.
 	 */
 	private static List<SpecSummary> aggregateHistory(List<SpecHistoryEntry> history)
 	{
@@ -180,20 +194,23 @@ public class DefenceInfoBox extends InfoBox
 			{
 				player = "Unknown";
 			}
+			boolean miss = entry.getHit() <= 0;
 			SpecSummary existing = null;
 			for (SpecSummary summary : summaries)
 			{
-				if (summary.weapon == weapon && summary.playerName.equals(player))
+				if (summary.weapon == weapon && summary.miss == miss && summary.playerName.equals(player))
 				{
 					existing = summary;
 					break;
 				}
 			}
 
-			int amount = historyUsesCount(weapon) ? 1 : Math.max(0, entry.getHit());
+			// A miss is always counted as one attempt in its own summary. It must never
+			// increment a successful-use counter or contribute zero damage to a hit total.
+			int amount = miss ? 1 : (historyUsesCount(weapon) ? 1 : Math.max(0, entry.getHit()));
 			if (existing == null)
 			{
-				summaries.add(new SpecSummary(player, weapon, amount));
+				summaries.add(new SpecSummary(player, weapon, amount, miss));
 			}
 			else
 			{
@@ -227,13 +244,15 @@ public class DefenceInfoBox extends InfoBox
 	{
 		private final String playerName;
 		private final SpecialWeapon weapon;
+		private final boolean miss;
 		private int value;
 
-		private SpecSummary(String playerName, SpecialWeapon weapon, int value)
+		private SpecSummary(String playerName, SpecialWeapon weapon, int value, boolean miss)
 		{
 			this.playerName = playerName;
 			this.weapon = weapon;
 			this.value = value;
+			this.miss = miss;
 		}
 	}
 
