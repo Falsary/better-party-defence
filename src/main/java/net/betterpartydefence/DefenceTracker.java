@@ -2,6 +2,7 @@ package net.betterpartydefence;
 
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.Comparator;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -59,6 +60,19 @@ public class DefenceTracker
 	/** Each landed Ralos glaive takes an eighth of the target's current Magic level off its Defence. */
 	private static final int RALOS_GLAIVE_MAGIC_DIVISOR = 8;
 	private static final int ANCHOR_DAMAGE_DIVISOR = 10;
+
+	private static final Comparator<Drain> SAME_TICK_DRAIN_ORDER = Comparator
+		.comparingInt((Drain d) -> sameTickPriority(d.getWeapon()))
+		.thenComparing(d -> normalizeHistoryPlayer(d.getPlayerName()))
+		.thenComparingInt(Drain::getHit)
+		.thenComparing(d -> d.getWeapon() == null ? "" : d.getWeapon().name());
+
+	private static final Comparator<SpecHistoryEntry> SAME_TICK_HISTORY_ORDER = Comparator
+		.comparingInt((SpecHistoryEntry e) -> sameTickPriority(e.getWeapon()))
+		.thenComparing(e -> normalizeHistoryPlayer(e.getPlayerName()))
+		.thenComparingInt(SpecHistoryEntry::getHit)
+		.thenComparing(e -> e.getWeapon() == null ? "" : e.getWeapon().name());
+
 
 	private static final int CM_SCALE_PCT = 50;
 	private static final int TEKTON_CM_SMALL_PARTY = 4;
@@ -312,7 +326,16 @@ public class DefenceTracker
 	/** Client thread. */
 	public void onGameTick()
 	{
+		// Network delivery order is not game order. Drain every event accumulated for this game tick
+		// into one deterministic batch before mutating Defence. This matters most for a DWH and BGS
+		// landing together: every BPD client must perform the same percentage-before-flat arithmetic.
+		List<Drain> tickDrains = new ArrayList<>();
 		for (Drain drain = pending.poll(); drain != null; drain = pending.poll())
+		{
+			tickDrains.add(drain);
+		}
+		tickDrains.sort(SAME_TICK_DRAIN_ORDER);
+		for (Drain drain : tickDrains)
 		{
 			process(drain);
 		}
@@ -539,6 +562,7 @@ public class DefenceTracker
 	{
 		if (queuedIndex == index)
 		{
+			queuedDrains.sort(SAME_TICK_DRAIN_ORDER);
 			for (Drain held : queuedDrains)
 			{
 				apply(held);
@@ -1136,6 +1160,151 @@ public class DefenceTracker
 		unboundTracked.put(saved.bossType, saved);
 		log.debug("Cached passive BPD sync for {} def={}/{} specs={}",
 			saved.bossType, saved.bossDef, saved.bossStartDef, saved.history.size());
+	}
+
+	/**
+	 * Merge a same-version peer snapshot which diverged only at the tail of an otherwise identical
+	 * encounter history. This is the concurrent-spec case: two peers each observed a real spec
+	 * before either received the other's snapshot. Replacing either absolute state would delete a
+	 * real event, so keep the common prefix and take the multiset union of both concurrent tails.
+	 *
+	 * <p>The merged tail is ordered deterministically. RuneLite's party message does not carry the
+	 * server's hidden player/PID execution order, so BPD cannot reconstruct that hidden ordering
+	 * perfectly. It does, however, guarantee that every BPD client uses the same order. In
+	 * particular DWH is evaluated before BGS so percentage and flat drains cannot diverge by packet
+	 * arrival order.</p>
+	 */
+	public boolean mergeConcurrentSyncState(SyncState incoming, NPC localNpc)
+	{
+		if (incoming == null || incoming.getBossType() == null || localNpc == null)
+		{
+			return false;
+		}
+
+		SyncState local = syncStateForBoss(incoming.getBossType());
+		if (local == null || local.getHistory() == null || incoming.getHistory() == null)
+		{
+			return false;
+		}
+
+		List<SpecHistoryEntry> left = local.getHistory();
+		List<SpecHistoryEntry> right = incoming.getHistory();
+		if (left.isEmpty() || right.isEmpty())
+		{
+			return false;
+		}
+
+		int prefix = 0;
+		int shared = Math.min(left.size(), right.size());
+		while (prefix < shared && sameHistoryEvent(left.get(prefix), right.get(prefix)))
+		{
+			prefix++;
+		}
+
+		// Prefix-only relationships are already handled by normal newer/longer snapshot logic. A
+		// true concurrent merge requires both peers to have observed something after the fork.
+		if (prefix >= left.size() || prefix >= right.size())
+		{
+			return false;
+		}
+
+		List<SpecHistoryEntry> merged = new ArrayList<>(left.subList(0, prefix));
+		List<SpecHistoryEntry> tail = new ArrayList<>(left.subList(prefix, left.size()));
+
+		// Multiset max rather than a plain set: repeated identical specs by the same player remain
+		// representable, while the same real event observed by both peers is not doubled.
+		Map<String, Integer> leftCounts = historyCounts(tail);
+		Map<String, Integer> incomingSeen = new LinkedHashMap<>();
+		for (int i = prefix; i < right.size(); i++)
+		{
+			SpecHistoryEntry entry = right.get(i);
+			String key = historyEventKey(entry);
+			int occurrence = incomingSeen.merge(key, 1, Integer::sum);
+			if (occurrence > leftCounts.getOrDefault(key, 0))
+			{
+				tail.add(entry);
+			}
+		}
+		tail.sort(SAME_TICK_HISTORY_ORDER);
+		merged.addAll(tail);
+
+		// Activate the concrete encounter, rebuild from its real starting/scaled stats, then replay
+		// every accepted event exactly once. This makes the number a deterministic function of the
+		// merged history instead of of whichever websocket packet arrived last.
+		saveCurrent();
+		bossType = incoming.getBossType();
+		bossName = localNpc.getName() == null ? bossType.getNpcName() : localNpc.getName();
+		bossIndex = localNpc.getIndex();
+		bossNpcId = localNpc.getId();
+		boolean priorKephriFinal = kephriFinalResetApplied;
+		int priorSotetsegState = sotetsegEncounterState;
+		specHistory.clear();
+		initializeStats(bossType);
+		kephriFinalResetApplied = priorKephriFinal;
+		sotetsegEncounterState = priorSotetsegState;
+		for (SpecHistoryEntry entry : merged)
+		{
+			if (entry == null || entry.getWeapon() == null)
+			{
+				continue;
+			}
+			apply(new Drain(entry.getWeapon(), bossIndex, entry.getHit(), client.getWorld(), entry.getPlayerName()));
+		}
+		saveCurrent();
+		pending.clear();
+		clearHeld();
+		log.debug("Merged concurrent BPD state for {} commonPrefix={} localSpecs={} incomingSpecs={} mergedSpecs={} def={}",
+			bossType, prefix, left.size(), right.size(), specHistory.size(), bossDef);
+		return true;
+	}
+
+	private static Map<String, Integer> historyCounts(List<SpecHistoryEntry> entries)
+	{
+		Map<String, Integer> counts = new LinkedHashMap<>();
+		for (SpecHistoryEntry entry : entries)
+		{
+			counts.merge(historyEventKey(entry), 1, Integer::sum);
+		}
+		return counts;
+	}
+
+	private static boolean sameHistoryEvent(SpecHistoryEntry a, SpecHistoryEntry b)
+	{
+		return historyEventKey(a).equals(historyEventKey(b));
+	}
+
+	private static String historyEventKey(SpecHistoryEntry entry)
+	{
+		if (entry == null)
+		{
+			return "";
+		}
+		return normalizeHistoryPlayer(entry.getPlayerName()) + '|'
+			+ (entry.getWeapon() == null ? "" : entry.getWeapon().name()) + '|' + entry.getHit();
+	}
+
+	private static String normalizeHistoryPlayer(String player)
+	{
+		return player == null ? "" : Text.removeTags(player).trim().toLowerCase();
+	}
+
+	private static int sameTickPriority(SpecialWeapon weapon)
+	{
+		if (weapon == null)
+		{
+			return 1000;
+		}
+		switch (weapon)
+		{
+			case ELDER_MAUL:
+				return 0;
+			case DRAGON_WARHAMMER:
+				return 10;
+			case BANDOS_GODSWORD:
+				return 100;
+			default:
+				return 50;
+		}
 	}
 
 	/**

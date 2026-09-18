@@ -1759,10 +1759,32 @@ public class BetterPartyDefencePlugin extends Plugin
 
 		int incomingHistory = incoming.getHistory() == null ? 0 : incoming.getHistory().size();
 		int localHistory = local.getHistory() == null ? 0 : local.getHistory().size();
+
+		// Equal version + conflicting state is the concurrent-spec race. Do not let either peer
+		// overwrite the other and delete a real event. Merge the divergent tails, deterministically
+		// rebuild Defence, and publish the merged state as the next logical version.
+		if (localBoss != null && defenceTracker.mergeConcurrentSyncState(incoming, localBoss))
+		{
+			DefenceTracker.SyncState merged = defenceTracker.syncStateForBoss(incoming.getBossType());
+			if (merged != null)
+			{
+				long mergedVersion = incomingVersion + 1L;
+				syncStateVersions.put(incoming.getBossType(),
+					new VersionedSyncState(mergedVersion, syncSignature(merged)));
+				rememberSyncedSpecs(merged);
+				lastSyncSignature = null;
+				lastSyncBroadcastMillis = 0L;
+				log.debug("Merged concurrent same-version BPD sync member={} boss={} version={} -> {} def={} specs={}",
+					event.getMemberId(), incoming.getBossType(), incomingVersion, mergedVersion,
+					merged.getCurrent(), merged.getHistory() == null ? 0 : merged.getHistory().size());
+			}
+			return false;
+		}
+
 		if (incomingHistory > localHistory)
 		{
-			// Equal logical version should be rare, but a strictly longer spec history is objective
-			// evidence that this peer has observed more of the encounter.
+			// If there was no divergent tail to merge, a strictly longer history is still objective
+			// evidence that this peer has progressed farther through the same encounter.
 			return true;
 		}
 
