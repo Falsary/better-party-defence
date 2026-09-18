@@ -32,6 +32,8 @@ public class BpdDefenceSync extends PartyMemberMessage
 	private int bossPlane;
 	private int healthPercent;
 	private long sentAtMillis;
+	/** Monotonic per-encounter logical state version used to reject stale peer snapshots. */
+	private long stateVersion;
 
 	private long current;
 	private long min;
@@ -66,6 +68,20 @@ public class BpdDefenceSync extends PartyMemberMessage
 		int bossPlane,
 		int healthPercent)
 	{
+		this(world, state, scopeType, scopeId, bossX, bossY, bossPlane, healthPercent, 0L);
+	}
+
+	public BpdDefenceSync(
+		int world,
+		SyncState state,
+		int scopeType,
+		int scopeId,
+		int bossX,
+		int bossY,
+		int bossPlane,
+		int healthPercent,
+		long stateVersion)
+	{
 		this.protocolVersion = PROTOCOL_VERSION;
 		this.world = world;
 		this.bossType = state.getBossType().name();
@@ -77,6 +93,7 @@ public class BpdDefenceSync extends PartyMemberMessage
 		this.bossPlane = bossPlane;
 		this.healthPercent = healthPercent;
 		this.sentAtMillis = System.currentTimeMillis();
+		this.stateVersion = Math.max(0L, stateVersion);
 		this.current = state.getCurrent();
 		this.min = state.getMin();
 		this.base = state.getBase();
@@ -173,6 +190,7 @@ public class BpdDefenceSync extends PartyMemberMessage
 	public int getBossPlane() { return bossPlane; }
 	public int getHealthPercent() { return healthPercent; }
 	public long getSentAtMillis() { return sentAtMillis; }
+	public long getStateVersion() { return stateVersion; }
 	public long getCurrent() { return current; }
 	public long getMin() { return min; }
 	public long getBase() { return base; }

@@ -161,6 +161,8 @@ public class BetterPartyDefencePlugin extends Plugin
 	private boolean wasInParty;
 	private Integer lastSyncSignature;
 	private long lastSyncBroadcastMillis;
+	/** Logical state version per boss. Prevents stale snapshots from winning when many peers broadcast. */
+	private final Map<BossDefence, VersionedSyncState> syncStateVersions = new HashMap<>();
 	private final Map<BossDefence, PendingWorldSync> pendingWorldSyncs = new HashMap<>();
 	private final Map<BossDefence, Long> lastPartyEncounterPresenceMillis = new HashMap<>();
 	/** Targets whose current remembered encounter has actually received remote party state. */
@@ -259,6 +261,7 @@ public class BetterPartyDefencePlugin extends Plugin
 		lastPresenceBroadcastMillis = 0L;
 		lastSyncSignature = null;
 		lastSyncBroadcastMillis = 0L;
+		syncStateVersions.clear();
 		wsClient.unregisterMessage(BpdEncounterReset.class);
 		wsClient.unregisterMessage(BpdEncounterPresence.class);
 		wsClient.unregisterMessage(BpdDefenceSync.class);
@@ -415,6 +418,7 @@ public class BetterPartyDefencePlugin extends Plugin
 			lastPresenceBroadcastMillis = 0L;
 			lastSyncSignature = null;
 			lastSyncBroadcastMillis = 0L;
+			syncStateVersions.clear();
 		}
 	}
 
@@ -709,9 +713,11 @@ public class BetterPartyDefencePlugin extends Plugin
 			// The requesting peer is currently rendering the boss, so its actor coordinates are
 			// the freshest proof of where this encounter is. We already authenticated world/scope
 			// above; echo those coordinates so the requester can bind immediately without clicking.
+			long stateVersion = observeLocalStateVersion(sync);
 			partyService.send(new BpdDefenceSync(
 				client.getWorld(), sync, event.getScopeType(), event.getScopeId(),
-				event.getBossX(), event.getBossY(), event.getBossPlane(), event.getHealthPercent()));
+				event.getBossX(), event.getBossY(), event.getBossPlane(), event.getHealthPercent(),
+				stateVersion));
 			markPartyEncounterPresent(boss);
 			log.debug("Answered BPD boss-presence request member={} boss={} scope={}:{} def={}/{}",
 				event.getMemberId(), boss, event.getScopeType(), event.getScopeId(),
@@ -959,7 +965,11 @@ public class BetterPartyDefencePlugin extends Plugin
 		// Different supported targets are independent. The tracker remembers the current one
 		// before activating this target, so simultaneous encounters such as both Olm hands retain
 		// their own defence/history instead of overwriting each other.
-		if (!incomingSyncIsUseful(sync, localBoss))
+		if (!incomingVersionIsAcceptable(event, sync, localBoss))
+		{
+			return;
+		}
+		if (!incomingSyncIsUseful(sync, localBoss, event.getStateVersion()))
 		{
 			return;
 		}
@@ -1093,6 +1103,7 @@ public class BetterPartyDefencePlugin extends Plugin
 		lastPartyEncounterPresenceMillis.remove(boss);
 		lastSoloSyncedEncounterPresenceMillis.remove(boss);
 		previouslySyncedBosses.remove(boss);
+		syncStateVersions.remove(boss);
 		retainedRaidScopes.remove(boss);
 		if (activeSyncScope != null && activeSyncScope.getBoss() == boss)
 		{
@@ -1337,8 +1348,9 @@ public class BetterPartyDefencePlugin extends Plugin
 			int plane = point == null ? 0 : point.getPlane();
 			int hp = healthPercent(npc);
 
+			long stateVersion = observeLocalStateVersion(sync);
 			partyService.send(new BpdDefenceSync(
-				client.getWorld(), sync, scope.getType(), scope.getId(), x, y, plane, hp));
+				client.getWorld(), sync, scope.getType(), scope.getId(), x, y, plane, hp, stateVersion));
 			markPartyEncounterPresent(sync.getBossType());
 			sentAny = true;
 			log.debug("Broadcast BPD sync boss={} scope={}:{} def={}/{}",
@@ -1667,7 +1679,8 @@ public class BetterPartyDefencePlugin extends Plugin
 				continue;
 			}
 
-			if (!incomingSyncIsUseful(sync, localBoss))
+			if (!incomingVersionIsAcceptable(event, sync, localBoss)
+				|| !incomingSyncIsUseful(sync, localBoss, event.getStateVersion()))
 			{
 				iterator.remove();
 				continue;
@@ -1684,8 +1697,14 @@ public class BetterPartyDefencePlugin extends Plugin
 	 * still needs to be bound to that already-correct absolute state. Treat that bind-only
 	 * transition as reconciliation instead of rejecting the snapshot as a duplicate.
 	 */
-	private boolean incomingSyncIsUseful(DefenceTracker.SyncState incoming, NPC localBoss)
+	private boolean incomingSyncIsUseful(DefenceTracker.SyncState incoming, NPC localBoss, long incomingVersion)
 	{
+		VersionedSyncState known = syncStateVersions.get(incoming.getBossType());
+		if (incomingVersion > 0 && known != null && incomingVersion > known.getVersion())
+		{
+			// A strictly newer logical snapshot is useful even when history length is unchanged.
+			return true;
+		}
 		if (incomingSyncAddsState(incoming))
 		{
 			return true;
@@ -1693,6 +1712,85 @@ public class BetterPartyDefencePlugin extends Plugin
 
 		return localBoss != null
 			&& !defenceTracker.hasBoundNpc(incoming.getBossType());
+	}
+
+	/**
+	 * Never use network arrival order as truth. With a full eight-person party several peers can
+	 * answer the same continuity request at once. State versions are Lamport-style logical versions:
+	 * a local state change advances the version, and an accepted remote version is carried forward.
+	 */
+	private boolean incomingVersionIsAcceptable(BpdDefenceSync event, DefenceTracker.SyncState incoming, NPC localBoss)
+	{
+		long incomingVersion = event.getStateVersion();
+		if (incomingVersion <= 0)
+		{
+			// Mixed-version compatibility: old BPD clients have no version field. Fall back to the
+			// existing history-based reconciliation rather than breaking party sync during rollout.
+			return true;
+		}
+
+		DefenceTracker.SyncState local = defenceTracker.syncStateForBoss(incoming.getBossType());
+		long localVersion = local == null ? 0L : observeLocalStateVersion(local);
+		VersionedSyncState known = syncStateVersions.get(incoming.getBossType());
+		if (known != null)
+		{
+			localVersion = Math.max(localVersion, known.getVersion());
+		}
+
+		if (incomingVersion < localVersion)
+		{
+			log.debug("Ignoring stale BPD sync member={} boss={} version={} localVersion={}",
+				event.getMemberId(), incoming.getBossType(), incomingVersion, localVersion);
+			return false;
+		}
+
+		if (incomingVersion > localVersion || local == null)
+		{
+			return true;
+		}
+
+		int incomingSignature = syncSignature(incoming);
+		int localSignature = syncSignature(local);
+		if (incomingSignature == localSignature)
+		{
+			// Same logical state from another peer: only allow the bind-only path when needed.
+			return localBoss != null && !defenceTracker.hasBoundNpc(incoming.getBossType());
+		}
+
+		int incomingHistory = incoming.getHistory() == null ? 0 : incoming.getHistory().size();
+		int localHistory = local.getHistory() == null ? 0 : local.getHistory().size();
+		if (incomingHistory > localHistory)
+		{
+			// Equal logical version should be rare, but a strictly longer spec history is objective
+			// evidence that this peer has observed more of the encounter.
+			return true;
+		}
+
+		log.warn("Ignoring conflicting same-version BPD sync member={} boss={} version={} localDef={} incomingDef={} localHistory={} incomingHistory={}",
+			event.getMemberId(), incoming.getBossType(), incomingVersion, local.getCurrent(), incoming.getCurrent(),
+			localHistory, incomingHistory);
+		return false;
+	}
+
+	private long observeLocalStateVersion(DefenceTracker.SyncState sync)
+	{
+		if (sync == null || sync.getBossType() == null)
+		{
+			return 0L;
+		}
+
+		int signature = syncSignature(sync);
+		VersionedSyncState known = syncStateVersions.get(sync.getBossType());
+		if (known != null && known.getSignature() == signature)
+		{
+			return known.getVersion();
+		}
+
+		int historySize = sync.getHistory() == null ? 0 : sync.getHistory().size();
+		long version = known == null ? Math.max(1L, historySize)
+			: Math.max(known.getVersion() + 1L, historySize);
+		syncStateVersions.put(sync.getBossType(), new VersionedSyncState(version, signature));
+		return version;
 	}
 
 	private boolean incomingSyncAddsState(DefenceTracker.SyncState incoming)
@@ -1734,6 +1832,11 @@ public class BetterPartyDefencePlugin extends Plugin
 			defenceTracker.applySyncState(sync, localBoss);
 		}
 		previouslySyncedBosses.add(sync.getBossType());
+		if (event.getStateVersion() > 0)
+		{
+			syncStateVersions.put(sync.getBossType(),
+				new VersionedSyncState(event.getStateVersion(), syncSignature(sync)));
+		}
 		SyncScope receivedScope = new SyncScope(event.getScopeType(), event.getScopeId());
 		rememberRaidScope(sync.getBossType(), receivedScope);
 		// A raid INSTANCE fallback is transport-only. Do not let it drive active encounter
@@ -2300,6 +2403,13 @@ public class BetterPartyDefencePlugin extends Plugin
 	{
 		BpdDefenceSync event;
 		DefenceTracker.SyncState sync;
+	}
+
+	@Value
+	private static class VersionedSyncState
+	{
+		long version;
+		int signature;
 	}
 
 	@Value
