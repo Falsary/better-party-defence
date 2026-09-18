@@ -1010,10 +1010,24 @@ public class BetterPartyDefencePlugin extends Plugin
 
 	private boolean incomingEncounterResetScopeMatches(BpdEncounterReset event, BossDefence boss)
 	{
-		SyncScope expected = currentEncounterScope();
-		return expected != null
-			&& event.getScopeType() == expected.getType()
-			&& event.getScopeId() == expected.getId();
+		int expectedRaidScope = raidScopeType(boss);
+		if (expectedRaidScope != -1)
+		{
+			return event.getScopeType() == expectedRaidScope
+				&& event.getScopeId() > 0
+				&& raidController(expectedRaidScope) == event.getScopeId();
+		}
+
+		WorldView worldView = client.getTopLevelWorldView();
+		if (worldView == null)
+		{
+			return false;
+		}
+		if (event.getScopeType() == BpdDefenceSync.SCOPE_INSTANCE)
+		{
+			return worldView.isInstance() && instanceFingerprint(worldView) == event.getScopeId();
+		}
+		return event.getScopeType() == BpdDefenceSync.SCOPE_WORLD && !worldView.isInstance();
 	}
 
 	/** Broadcast drained visible targets periodically; the refresh also acts as party encounter presence. */
@@ -1265,10 +1279,23 @@ public class BetterPartyDefencePlugin extends Plugin
 
 	private void rememberRaidScope(BossDefence boss, SyncScope scope)
 	{
-		if (isRaidEncounterBoss(boss) && scope != null)
+		if (!isRaidEncounterBoss(boss) || scope == null)
 		{
-			retainedRaidScopes.putIfAbsent(boss, scope);
+			return;
 		}
+
+		// CoX/ToB can temporarily lose their public controller id while the raid instance is
+		// still alive. We may use an INSTANCE scope as a transport fallback for snapshots, but
+		// that fallback must never become lifecycle authority. Otherwise the raid lifecycle
+		// reconciler can compare a retained INSTANCE scope against a missing controller scope
+		// and incorrectly clear a live encounter (Tekton/Olm were the observed failure case).
+		int canonicalRaidScope = raidScopeType(boss);
+		if (canonicalRaidScope != -1 && scope.getType() != canonicalRaidScope)
+		{
+			return;
+		}
+
+		retainedRaidScopes.putIfAbsent(boss, scope);
 	}
 
 	private SyncScope currentRaidScopeForBoss(BossDefence boss)
@@ -1437,8 +1464,15 @@ public class BetterPartyDefencePlugin extends Plugin
 			defenceTracker.applySyncState(sync, localBoss);
 		}
 		previouslySyncedBosses.add(sync.getBossType());
-		rememberRaidScope(sync.getBossType(), new SyncScope(event.getScopeType(), event.getScopeId()));
-		activeSyncScope = localBoss == null ? null
+		SyncScope receivedScope = new SyncScope(event.getScopeType(), event.getScopeId());
+		rememberRaidScope(sync.getBossType(), receivedScope);
+		// A raid INSTANCE fallback is transport-only. Do not let it drive active encounter
+		// lifecycle/reset decisions; the existing boss mechanics and canonical raid lifecycle
+		// remain authoritative. ToA legitimately uses INSTANCE as its canonical raid scope and
+		// therefore keeps the existing active-scope behaviour.
+		boolean transportOnlyRaidFallback = raidScopeType(sync.getBossType()) != -1
+			&& event.getScopeType() == BpdDefenceSync.SCOPE_INSTANCE;
+		activeSyncScope = localBoss == null || transportOnlyRaidFallback ? null
 			: new ActiveSyncScope(event.getScopeType(), event.getScopeId(), sync.getBossType());
 		lastSyncSignature = defenceTracker.syncTargets().hashCode();
 		// Treat a received snapshot as recent activity so this client does not immediately echo it
@@ -1491,17 +1525,6 @@ public class BetterPartyDefencePlugin extends Plugin
 
 	private SyncScope currentEncounterScope()
 	{
-		WorldView worldView = client.getTopLevelWorldView();
-
-		// RAIDS_PARTY_GROUPHOLDER is a lobby/group-generation id and is cleared when CoX
-		// actually starts. Once inside Chambers, use the concrete live instance fingerprint
-		// for every BPD message so presence, specs, snapshots and resets all agree on one scope.
-		if (client.getVarbitValue(VarbitID.RAIDS_CLIENT_INDUNGEON) == 1
-			&& worldView != null && worldView.isInstance())
-		{
-			return new SyncScope(BpdDefenceSync.SCOPE_INSTANCE, instanceFingerprint(worldView));
-		}
-
 		int coxController = raidController(BpdDefenceSync.SCOPE_COX);
 		if (coxController > 0)
 		{
@@ -1514,6 +1537,7 @@ public class BetterPartyDefencePlugin extends Plugin
 			return new SyncScope(BpdDefenceSync.SCOPE_TOB, tobController);
 		}
 
+		WorldView worldView = client.getTopLevelWorldView();
 		if (worldView == null)
 		{
 			return null;
@@ -1527,8 +1551,6 @@ public class BetterPartyDefencePlugin extends Plugin
 
 	private SyncScope localSyncScope(BossDefence boss, NPC npc)
 	{
-		WorldView worldView = client.getTopLevelWorldView();
-
 		int raidScope = raidScopeType(boss);
 		if (raidScope != -1)
 		{
@@ -1538,17 +1560,19 @@ public class BetterPartyDefencePlugin extends Plugin
 				return new SyncScope(raidScope, controller);
 			}
 
-			// CoX clears RAIDS_PARTY_GROUPHOLDER when the raid starts. Presence already falls
-			// back to the live instance fingerprint in that state; absolute Defence snapshots
-			// must use the exact same scope or late joiners will receive party specs without
-			// ever receiving the authoritative current Defence/history.
-			if (worldView != null && worldView.isInstance())
+			// CoX clears RAIDS_PARTY_GROUPHOLDER after the raid starts, so requiring the public
+			// controller here disables absolute state snapshots for the actual encounter. Fall
+			// back to the concrete live instance strictly for transport/authentication. This scope
+			// is deliberately NOT retained as lifecycle state (see rememberRaidScope).
+			WorldView raidWorldView = client.getTopLevelWorldView();
+			if (raidWorldView != null && raidWorldView.isInstance())
 			{
-				return new SyncScope(BpdDefenceSync.SCOPE_INSTANCE, instanceFingerprint(worldView));
+				return new SyncScope(BpdDefenceSync.SCOPE_INSTANCE, instanceFingerprint(raidWorldView));
 			}
 			return null;
 		}
 
+		WorldView worldView = client.getTopLevelWorldView();
 		if (worldView == null)
 		{
 			return null;
@@ -1565,27 +1589,46 @@ public class BetterPartyDefencePlugin extends Plugin
 
 	private boolean incomingScopeMatches(BpdDefenceSync event, BossDefence boss, NPC localBoss)
 	{
-		SyncScope expected = localSyncScope(boss, localBoss);
-		if (expected == null
-			|| event.getScopeType() != expected.getType()
-			|| event.getScopeId() != expected.getId())
+		int expectedRaidScope = raidScopeType(boss);
+		if (expectedRaidScope != -1)
+		{
+			int controller = raidController(expectedRaidScope);
+			if (controller > 0)
+			{
+				return event.getScopeType() == expectedRaidScope
+					&& event.getScopeId() == controller;
+			}
+
+			// Same transport fallback as localSyncScope(): when the public CoX/ToB controller is
+			// unavailable, accept only a snapshot from this exact live instance. This does not
+			// alter raid lifecycle/reset semantics.
+			WorldView raidWorldView = client.getTopLevelWorldView();
+			return event.getScopeType() == BpdDefenceSync.SCOPE_INSTANCE
+				&& raidWorldView != null
+				&& raidWorldView.isInstance()
+				&& event.getScopeId() == instanceFingerprint(raidWorldView);
+		}
+
+		WorldView worldView = client.getTopLevelWorldView();
+		if (worldView == null)
+		{
+			return false;
+		}
+		if (event.getScopeType() == BpdDefenceSync.SCOPE_INSTANCE)
+		{
+			return worldView.isInstance() && instanceFingerprint(worldView) == event.getScopeId();
+		}
+		if (event.getScopeType() != BpdDefenceSync.SCOPE_WORLD || worldView.isInstance() || localBoss == null)
 		{
 			return false;
 		}
 
-		// Controller-scoped raids already have a concrete shared encounter id. Instance
-		// fallback (used by live CoX after its lobby group id is cleared) and open-world syncs
-		// get an additional actor-location/HP check before an absolute state can be adopted.
-		if (event.getScopeType() != BpdDefenceSync.SCOPE_INSTANCE
-			&& event.getScopeType() != BpdDefenceSync.SCOPE_WORLD)
-		{
-			return true;
-		}
-		if (localBoss == null)
-		{
-			return false;
-		}
-
+		// Open-world NPC health is not guaranteed to be known merely because the actor is
+		// rendered. Giant Mole is a common example: a late-arriving party member may see the
+		// NPC before RuneLite has a usable health ratio, and the ratio becomes available only
+		// after combat starts. Do not make HP a prerequisite for binding an already-authenticated
+		// party snapshot. First require the same world-scene location; when both clients do know
+		// HP, keep the HP tolerance as an additional anti-mismatch check.
 		WorldPoint point = localBoss.getWorldLocation();
 		if (point == null || point.getPlane() != event.getBossPlane()
 			|| Math.abs(point.getX() - event.getBossX()) > NON_INSTANCE_POSITION_TOLERANCE
