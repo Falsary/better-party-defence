@@ -22,7 +22,7 @@ public interface BetterPartyDefenceConfig extends Config
 	String GENERAL = "general";
 
 	@ConfigSection(
-		name = "Main Tracker",
+		name = "Tracker Position",
 		description = "Placement and Defence values shared by the current and previous target readouts.",
 		position = 1)
 	String MAIN_TRACKER = "mainTracker";
@@ -72,19 +72,11 @@ public interface BetterPartyDefenceConfig extends Config
 
 	@ConfigItem(
 		keyName = "defenceAlwaysShow",
-		name = "Show target before first drain",
-		description = "Show a supported target at its starting Defence before any tracked defence-draining special attack lands.",
+		name = "Display before special att",
+		description = "Show the target's at its starting Defence before any tracked defence-draining special attack lands.",
 		position = 2,
 		section = GENERAL)
 	default boolean defenceAlwaysShow() { return false; }
-
-	@ConfigItem(
-		keyName = "hideOverlappingDefenceDisplays",
-		name = "Hide duplicate spec infoboxes",
-		description = "Hide RuneLite Special Attack Counter infoboxes that duplicate Better Party Defence. Spec detection and party messages still work.",
-		position = 3,
-		section = GENERAL)
-	default boolean hideOverlappingDefenceDisplays() { return true; }
 
 	@ConfigItem(
 		keyName = "defenceHpBarPosition",
@@ -123,7 +115,7 @@ public interface BetterPartyDefenceConfig extends Config
 	@ConfigItem(
 		keyName = "defenceShowFullLevel",
 		name = "Show full Defence",
-		description = "Applies to the NPC readout and Defence info box. Off (default): show only drainable Defence, counting down to 0 (for example, Zebak 20 -> 0). On: show the actual Defence level down to its floor (Zebak 70 -> 50).",
+		description = "Off (default): show only drainable Defence, On: show the actual Defence level down to its floor.",
 		position = 6,
 		section = MAIN_TRACKER)
 	default boolean defenceShowFullLevel() { return false; }

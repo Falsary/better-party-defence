@@ -187,7 +187,7 @@ public class BetterPartyDefencePlugin extends Plugin
 	protected void startUp()
 	{
 		migrateLegacyHealthBarDisplayMode();
-		syncOverlappingDefenceDisplays();
+		hideExistingSpecialCounterInfoBoxes();
 
 		// Register the core SpecialCounterUpdate message ourselves so remote party drains can
 		// still be decoded even when this client's Special Attack Counter UI is disabled.
@@ -305,10 +305,7 @@ public class BetterPartyDefencePlugin extends Plugin
 		// RuneLite's EventBus requires GameTick subscribers to be named exactly onGameTick.
 		// Run the visual suppression at the end of our low-priority tick so Special Attack
 		// Counter can continue its normal detection/broadcast work first.
-		if (config.hideOverlappingDefenceDisplays())
-		{
-			hideExistingSpecialCounterInfoBoxes();
-		}
+		hideExistingSpecialCounterInfoBoxes();
 	}
 
 	@Subscribe
@@ -399,10 +396,7 @@ public class BetterPartyDefencePlugin extends Plugin
 		if (event.isLoaded())
 		{
 			log.debug("Special Attack Counter enabled: it will own the standard party spec broadcast");
-			if (config.hideOverlappingDefenceDisplays())
-			{
-				hideExistingSpecialCounterInfoBoxes();
-			}
+			hideExistingSpecialCounterInfoBoxes();
 		}
 		else
 		{
@@ -498,12 +492,6 @@ public class BetterPartyDefencePlugin extends Plugin
 	{
 		if (!BetterPartyDefenceConfig.GROUP.equals(event.getGroup()))
 		{
-			return;
-		}
-
-		if ("hideOverlappingDefenceDisplays".equals(event.getKey()))
-		{
-			syncOverlappingDefenceDisplays();
 			return;
 		}
 
@@ -1861,18 +1849,6 @@ public class BetterPartyDefencePlugin extends Plugin
 		}
 		return Math.max(0, Math.min(100,
 			(int) Math.round(npc.getHealthRatio() * 100.0 / npc.getHealthScale())));
-	}
-
-	private void syncOverlappingDefenceDisplays()
-	{
-		if (config.hideOverlappingDefenceDisplays())
-		{
-			hideExistingSpecialCounterInfoBoxes();
-		}
-		else
-		{
-			restoreOverlappingDefenceDisplays();
-		}
 	}
 
 	/**
