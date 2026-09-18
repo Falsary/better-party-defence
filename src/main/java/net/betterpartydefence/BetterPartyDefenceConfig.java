@@ -58,7 +58,8 @@ public interface BetterPartyDefenceConfig extends Config
 	@ConfigSection(
 		name = "Party & Previous Target",
 		description = "Experimental party syncing and previous-target tracking features.",
-		position = 6)
+		position = 6,
+		closedByDefault = true)
 	String PARTY_AND_PREVIOUS = "partyAndPrevious";
 
 	@ConfigItem(
