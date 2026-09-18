@@ -186,6 +186,8 @@ public class BetterPartyDefencePlugin extends Plugin
 	private long lastPresenceBroadcastMillis;
 	/** Force one immediate visible-boss continuity scan after a live Hub Party membership change. */
 	private boolean forceBossPresenceScan;
+	/** Let a join/rejoin re-request visible boss state even when this client remembers an old drained value. */
+	private boolean forceBossPresenceRevalidation;
 	/** Presentation-only gate: never changes tracker math/state, only suppresses an unverified first frame. */
 	private final InitialSyncDisplayGate initialSyncDisplayGate = new InitialSyncDisplayGate();
 
@@ -258,6 +260,7 @@ public class BetterPartyDefencePlugin extends Plugin
 		lastBossPresenceBroadcastMillis.clear();
 		initialSyncDisplayGate.clear();
 		forceBossPresenceScan = false;
+		forceBossPresenceRevalidation = false;
 		recentEncounterResets.clear();
 		knownBpdPartyMembers.clear();
 		toaPartyWasFullyDead = false;
@@ -313,8 +316,10 @@ public class BetterPartyDefencePlugin extends Plugin
 		reconcileActiveSyncScope();
 		maybeBroadcastEncounterPresence();
 		boolean immediateBossPresenceScan = forceBossPresenceScan;
+		boolean revalidateExistingBossState = forceBossPresenceRevalidation;
 		forceBossPresenceScan = false;
-		maybeBroadcastBossPresenceRequests(immediateBossPresenceScan);
+		forceBossPresenceRevalidation = false;
+		maybeBroadcastBossPresenceRequests(immediateBossPresenceScan, revalidateExistingBossState);
 		maybeBroadcastDefenceSync();
 		reconcileRaidEncounterLifecycle();
 		reconcilePartyWideEncounterAbsence();
@@ -342,7 +347,7 @@ public class BetterPartyDefencePlugin extends Plugin
 	{
 		if (event != null)
 		{
-			maybeBroadcastBossPresenceForNpc(event.getNpc(), true);
+			maybeBroadcastBossPresenceForNpc(event.getNpc(), true, false);
 		}
 	}
 
@@ -375,7 +380,9 @@ public class BetterPartyDefencePlugin extends Plugin
 	{
 		recentSpecEvents.clear();
 		recentSyncedSpecs.clear();
-		wasInParty = event.getPartyId() != null;
+		boolean inPartyNow = event.getPartyId() != null;
+		boolean joinedOrRejoinedParty = !wasInParty && inPartyNow;
+		wasInParty = inPartyNow;
 		lastSyncSignature = null;
 		lastSyncBroadcastMillis = 0L;
 		pendingWorldSyncs.clear();
@@ -388,13 +395,14 @@ public class BetterPartyDefencePlugin extends Plugin
 		knownBpdPartyMembers.clear();
 		lastBossPresenceBroadcastMillis.clear();
 		initialSyncDisplayGate.clear();
-		forceBossPresenceScan = event.getPartyId() != null;
+		forceBossPresenceScan = inPartyNow;
+		forceBossPresenceRevalidation = joinedOrRejoinedParty;
 		toaPartyWasFullyDead = false;
 		lastPresenceScope = null;
 		lastPresenceBroadcastMillis = 0L;
 		activeSyncScope = null;
-		log.debug("Hub Party session changed: partyId={} immediateBossContinuityScan={}",
-			event.getPartyId(), forceBossPresenceScan);
+		log.debug("Hub Party session changed: partyId={} immediateBossContinuityScan={} revalidateVisibleState={}",
+			event.getPartyId(), forceBossPresenceScan, forceBossPresenceRevalidation);
 	}
 
 	@Subscribe
@@ -420,6 +428,7 @@ public class BetterPartyDefencePlugin extends Plugin
 			lastBossPresenceBroadcastMillis.clear();
 			initialSyncDisplayGate.clear();
 			forceBossPresenceScan = false;
+			forceBossPresenceRevalidation = false;
 			recentEncounterResets.clear();
 			knownBpdPartyMembers.clear();
 			toaPartyWasFullyDead = false;
@@ -1159,7 +1168,7 @@ public class BetterPartyDefencePlugin extends Plugin
 	 * when this client does not already have a bound drained state. This lets a peer holding recent
 	 * remembered state hand the encounter forward after the original observer dies/leaves render.
 	 */
-	private void maybeBroadcastBossPresenceRequests(boolean immediate)
+	private void maybeBroadcastBossPresenceRequests(boolean immediate, boolean revalidateExistingState)
 	{
 		if (!config.syncWithOtherPartyDefenceUsers() || !partyService.isInParty()
 			|| client.getGameState() != GameState.LOGGED_IN)
@@ -1191,13 +1200,14 @@ public class BetterPartyDefencePlugin extends Plugin
 			}
 
 			DefenceTracker.SyncState local = defenceTracker.syncStateForBoss(boss);
-			if (local != null && local.isDrained() && defenceTracker.hasBoundNpc(boss))
+			if (!revalidateExistingState
+				&& local != null && local.isDrained() && defenceTracker.hasBoundNpc(boss))
 			{
-				// We already own a live, drained binding and will publish the normal snapshot.
+				// Normal scan: we already own a live, drained binding and will publish its snapshot.
 				continue;
 			}
 
-			maybeBroadcastBossPresenceForNpc(npc, immediate);
+			maybeBroadcastBossPresenceForNpc(npc, immediate, revalidateExistingState);
 		}
 
 		lastBossPresenceBroadcastMillis.keySet().removeIf(boss -> !seen.contains(boss));
@@ -1223,7 +1233,8 @@ public class BetterPartyDefencePlugin extends Plugin
 		return client.getVarbitValue(Varbits.MULTICOMBAT_AREA) != 0;
 	}
 
-	private void maybeBroadcastBossPresenceForNpc(NPC npc, boolean immediate)
+	private void maybeBroadcastBossPresenceForNpc(
+		NPC npc, boolean immediate, boolean revalidateExistingState)
 	{
 		if (!config.syncWithOtherPartyDefenceUsers() || !partyService.isInParty()
 			|| client.getGameState() != GameState.LOGGED_IN
@@ -1239,10 +1250,10 @@ public class BetterPartyDefencePlugin extends Plugin
 		}
 
 		DefenceTracker.SyncState local = defenceTracker.syncStateForBoss(boss);
-		if (local != null && local.isDrained())
+		if (!revalidateExistingState && local != null && local.isDrained())
 		{
-			// We already know this encounter's drained state. Let the tracker rebind/handle any
-			// phase transition locally instead of asking a peer to overwrite it on actor spawn.
+			// Normal actor spawn: preserve the already-known encounter state. A party join/rejoin
+			// explicitly revalidates it against peers so stale local state cannot require a click.
 			return;
 		}
 
@@ -1265,7 +1276,7 @@ public class BetterPartyDefencePlugin extends Plugin
 			return;
 		}
 
-		if (immediate)
+		if (immediate && !revalidateExistingState)
 		{
 			initialSyncDisplayGate.arm(npc.getIndex(), boss, client.getTickCount(), INITIAL_SYNC_DISPLAY_GRACE_TICKS);
 		}
