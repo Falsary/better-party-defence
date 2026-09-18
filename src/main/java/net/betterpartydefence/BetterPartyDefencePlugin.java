@@ -1247,6 +1247,23 @@ public class BetterPartyDefencePlugin extends Plugin
 				continue;
 			}
 
+			// CoX's public party/controller id is transport metadata, not encounter lifetime.
+			// Jagex can clear/change RAIDS_PARTY_GROUPHOLDER while the client is still inside
+			// the same live raid. DefenceTracker already owns the authoritative CoX lifetime
+			// through RAIDS_CLIENT_INDUNGEON plus boss/phase mechanics, so never let a missing
+			// controller wipe Tekton/Olm state. A newly available canonical controller may be
+			// remembered for filtering, but its absence is not a reset signal.
+			if (boss.has(BossDefence.Flag.COX_SCALED)
+				&& client.getVarbitValue(VarbitID.RAIDS_CLIENT_INDUNGEON) == 1)
+			{
+				SyncScope currentCoxScope = currentRaidScopeForBoss(boss);
+				if (currentCoxScope != null)
+				{
+					retainedRaidScopes.put(boss, currentCoxScope);
+				}
+				continue;
+			}
+
 			SyncScope currentScope = currentRaidScopeForBoss(boss);
 			SyncScope retainedScope = retainedRaidScopes.get(boss);
 			if (retainedScope == null)
@@ -1673,6 +1690,21 @@ public class BetterPartyDefencePlugin extends Plugin
 
 		if (!syncScopeStillValid(activeSyncScope))
 		{
+			// A CoX controller becoming unavailable while RAIDS_CLIENT_INDUNGEON is still 1
+			// only means the sync transport scope is stale. It does NOT mean Tekton/Olm ended.
+			// Drop the transport association and let DefenceTracker's authoritative CoX
+			// lifecycle decide when the encounter actually resets.
+			if (activeSyncScope.getBoss() != null
+				&& activeSyncScope.getBoss().has(BossDefence.Flag.COX_SCALED)
+				&& client.getVarbitValue(VarbitID.RAIDS_CLIENT_INDUNGEON) == 1)
+			{
+				log.debug("Dropping stale CoX sync scope for {} without clearing live raid state",
+					activeSyncScope.getBoss());
+				activeSyncScope = null;
+				lastSyncSignature = null;
+				return;
+			}
+
 			defenceTracker.reset("BPD synced encounter ended locally");
 			activeSyncScope = null;
 			lastSyncSignature = null;
