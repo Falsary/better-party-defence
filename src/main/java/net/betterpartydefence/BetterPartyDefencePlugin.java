@@ -143,6 +143,8 @@ public class BetterPartyDefencePlugin extends Plugin
 	private static final long SYNC_PARTY_WIDE_ABSENCE_TIMEOUT_MILLIS = 20_000L;
 	private static final long ENCOUNTER_PRESENCE_INTERVAL_MILLIS = 2_000L;
 	private static final long BOSS_PRESENCE_INTERVAL_MILLIS = 2_000L;
+	/** Maximum time to withhold a new party-eligible boss display while requesting better peer state. */
+	private static final int INITIAL_SYNC_DISPLAY_GRACE_TICKS = 4;
 	private static final long ENCOUNTER_PRESENCE_MAX_AGE_MILLIS = 6_000L;
 	/** Blocks stale pre-reset absolute snapshots long enough for their normal max age to expire. */
 	private static final long ENCOUNTER_RESET_BARRIER_MILLIS = SYNC_MAX_AGE_MILLIS;
@@ -184,6 +186,8 @@ public class BetterPartyDefencePlugin extends Plugin
 	private long lastPresenceBroadcastMillis;
 	/** Force one immediate visible-boss continuity scan after a live Hub Party membership change. */
 	private boolean forceBossPresenceScan;
+	/** Presentation-only gate: never changes tracker math/state, only suppresses an unverified first frame. */
+	private final InitialSyncDisplayGate initialSyncDisplayGate = new InitialSyncDisplayGate();
 
 	@Provides
 	@Singleton
@@ -213,7 +217,7 @@ public class BetterPartyDefencePlugin extends Plugin
 		trackerFontManager = new TrackerFontManager(config);
 		previousTargetDisplayState = new PreviousTargetDisplayState(client, defenceTracker, config);
 		defenceOverlay = new NpcDefenceOverlay(client, defenceTracker, config, skillIconSource,
-			trackerFontManager, previousTargetDisplayState);
+			trackerFontManager, previousTargetDisplayState, initialSyncDisplayGate);
 		overlayManager.add(defenceOverlay);
 
 		wasInParty = partyService.isInParty();
@@ -252,6 +256,7 @@ public class BetterPartyDefencePlugin extends Plugin
 		retainedRaidScopes.clear();
 		senderEncounterPresence.clear();
 		lastBossPresenceBroadcastMillis.clear();
+		initialSyncDisplayGate.clear();
 		forceBossPresenceScan = false;
 		recentEncounterResets.clear();
 		knownBpdPartyMembers.clear();
@@ -300,6 +305,8 @@ public class BetterPartyDefencePlugin extends Plugin
 		// the transport for remote specs, not a prerequisite for drawing our own tracked target.
 		localSpecDetector.onGameTick();
 		defenceTracker.onGameTick();
+		initialSyncDisplayGate.expire(tick);
+		releaseInitialSyncGatesForDrainedStates();
 		reconcileAuthoritativeNpcDeaths();
 		reconcileToaFullWipe();
 		reconcilePendingWorldSyncs();
@@ -380,6 +387,7 @@ public class BetterPartyDefencePlugin extends Plugin
 		recentEncounterResets.clear();
 		knownBpdPartyMembers.clear();
 		lastBossPresenceBroadcastMillis.clear();
+		initialSyncDisplayGate.clear();
 		forceBossPresenceScan = event.getPartyId() != null;
 		toaPartyWasFullyDead = false;
 		lastPresenceScope = null;
@@ -410,6 +418,7 @@ public class BetterPartyDefencePlugin extends Plugin
 			retainedRaidScopes.clear();
 			senderEncounterPresence.clear();
 			lastBossPresenceBroadcastMillis.clear();
+			initialSyncDisplayGate.clear();
 			forceBossPresenceScan = false;
 			recentEncounterResets.clear();
 			knownBpdPartyMembers.clear();
@@ -1256,6 +1265,11 @@ public class BetterPartyDefencePlugin extends Plugin
 			return;
 		}
 
+		if (immediate)
+		{
+			initialSyncDisplayGate.arm(npc.getIndex(), boss, client.getTickCount(), INITIAL_SYNC_DISPLAY_GRACE_TICKS);
+		}
+
 		partyService.send(new BpdBossPresence(
 			client.getWorld(), boss, scope.getType(), scope.getId(),
 			point.getX(), point.getY(), point.getPlane(), healthPercent(npc)));
@@ -1852,6 +1866,7 @@ public class BetterPartyDefencePlugin extends Plugin
 		else
 		{
 			defenceTracker.applySyncState(sync, localBoss);
+			initialSyncDisplayGate.release(localBoss.getIndex(), sync.getBossType());
 		}
 		previouslySyncedBosses.add(sync.getBossType());
 		if (event.getStateVersion() > 0)
@@ -2333,13 +2348,37 @@ public class BetterPartyDefencePlugin extends Plugin
 		return false;
 	}
 
+	/**
+	 * A real drained state is stronger evidence than the short first-render gate. This covers a
+	 * local spec (and the standard party-spec path) that lands while we are waiting for a richer
+	 * absolute snapshot, without making the gate part of tracker math.
+	 */
+	private void releaseInitialSyncGatesForDrainedStates()
+	{
+		for (DefenceTracker.DefenceState state : defenceTracker.states())
+		{
+			if (state == null || !state.isDrained() || state.getNpcIndex() < 0)
+			{
+				continue;
+			}
+
+			BossDefence boss = BossDefence.matchingNpcName(state.getName());
+			if (boss != null)
+			{
+				initialSyncDisplayGate.release(state.getNpcIndex(), boss);
+			}
+		}
+	}
+
 	private void updateDefenceInfoBox()
 	{
 		DefenceTracker.DefenceState state = defenceTracker.state();
 		boolean live = state != null && trackedNpcIsLive(state);
-		boolean showDefence = config.defenceInfoBox() && live
+		boolean awaitingInitialSync = state != null
+			&& initialSyncDisplayGate.isWaiting(state, client.getTickCount());
+		boolean showDefence = config.defenceInfoBox() && live && !awaitingInitialSync
 			&& (defenceTracker.hasDefenceSpecHistory() || config.defenceAlwaysShow());
-		boolean showMagic = config.magicDefence() && config.magicDefenceInfoBox() && live
+		boolean showMagic = config.magicDefence() && config.magicDefenceInfoBox() && live && !awaitingInitialSync
 			&& (defenceTracker.hasMagicDefenceSpecHistory() || config.defenceAlwaysShow());
 
 		if (showDefence && defenceBox == null)

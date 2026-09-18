@@ -20,10 +20,11 @@ public class NpcDefenceOverlay extends Overlay
 	private final TrackerFontManager fontManager;
 	private final DefenceOverlayRenderer renderer;
 	private final PreviousTargetDisplayState previousTargetState;
+	private final InitialSyncDisplayGate initialSyncDisplayGate;
 
 	public NpcDefenceOverlay(Client client, DefenceTracker tracker, BetterPartyDefenceConfig config,
 		SkillIconSource skillIcons, TrackerFontManager fontManager,
-		PreviousTargetDisplayState previousTargetState)
+		PreviousTargetDisplayState previousTargetState, InitialSyncDisplayGate initialSyncDisplayGate)
 	{
 		this.client = client;
 		this.tracker = tracker;
@@ -31,6 +32,7 @@ public class NpcDefenceOverlay extends Overlay
 		this.fontManager = fontManager;
 		this.renderer = new DefenceOverlayRenderer(config, skillIcons);
 		this.previousTargetState = previousTargetState;
+		this.initialSyncDisplayGate = initialSyncDisplayGate;
 		setPosition(OverlayPosition.DYNAMIC);
 		setLayer(OverlayLayer.ABOVE_SCENE);
 	}
@@ -118,7 +120,10 @@ public class NpcDefenceOverlay extends Overlay
 	{
 		// The checkbox controls only optional pre-spec preview. Any actual local/party drain
 		// remains displayable because drained=true is part of the stored/shared state.
-		return state != null && (state.isDrained() || config.defenceAlwaysShow()) && state.getNpcIndex() >= 0;
+		return state != null
+			&& (state.isDrained() || config.defenceAlwaysShow())
+			&& state.getNpcIndex() >= 0
+			&& !initialSyncDisplayGate.isWaiting(state, client.getTickCount());
 	}
 
 	private NPC liveNpc(int index)
