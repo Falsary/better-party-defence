@@ -116,6 +116,11 @@ public class DefenceTracker
 	 * instance does, which is the authoritative reset boundary for Yama.
 	 */
 	private Integer yamaEncounterInstanceFingerprint;
+	/**
+	 * Branda and Eldric share one concrete Royal Titans instance. Keep the identity at
+	 * encounter level so killing one Titan never invalidates the surviving Titan.
+	 */
+	private Integer royalTitansEncounterInstanceFingerprint;
 	private long bossDef = -1;
 	private long bossStartDef;
 	private long minDef;
@@ -399,6 +404,7 @@ public class DefenceTracker
 		}
 		wasInCoxRaid = inCoxRaid;
 		reconcileYamaInstanceLifecycle();
+		reconcileRoyalTitansInstanceLifecycle();
 
 		if (bossType == BossDefence.SOTETSEG)
 		{
@@ -786,6 +792,55 @@ public class DefenceTracker
 		{
 			clearBossState(BossDefence.YAMA, "Yama instance changed");
 		}
+	}
+
+	/**
+	 * Royal Titans is a shared instanced encounter. Branda and Eldric keep independent
+	 * Defence histories while this client remains in the same instance. Leaving, dying
+	 * out, teleporting out, or entering a different instance invalidates both histories.
+	 */
+	private void reconcileRoyalTitansInstanceLifecycle()
+	{
+		boolean remembersBranda = hasRememberedState(BossDefence.BRANDA_THE_FIRE_QUEEN);
+		boolean remembersEldric = hasRememberedState(BossDefence.ELDRIC_THE_ICE_KING);
+		if (!remembersBranda && !remembersEldric)
+		{
+			royalTitansEncounterInstanceFingerprint = null;
+			return;
+		}
+
+		WorldView worldView = client.getTopLevelWorldView();
+		if (worldView == null)
+		{
+			// A transient loading frame is not enough evidence to end the encounter.
+			return;
+		}
+
+		if (!worldView.isInstance())
+		{
+			clearRoyalTitansState("left Royal Titans instance");
+			return;
+		}
+
+		int currentFingerprint = instanceFingerprint(worldView);
+		if (royalTitansEncounterInstanceFingerprint == null)
+		{
+			royalTitansEncounterInstanceFingerprint = currentFingerprint;
+			log.debug("Remembering Royal Titans instance fingerprint {}", currentFingerprint);
+			return;
+		}
+
+		if (royalTitansEncounterInstanceFingerprint != currentFingerprint)
+		{
+			clearRoyalTitansState("Royal Titans instance changed");
+		}
+	}
+
+	private void clearRoyalTitansState(String reason)
+	{
+		clearBossState(BossDefence.BRANDA_THE_FIRE_QUEEN, reason);
+		clearBossState(BossDefence.ELDRIC_THE_ICE_KING, reason);
+		royalTitansEncounterInstanceFingerprint = null;
 	}
 
 	private static int instanceFingerprint(WorldView worldView)
@@ -1941,6 +1996,7 @@ public class DefenceTracker
 		}
 		clearActiveFields();
 		yamaEncounterInstanceFingerprint = null;
+		royalTitansEncounterInstanceFingerprint = null;
 		tracked.clear();
 		unboundTracked.clear();
 		endedBosses.clear();
