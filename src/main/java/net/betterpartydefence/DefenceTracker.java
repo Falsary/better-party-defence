@@ -16,10 +16,13 @@ import lombok.Value;
 import lombok.extern.slf4j.Slf4j;
 import net.runelite.api.Actor;
 import net.runelite.api.Client;
+import net.runelite.api.ItemComposition;
 import net.runelite.api.NPC;
 import net.runelite.api.Player;
+import net.runelite.api.PlayerComposition;
 import net.runelite.api.WorldView;
 import net.runelite.api.gameval.VarbitID;
+import net.runelite.api.kit.KitType;
 import net.runelite.client.plugins.specialcounter.SpecialWeapon;
 import net.runelite.client.util.Text;
 
@@ -61,6 +64,14 @@ public class DefenceTracker
 	private static final int RALOS_GLAIVE_MAGIC_DIVISOR = 8;
 	private static final int ANCHOR_DAMAGE_DIVISOR = 10;
 
+	// Yama changes only his Magic-defence bonus, not his Magic level. The Eye of ayak
+	// drain is persistent across those bonus changes, so it must be reapplied to each stance.
+	private static final int YAMA_MAGIC_DEF_MELEE = -30;
+	private static final int YAMA_MAGIC_DEF_MAGIC = 60;
+	private static final int YAMA_MAGIC_DEF_PHASE_3 = 81;
+	/** NPC health ratios are on a 0..255 scale; phase 3 starts at one third HP. */
+	private static final int YAMA_PHASE_3_MAX_HEALTH_RATIO = 85;
+
 	private static final Comparator<Drain> SAME_TICK_DRAIN_ORDER = Comparator
 		.comparingInt((Drain d) -> sameTickPriority(d.getWeapon()))
 		.thenComparing(d -> normalizeHistoryPlayer(d.getPlayerName()))
@@ -97,6 +108,8 @@ public class DefenceTracker
 	private boolean kephriFinalResetApplied;
 	/** Sotetseg's encounter varbit: 1=combat, 2=maze, 0=encounter ended. */
 	private int sotetsegEncounterState = -1;
+	/** Once Yama enters phase 3 it stays phase 3 even if void flares heal him back over 33.3%. */
+	private boolean yamaPhase3;
 	private long bossDef = -1;
 	private long bossStartDef;
 	private long minDef;
@@ -218,6 +231,7 @@ public class DefenceTracker
 		int bossNpcId;
 		boolean kephriFinalResetApplied;
 		int sotetsegEncounterState;
+		boolean yamaPhase3;
 		long bossDef;
 		long bossStartDef;
 		long minDef;
@@ -415,6 +429,7 @@ public class DefenceTracker
 			if (npc != null)
 			{
 				handlePhaseNpc(npc);
+				refreshYamaMagicDefence(npc);
 				if (bossIndex != -1 && (npc.isDead() || npc.getHealthRatio() == 0))
 				{
 					BossMechanics mechanics = BossMechanics.forBoss(bossType);
@@ -609,6 +624,7 @@ public class DefenceTracker
 		demon = boss != null && boss.has(BossDefence.Flag.DEMON);
 		accursedApplied = false;
 		drained = false;
+		yamaPhase3 = false;
 
 		// In CoX, the boss's combat levels are scaled up by the (scaled) party size and again
 		// in Challenge Mode, but the magic-defence bonus is not. Defence always scales as a
@@ -910,11 +926,22 @@ public class DefenceTracker
 				magicLevel -= hit;
 				break;
 			case EYE_OF_AYAK:
-				// Soul Rend lowers the Magic-defence bonus by the damage dealt,
-				// stacking down to a floor of 0 (negative bonuses are left as-is).
-				if (hit > 0 && magicDefBonus > 0)
+				// Soul Rend drains Magic Defence by damage dealt and cannot push a positive
+				// bonus below 0. Yama is special: the drain is latent while his stance is -30
+				// and must carry forward when he changes to +60 / +81.
+				if (hit > 0)
 				{
-					magicDefBonus = Math.max(0, magicDefBonus - hit);
+					if (bossType == BossDefence.YAMA)
+					{
+						long stanceBase = currentYamaMagicDefenceBase(npc);
+						magicStartDefBonus = stanceBase;
+						magicDefBonus = yamaMagicDefenceAfterAyak(
+							stanceBase, totalYamaAyakDrain() + hit);
+					}
+					else if (magicDefBonus > 0)
+					{
+						magicDefBonus = Math.max(0, magicDefBonus - hit);
+					}
 				}
 				break;
 			default:
@@ -922,6 +949,125 @@ public class DefenceTracker
 		}
 		bossDef = Math.max(bossDef, minDef);
 		magicLevel = Math.max(magicLevel, 0);
+	}
+
+
+	/**
+	 * Keep Yama's displayed Magic Defence aligned with his live stance without losing Eye of ayak
+	 * drain. P1/P2 are -30 for a non-magic primary target and +60 after that target attacks with
+	 * magic; P3 is always +81. Soul Rend drain is reconstructed from immutable encounter history,
+	 * so changing stance never destroys or double-applies it.
+	 */
+	private void refreshYamaMagicDefence(NPC npc)
+	{
+		if (bossType != BossDefence.YAMA || npc == null)
+		{
+			return;
+		}
+
+		long stanceBase = currentYamaMagicDefenceBase(npc);
+		long ayakDrain = totalYamaAyakDrain();
+		long updated = yamaMagicDefenceAfterAyak(stanceBase, ayakDrain);
+		if (magicStartDefBonus != stanceBase || magicDefBonus != updated)
+		{
+			log.debug("Yama Magic Defence stance {} -> {}, Ayak drain={}, current={}",
+				magicStartDefBonus, stanceBase, ayakDrain, updated);
+			magicStartDefBonus = stanceBase;
+			magicDefBonus = updated;
+		}
+	}
+
+	private long currentYamaMagicDefenceBase(NPC npc)
+	{
+		if (npc != null && isYamaPhase3(npc))
+		{
+			return YAMA_MAGIC_DEF_PHASE_3;
+		}
+
+		// Yama keys this stance to the weapon used by his current primary target. RuneLite exposes
+		// that target and their rendered weapon, so follow it directly instead of guessing from
+		// websocket/spec timing. This also works for the other player in a duo.
+		Actor target = npc == null ? null : npc.getInteracting();
+		if (target instanceof Player)
+		{
+			Player player = (Player) target;
+			return playerIsUsingMagicWeapon(player) ? YAMA_MAGIC_DEF_MAGIC : YAMA_MAGIC_DEF_MELEE;
+		}
+
+		if (magicStartDefBonus == YAMA_MAGIC_DEF_MAGIC || magicStartDefBonus == YAMA_MAGIC_DEF_MELEE)
+		{
+			return magicStartDefBonus;
+		}
+		return YAMA_MAGIC_DEF_MELEE;
+	}
+
+	private boolean isYamaPhase3(NPC npc)
+	{
+		if (!yamaPhase3 && npc != null && npc.getHealthRatio() > 0
+			&& npc.getHealthRatio() <= YAMA_PHASE_3_MAX_HEALTH_RATIO)
+		{
+			yamaPhase3 = true;
+			log.debug("Yama entered phase 3; Magic Defence base is now +{}", YAMA_MAGIC_DEF_PHASE_3);
+		}
+		return yamaPhase3;
+	}
+
+	/**
+	 * RuneLite exposes other players' equipped weapon IDs but not their private combat-style varp.
+	 * Yama's normal mage setups use a staff/wand/sceptre/trident/shadow/Ayak, so classify those
+	 * weapon families from the rendered primary target's equipment. If Yama temporarily has no
+	 * primary target, the last observed P1/P2 stance is retained.
+	 */
+	private boolean playerIsUsingMagicWeapon(Player player)
+	{
+		if (player == null)
+		{
+			return false;
+		}
+		PlayerComposition composition = player.getPlayerComposition();
+		if (composition == null)
+		{
+			return false;
+		}
+		int weaponId = composition.getEquipmentId(KitType.WEAPON);
+		if (weaponId < 0)
+		{
+			return false;
+		}
+		ItemComposition weapon = client.getItemDefinition(weaponId);
+		String name = weapon == null || weapon.getName() == null
+			? "" : weapon.getName().toLowerCase();
+		return name.contains("staff")
+			|| name.contains("wand")
+			|| name.contains("sceptre")
+			|| name.contains("scepter")
+			|| name.contains("trident")
+			|| name.contains("tumeken's shadow")
+			|| name.contains("eye of ayak");
+	}
+
+	private long totalYamaAyakDrain()
+	{
+		long total = 0;
+		for (SpecHistoryEntry entry : specHistory)
+		{
+			if (entry != null && entry.getWeapon() == SpecialWeapon.EYE_OF_AYAK && entry.getHit() > 0)
+			{
+				total += entry.getHit();
+			}
+		}
+		return total;
+	}
+
+	static long yamaMagicDefenceAfterAyak(long stanceBase, long totalAyakDrain)
+	{
+		// A negative stance is a base stat, not a drainable value below zero. Preserve it while
+		// banking the Ayak drain for the next positive stance (+60 or +81).
+		if (stanceBase <= 0)
+		{
+			return stanceBase;
+		}
+		return Math.max(0, stanceBase - Math.max(0, totalAyakDrain));
 	}
 
 	/**
@@ -1139,6 +1285,8 @@ public class DefenceTracker
 		saved.kephriFinalResetApplied = false;
 		saved.sotetsegEncounterState = sync.getBossType() == BossDefence.SOTETSEG
 			? client.getVarbitValue(VarbitID.TOB_CLIENT_WAVEPROGRESS_TYPE) : -1;
+		saved.yamaPhase3 = sync.getBossType() == BossDefence.YAMA
+			&& sync.getMagicBaseDef() == YAMA_MAGIC_DEF_PHASE_3;
 		saved.bossDef = sync.getCurrent();
 		saved.bossStartDef = sync.getBase();
 		saved.minDef = sync.getMin();
@@ -1238,10 +1386,14 @@ public class DefenceTracker
 		bossNpcId = localNpc.getId();
 		boolean priorKephriFinal = kephriFinalResetApplied;
 		int priorSotetsegState = sotetsegEncounterState;
+		boolean priorYamaPhase3 = yamaPhase3
+			|| (incoming.getBossType() == BossDefence.YAMA
+				&& incoming.getMagicBaseDef() == YAMA_MAGIC_DEF_PHASE_3);
 		specHistory.clear();
 		initializeStats(bossType);
 		kephriFinalResetApplied = priorKephriFinal;
 		sotetsegEncounterState = priorSotetsegState;
+		yamaPhase3 = priorYamaPhase3;
 		for (SpecHistoryEntry entry : merged)
 		{
 			if (entry == null || entry.getWeapon() == null)
@@ -1250,6 +1402,7 @@ public class DefenceTracker
 			}
 			apply(new Drain(entry.getWeapon(), bossIndex, entry.getHit(), client.getWorld(), entry.getPlayerName()));
 		}
+		refreshYamaMagicDefence(localNpc);
 		saveCurrent();
 		pending.clear();
 		clearHeld();
@@ -1340,6 +1493,10 @@ public class DefenceTracker
 		kephriFinalResetApplied = bossType == BossDefence.KEPHRI && isKephriFinalPhaseId(bossNpcId);
 		sotetsegEncounterState = bossType == BossDefence.SOTETSEG
 			? client.getVarbitValue(VarbitID.TOB_CLIENT_WAVEPROGRESS_TYPE) : -1;
+		yamaPhase3 = bossType == BossDefence.YAMA
+			&& (sync.getMagicBaseDef() == YAMA_MAGIC_DEF_PHASE_3
+				|| (localNpc != null && localNpc.getHealthRatio() > 0
+					&& localNpc.getHealthRatio() <= YAMA_PHASE_3_MAX_HEALTH_RATIO));
 		wasInCoxRaid = client.getVarbitValue(VarbitID.RAIDS_CLIENT_INDUNGEON) == 1;
 
 		specHistory.clear();
@@ -1350,6 +1507,9 @@ public class DefenceTracker
 		if (localNpc != null)
 		{
 			unboundTracked.remove(bossType);
+			// The peer may currently see a different Yama stance. Reapply the shared Ayak history
+			// to this client's locally rendered stance before exposing the synced value.
+			refreshYamaMagicDefence(localNpc);
 		}
 		saveCurrent();
 		pending.clear();
@@ -1381,6 +1541,7 @@ public class DefenceTracker
 		s.bossNpcId = bossNpcId;
 		s.kephriFinalResetApplied = kephriFinalResetApplied;
 		s.sotetsegEncounterState = sotetsegEncounterState;
+		s.yamaPhase3 = yamaPhase3;
 		s.bossDef = bossDef;
 		s.bossStartDef = bossStartDef;
 		s.minDef = minDef;
@@ -1484,6 +1645,7 @@ public class DefenceTracker
 		bossNpcId = s.bossNpcId;
 		kephriFinalResetApplied = s.kephriFinalResetApplied;
 		sotetsegEncounterState = s.sotetsegEncounterState;
+		yamaPhase3 = s.yamaPhase3;
 		bossDef = s.bossDef;
 		bossStartDef = s.bossStartDef;
 		minDef = s.minDef;
@@ -1548,6 +1710,7 @@ public class DefenceTracker
 		bossNpcId = -1;
 		kephriFinalResetApplied = false;
 		sotetsegEncounterState = -1;
+		yamaPhase3 = false;
 		bossDef = -1;
 		bossStartDef = 0;
 		minDef = 0;

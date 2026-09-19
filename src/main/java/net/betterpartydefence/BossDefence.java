@@ -99,7 +99,10 @@ public enum BossDefence
 	VETION("Vet'ion", 395, 300, 430, 430, 250, 0),
 	VORKATH("Vorkath", 214, 150, 560, 308, 240, 0),
 	XARPUS("Xarpus", 250, 220, 1, 1, 0, 0),
-	YAMA("Yama", 225, 250, 320, 350, 0, 145, Flag.DEMON),
+	// Yama is stance-dependent: -30 Magic Defence normally, +60 after his primary target
+	// attacks with magic in phases 1/2, and +81 in phase 3. DefenceTracker applies those
+	// live stance changes while preserving Eye of ayak drain across them.
+	YAMA("Yama", 225, 250, 320, 350, -30, 145, Flag.DEMON),
 	ZEBAK("Zebak", 70, 100, 250, 140, 200, 50),
 	// Zulrah's magic-def bonus is form-dependent (-45 serpentine, 0 magma, 300 tanzanite); using 0.
 	// A single-value entry can't follow the rotation, so the Eye of ayak drain won't read exactly per form.
