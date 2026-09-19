@@ -110,6 +110,12 @@ public class DefenceTracker
 	private int sotetsegEncounterState = -1;
 	/** Once Yama enters phase 3 it stays phase 3 even if void flares heal him back over 33.3%. */
 	private boolean yamaPhase3;
+	/**
+	 * Concrete top-level instance in which the current remembered Yama encounter lives.
+	 * Actor/phase changes do not change this fingerprint; leaving/teleporting/dying out of the
+	 * instance does, which is the authoritative reset boundary for Yama.
+	 */
+	private Integer yamaEncounterInstanceFingerprint;
 	private long bossDef = -1;
 	private long bossStartDef;
 	private long minDef;
@@ -392,6 +398,7 @@ public class DefenceTracker
 			reset("Chambers raid ended");
 		}
 		wasInCoxRaid = inCoxRaid;
+		reconcileYamaInstanceLifecycle();
 
 		if (bossType == BossDefence.SOTETSEG)
 		{
@@ -737,6 +744,78 @@ public class DefenceTracker
 			return;
 		}
 		sotetsegEncounterState = state;
+	}
+
+	/**
+	 * Yama is an instanced encounter. Keep his state through target swaps, actor changes and all
+	 * phases, but discard it as soon as the client is definitively no longer in the same instance.
+	 *
+	 * <p>A null WorldView is treated as a transient loading state and is not a reset signal. Once a
+	 * concrete non-instanced view or a different instance fingerprint is observed, the remembered
+	 * Defence/Ayak history belongs to the old encounter and is cleared.</p>
+	 */
+	private void reconcileYamaInstanceLifecycle()
+	{
+		if (!hasRememberedState(BossDefence.YAMA))
+		{
+			yamaEncounterInstanceFingerprint = null;
+			return;
+		}
+
+		WorldView worldView = client.getTopLevelWorldView();
+		if (worldView == null)
+		{
+			return;
+		}
+
+		if (!worldView.isInstance())
+		{
+			clearBossState(BossDefence.YAMA, "left Yama instance");
+			return;
+		}
+
+		int currentFingerprint = instanceFingerprint(worldView);
+		if (yamaEncounterInstanceFingerprint == null)
+		{
+			yamaEncounterInstanceFingerprint = currentFingerprint;
+			log.debug("Remembering Yama instance fingerprint {}", currentFingerprint);
+			return;
+		}
+
+		if (yamaEncounterInstanceFingerprint != currentFingerprint)
+		{
+			clearBossState(BossDefence.YAMA, "Yama instance changed");
+		}
+	}
+
+	private static int instanceFingerprint(WorldView worldView)
+	{
+		int hash = 17;
+		hash = 31 * hash + worldView.getBaseX();
+		hash = 31 * hash + worldView.getBaseY();
+		int[][][] chunks = worldView.getInstanceTemplateChunks();
+		if (chunks != null)
+		{
+			for (int[][] plane : chunks)
+			{
+				if (plane == null)
+				{
+					continue;
+				}
+				for (int[] row : plane)
+				{
+					if (row == null)
+					{
+						continue;
+					}
+					for (int chunk : row)
+					{
+						hash = 31 * hash + chunk;
+					}
+				}
+			}
+		}
+		return hash;
 	}
 
 	private boolean shouldRebindSameEncounter(BossDefence incomingBoss)
@@ -1808,6 +1887,10 @@ public class DefenceTracker
 		{
 			return;
 		}
+		if (boss == BossDefence.YAMA)
+		{
+			yamaEncounterInstanceFingerprint = null;
+		}
 
 		boolean clearingActive = bossType == boss;
 		tracked.entrySet().removeIf(entry -> entry.getValue() != null && entry.getValue().bossType == boss);
@@ -1857,6 +1940,7 @@ public class DefenceTracker
 			log.debug("Reset defence tracker: {}", reason);
 		}
 		clearActiveFields();
+		yamaEncounterInstanceFingerprint = null;
 		tracked.clear();
 		unboundTracked.clear();
 		endedBosses.clear();
