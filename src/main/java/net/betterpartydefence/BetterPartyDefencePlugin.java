@@ -2169,7 +2169,6 @@ public class BetterPartyDefencePlugin extends Plugin
 			case NYLOCAS_VASILIAS:
 			case SOTETSEG:
 			case XARPUS:
-			case VERZIK_VITUR:
 				return BpdDefenceSync.SCOPE_TOB;
 			default:
 				return -1;
