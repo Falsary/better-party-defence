@@ -92,12 +92,8 @@ public enum BossDefence
 	TUMEKENS_WARDEN("Tumeken's Warden", 150, 150, 150, 150, 20, 120),
 	TZKAL_ZUK("TzKal-Zuk", 260, 150, 350, 600, 350, 0),
 	TZTOK_JAD("TzTok-Jad", 480, 480, 640, 960, 0, 0),
-	// Vardorvis has no Defence level at all, so only his magic defence can move.
-	VARDORVIS("Vardorvis", 0, 215, 280, 0, 580, 0),
 	VASA("Vasa Nistirio", 175, 230, 1, 1, 400, 0, Flag.COX_SCALED),
 	VENENATIS("Venenatis", 321, 300, 300, 200, 300, 0),
-	// Phase 3 (the long damage phase); Verzik ignores defence drains entirely, hence the floor.
-	VERZIK_VITUR("Verzik Vitur", 150, 300, 400, 400, 100, 150, Flag.MAGIC_USES_DEFENCE),
 	VETION("Vet'ion", 395, 300, 430, 430, 250, 0),
 	VORKATH("Vorkath", 214, 150, 560, 308, 240, 0),
 	XARPUS("Xarpus", 250, 220, 1, 1, 0, 0),
