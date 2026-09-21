@@ -285,7 +285,7 @@ public interface BetterPartyDefenceConfig extends Config
 		description = "Choose whether the tracker shows Magic-defence bonus, Magic level, percent of the starting magic-defence roll, or bonus plus percent.",
 		position = 2,
 		section = MAGIC)
-	default MagicDefenceDisplay magicDefenceDisplay() { return MagicDefenceDisplay.BONUS; }
+	default MagicDefenceDisplay magicDefenceDisplay() { return MagicDefenceDisplay.PERCENT; }
 
 	@ConfigItem(
 		keyName = "magicDefenceSameRow",

@@ -369,11 +369,11 @@ public class DefenceTracker
 		{
 			NPC queuedNpc = npcByIndex(queuedIndex);
 			if (queuedNpc != null && queuedNpc.getName() != null
-				&& BossDefence.matchingNpcName(queuedNpc.getName()) != null)
+				&& BossDefence.matchingNpc(queuedNpc.getId(), queuedNpc.getName()) != null)
 			{
 				if (bossIndex != queuedIndex)
 				{
-					BossDefence queuedBoss = BossDefence.matchingNpcName(queuedNpc.getName());
+					BossDefence queuedBoss = BossDefence.matchingNpc(queuedNpc.getId(), queuedNpc.getName());
 					saveCurrent();
 					if (!restore(queuedIndex, queuedBoss) && !restoreForBoss(queuedBoss, queuedNpc))
 					{
@@ -477,7 +477,7 @@ public class DefenceTracker
 	{
 		NPC target = interactingNpc();
 		BossDefence targetBoss = target == null || target.getName() == null
-			? null : BossDefence.matchingNpcName(target.getName());
+			? null : BossDefence.matchingNpc(target.getId(), target.getName());
 		if (targetBoss == null || target.getIndex() == bossIndex)
 		{
 			return;
@@ -528,7 +528,7 @@ public class DefenceTracker
 			return;
 		}
 		String name = npc.getName();
-		BossDefence incomingBoss = BossDefence.matchingNpcName(name);
+		BossDefence incomingBoss = BossDefence.matchingNpc(npc.getId(), name);
 		if (incomingBoss == null && bossIndex != index)
 		{
 			log.debug("{} hit {} dropped: '{}' (npc {}) is not a tracked monster",
@@ -909,7 +909,7 @@ public class DefenceTracker
 		while (iterator.hasNext())
 		{
 			NPC npc = iterator.next();
-			if (npc != null && npc.getName() != null && BossDefence.matchingNpcName(npc.getName()) == boss)
+			if (npc != null && npc.getName() != null && BossDefence.matchingNpc(npc.getId(), npc.getName()) == boss)
 			{
 				return npc;
 			}
@@ -1045,14 +1045,16 @@ public class DefenceTracker
 				}
 				break;
 			case ACCURSED_SCEPTRE:
-				// Condemn takes 15% off the Defence and Magic levels the monster has right
-				// now, so landing it after a warhammer drains more than landing it first.
-				// The curse doesn't stack, so only the first one to land does anything.
+				// Condemn can lower Defence and Magic only as far as 15% below their
+				// starting levels. Existing debuffs count toward that 15%, so it must not
+				// multiply an already-drained current level. The curse also does not stack.
 				if (hit > 0 && !accursedApplied)
 				{
 					accursedApplied = true;
-					bossDef = bossDef * CONDEMN_KEEPS_PCT / PERCENT;
-					magicLevel = magicLevel * CONDEMN_KEEPS_PCT / PERCENT;
+					long condemnDefTarget = bossStartDef * CONDEMN_KEEPS_PCT / PERCENT;
+					long condemnMagicTarget = magicStartLevel * CONDEMN_KEEPS_PCT / PERCENT;
+					bossDef = Math.min(bossDef, condemnDefTarget);
+					magicLevel = Math.min(magicLevel, condemnMagicTarget);
 				}
 				break;
 			case SEERCULL:

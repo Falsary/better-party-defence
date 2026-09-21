@@ -142,7 +142,7 @@ class LocalDefenceSpecDetector
 		}
 
 		NPC npc = (NPC) interacting;
-		if (npc.getName() == null || BossDefence.matchingNpcName(npc.getName()) == null)
+		if (npc.getName() == null || BossDefence.matchingNpc(npc.getId(), npc.getName()) == null)
 		{
 			log.debug("Local defence spec {} ignored: unsupported target {}", used, npc.getName());
 			return;

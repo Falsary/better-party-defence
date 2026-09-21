@@ -43,15 +43,13 @@ public enum BossDefence
 	CERBERUS("Cerberus", 100, 220, 220, 220, 65, 0),
 	CHAOS_ELEMENTAL("Chaos Elemental", 270, 270, 270, 270, 70, 0),
 	COMMANDER_ZILYANA("Commander Zilyana", 300, 300, 280, 196, 100, 0),
-	// The ejected warden core attacked in Wardens phase 2.
-	CORE("<col=00ffff>Core</col>", 100, 190, 300, 150, -30, 0),
 	CORPOREAL_BEAST("Corporeal Beast", 310, 350, 320, 320, 150, 0),
 	DAGANNOTH_PRIME("Dagannoth Prime", 255, 255, 255, 255, 255, 0),
 	DAGANNOTH_REX("Dagannoth Rex", 255, 0, 255, 255, 10, 0),
 	DAGANNOTH_SUPREME("Dagannoth Supreme", 128, 255, 255, 255, 255, 0),
 	DEATHLY_MAGE("Deathly mage", 155, 210, 1, 1, 0, 0, Flag.COX_SCALED),
 	DEATHLY_RANGER("Deathly ranger", 155, 155, 1, 1, 0, 0, Flag.COX_SCALED, Flag.COX_MAGIC_IS_DEFENSIVE),
-	// Wardens phase 3 (the drainable one); the phase-2 core is tracked as CORE.
+	// Wardens phase 3 only. Phase-2 Warden actors are filtered by NPC id in matchingNpc().
 	ELIDINIS_WARDEN("Elidinis' Warden", 150, 150, 150, 150, 20, 120),
 	ELDRIC_THE_ICE_KING("Eldric the Ice King", 100, 100, 300, 250, 700, 0),
 	GENERAL_GRAARDOR("General Graardor", 250, 80, 280, 350, 298, 0),
@@ -145,6 +143,26 @@ public enum BossDefence
 	public boolean has(Flag flag)
 	{
 		return flags.contains(flag);
+	}
+
+	/**
+	 * Match a concrete NPC actor. Wardens reuse the same visible names in phases 2 and 3,
+	 * but only the phase-3 actors use the normal drainable Defence model represented here.
+	 * Keep name-only matching for saved/synchronised logical state, and use this method whenever
+	 * a live NPC is available.
+	 */
+	public static BossDefence matchingNpc(int npcId, String name)
+	{
+		BossDefence boss = matchingNpcName(name);
+		if (boss == ELIDINIS_WARDEN)
+		{
+			return npcId == 11761 || npcId == 11763 ? boss : null;
+		}
+		if (boss == TUMEKENS_WARDEN)
+		{
+			return npcId == 11762 || npcId == 11764 ? boss : null;
+		}
+		return boss;
 	}
 
 	/**

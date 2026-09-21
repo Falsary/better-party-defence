@@ -1193,7 +1193,7 @@ public class BetterPartyDefencePlugin extends Plugin
 				continue;
 			}
 
-			BossDefence boss = BossDefence.matchingNpcName(npc.getName());
+			BossDefence boss = BossDefence.matchingNpc(npc.getId(), npc.getName());
 			if (boss == null || !seen.add(boss))
 			{
 				continue;
@@ -1243,7 +1243,7 @@ public class BetterPartyDefencePlugin extends Plugin
 			return;
 		}
 
-		BossDefence boss = BossDefence.matchingNpcName(npc.getName());
+		BossDefence boss = BossDefence.matchingNpc(npc.getId(), npc.getName());
 		if (boss == null || !peerSyncAllowedAtCurrentEncounter(boss))
 		{
 			return;
@@ -1640,7 +1640,6 @@ public class BetterPartyDefencePlugin extends Plugin
 			case AKKHA:
 			case AKKHAS_SHADOW:
 			case BA_BA:
-			case CORE:
 			case ELIDINIS_WARDEN:
 			case KEPHRI:
 			case OBELISK:
@@ -2214,7 +2213,7 @@ public class BetterPartyDefencePlugin extends Plugin
 			return;
 		}
 
-		BossDefence boss = BossDefence.matchingNpcName(npc.getName());
+		BossDefence boss = BossDefence.matchingNpc(npc.getId(), npc.getName());
 		if (boss != null)
 		{
 			previouslySyncedBosses.add(boss);
@@ -2248,7 +2247,7 @@ public class BetterPartyDefencePlugin extends Plugin
 		{
 			NPC npc = iterator.next();
 			if (npc != null && !npc.isDead() && npc.getHealthRatio() != 0 && npc.getName() != null
-				&& BossDefence.matchingNpcName(npc.getName()) == boss)
+				&& BossDefence.matchingNpc(npc.getId(), npc.getName()) == boss)
 			{
 				return npc;
 			}

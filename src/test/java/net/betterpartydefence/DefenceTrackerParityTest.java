@@ -90,9 +90,25 @@ public class DefenceTrackerParityTest
 	@Test
 	public void bossNameMatchingHandlesTagsAndPhaseSuffixes()
 	{
-		assertEquals(BossDefence.CORE, BossDefence.matchingNpcName("Core"));
+		assertNull(BossDefence.matchingNpcName("Core"));
 		assertEquals(BossDefence.OBELISK, BossDefence.matchingNpcName("<col=00ffff>Obelisk</col>"));
 		assertEquals(BossDefence.VETION, BossDefence.matchingNpcName("Vet'ion Reborn"));
+	}
+
+	@Test
+	public void wardenMatchingTracksOnlyPhaseThreeActors()
+	{
+		assertNull(BossDefence.matchingNpc(11753, "Elidinis' Warden"));
+		assertNull(BossDefence.matchingNpc(11754, "Elidinis' Warden"));
+		assertNull(BossDefence.matchingNpc(11755, "Elidinis' Warden"));
+		assertNull(BossDefence.matchingNpc(11756, "Tumeken's Warden"));
+		assertNull(BossDefence.matchingNpc(11757, "Tumeken's Warden"));
+		assertNull(BossDefence.matchingNpc(11758, "Tumeken's Warden"));
+
+		assertEquals(BossDefence.ELIDINIS_WARDEN, BossDefence.matchingNpc(11761, "Elidinis' Warden"));
+		assertEquals(BossDefence.ELIDINIS_WARDEN, BossDefence.matchingNpc(11763, "Elidinis' Warden"));
+		assertEquals(BossDefence.TUMEKENS_WARDEN, BossDefence.matchingNpc(11762, "Tumeken's Warden"));
+		assertEquals(BossDefence.TUMEKENS_WARDEN, BossDefence.matchingNpc(11764, "Tumeken's Warden"));
 	}
 
 	@Test
@@ -190,11 +206,25 @@ public class DefenceTrackerParityTest
 		assertEquals(217, tracker.state().getCurrent());
 		tracker.queue(SpecialWeapon.ACCURSED_SCEPTRE, 7, 1, WORLD);
 		tracker.onGameTick();
-		assertEquals(184, tracker.state().getCurrent());
+		// Corp is already below Condemn's 15%-from-base Defence target (263),
+		// so Condemn must not reduce Defence farther. It still reduces Magic to 85%.
+		assertEquals(217, tracker.state().getCurrent());
 		assertEquals(297, field(tracker, "magicLevel"));
 		tracker.queue(SpecialWeapon.ACCURSED_SCEPTRE, 7, 1, WORLD);
 		tracker.onGameTick();
-		assertEquals(184, tracker.state().getCurrent());
+		assertEquals(217, tracker.state().getCurrent());
+	}
+
+	@Test
+	public void condemnFreshTargetStopsAtFifteenPercentFromBase() throws Exception
+	{
+		fakeNpc("Callisto", 8);
+		DefenceTracker tracker = makeTracker();
+		tracker.queue(SpecialWeapon.ACCURSED_SCEPTRE, 8, 1, WORLD);
+		tracker.onGameTick();
+
+		assertEquals(191, tracker.state().getCurrent());
+		assertEquals(119, field(tracker, "magicLevel"));
 	}
 
 	@Test
