@@ -54,7 +54,7 @@ public class DefenceTracker
 
 	private static final int DWH_DRAIN_PCT = 30;
 	private static final int ELDER_MAUL_DRAIN_PCT = 35;
-	/** Condemn leaves 85% of the levels it touches, applied to the current values rather than the base. */
+	/** Condemn cannot lower Defence/Magic more than 15% below their encounter starting levels. */
 	private static final int CONDEMN_KEEPS_PCT = 85;
 	private static final int ARCLIGHT_DRAIN_PCT = 5;
 	private static final int ARCLIGHT_DEMON_DRAIN_PCT = 10;
@@ -71,6 +71,16 @@ public class DefenceTracker
 	private static final int YAMA_MAGIC_DEF_PHASE_3 = 81;
 	/** NPC health ratios are on a 0..255 scale; phase 3 starts at one third HP. */
 	private static final int YAMA_PHASE_3_MAX_HEALTH_RATIO = 85;
+
+	// Zulrah's Magic-defence bonus changes with the live NPC form. Soul Rend (Eye of ayak)
+	// carries its drain into later form changes, so a drain landed on serpentine/magma must be
+	// remembered and applied when tanzanite (+300) appears.
+	private static final int ZULRAH_SERPENTINE_ID = 2042;
+	private static final int ZULRAH_MAGMA_ID = 2043;
+	private static final int ZULRAH_TANZANITE_ID = 2044;
+	private static final int ZULRAH_MAGIC_DEF_SERPENTINE = -45;
+	private static final int ZULRAH_MAGIC_DEF_MAGMA = 0;
+	private static final int ZULRAH_MAGIC_DEF_TANZANITE = 300;
 
 	private static final Comparator<Drain> SAME_TICK_DRAIN_ORDER = Comparator
 		.comparingInt((Drain d) -> sameTickPriority(d.getWeapon()))
@@ -443,6 +453,7 @@ public class DefenceTracker
 			{
 				handlePhaseNpc(npc);
 				refreshYamaMagicDefence(npc);
+				refreshZulrahMagicDefence(npc);
 				if (bossIndex != -1 && (npc.isDead() || npc.getHealthRatio() == 0))
 				{
 					BossMechanics mechanics = BossMechanics.forBoss(bossType);
@@ -619,6 +630,7 @@ public class DefenceTracker
 		sotetsegEncounterState = boss == BossDefence.SOTETSEG
 			? client.getVarbitValue(VarbitID.TOB_CLIENT_WAVEPROGRESS_TYPE) : -1;
 		initializeStats(boss);
+		refreshZulrahMagicDefence(npc);
 		saveCurrent();
 		log.debug("Tracking supported NPC '{}' index={} id={} baseDef={} floor={}",
 			bossName, bossIndex, bossNpcId, bossStartDef, minDef);
@@ -692,6 +704,8 @@ public class DefenceTracker
 		log.debug("Rebound {} encounter npc {}:{} -> {}:{} without clearing defence",
 			bossType, oldIndex, oldId, bossIndex, bossNpcId);
 		handlePhaseNpc(npc);
+		refreshYamaMagicDefence(npc);
+		refreshZulrahMagicDefence(npc);
 		saveCurrent();
 	}
 
@@ -1063,16 +1077,24 @@ public class DefenceTracker
 				break;
 			case EYE_OF_AYAK:
 				// Soul Rend drains Magic Defence by damage dealt and cannot push a positive
-				// bonus below 0. Yama is special: the drain is latent while his stance is -30
-				// and must carry forward when he changes to +60 / +81.
+				// bonus below 0. Yama and Zulrah are special: the drain can be latent while
+				// their current stance/form has <= 0 Magic Defence, and must carry forward
+				// when the live bonus later becomes positive.
 				if (hit > 0)
 				{
 					if (bossType == BossDefence.YAMA)
 					{
 						long stanceBase = currentYamaMagicDefenceBase(npc);
 						magicStartDefBonus = stanceBase;
-						magicDefBonus = yamaMagicDefenceAfterAyak(
-							stanceBase, totalYamaAyakDrain() + hit);
+						magicDefBonus = dynamicMagicDefenceAfterAyak(
+							stanceBase, totalAyakDrain() + hit);
+					}
+					else if (bossType == BossDefence.ZULRAH)
+					{
+						long formBase = currentZulrahMagicDefenceBase(npc);
+						magicStartDefBonus = formBase;
+						magicDefBonus = dynamicMagicDefenceAfterAyak(
+							formBase, totalAyakDrain() + hit);
 					}
 					else if (magicDefBonus > 0)
 					{
@@ -1102,14 +1124,77 @@ public class DefenceTracker
 		}
 
 		long stanceBase = currentYamaMagicDefenceBase(npc);
-		long ayakDrain = totalYamaAyakDrain();
-		long updated = yamaMagicDefenceAfterAyak(stanceBase, ayakDrain);
+		long ayakDrain = totalAyakDrain();
+		long updated = dynamicMagicDefenceAfterAyak(stanceBase, ayakDrain);
 		if (magicStartDefBonus != stanceBase || magicDefBonus != updated)
 		{
 			log.debug("Yama Magic Defence stance {} -> {}, Ayak drain={}, current={}",
 				magicStartDefBonus, stanceBase, ayakDrain, updated);
 			magicStartDefBonus = stanceBase;
 			magicDefBonus = updated;
+		}
+	}
+
+	/**
+	 * Keep Zulrah's Magic Defence aligned with the live form while preserving cumulative Eye of
+	 * ayak drain. Serpentine is -45, magma is 0, and tanzanite is +300. A Soul Rend which lands
+	 * while the current form has no drainable positive bonus is still remembered and becomes
+	 * visible when Zulrah changes into tanzanite form.
+	 */
+	private void refreshZulrahMagicDefence(NPC npc)
+	{
+		if (bossType != BossDefence.ZULRAH || npc == null)
+		{
+			return;
+		}
+
+		long formBase = currentZulrahMagicDefenceBase(npc);
+		long ayakDrain = totalAyakDrain();
+		long updated = dynamicMagicDefenceAfterAyak(formBase, ayakDrain);
+		if (magicStartDefBonus != formBase || magicDefBonus != updated)
+		{
+			log.debug("Zulrah Magic Defence form id={} base={} Ayak drain={} current={}",
+				npc.getId(), formBase, ayakDrain, updated);
+			magicStartDefBonus = formBase;
+			magicDefBonus = updated;
+		}
+	}
+
+	private long currentZulrahMagicDefenceBase(NPC npc)
+	{
+		if (npc != null)
+		{
+			long mapped = zulrahMagicDefenceBaseForNpcId(npc.getId());
+			if (mapped != Long.MIN_VALUE)
+			{
+				return mapped;
+			}
+		}
+
+		// Unknown/transient actor: preserve whichever real form was last observed instead of
+		// snapping the display back to the enum's neutral placeholder.
+		if (magicStartDefBonus == ZULRAH_MAGIC_DEF_SERPENTINE
+			|| magicStartDefBonus == ZULRAH_MAGIC_DEF_MAGMA
+			|| magicStartDefBonus == ZULRAH_MAGIC_DEF_TANZANITE)
+		{
+			return magicStartDefBonus;
+		}
+		return ZULRAH_MAGIC_DEF_MAGMA;
+	}
+
+	/** Package-visible for regression tests. Long.MIN_VALUE means "not a Zulrah form". */
+	static long zulrahMagicDefenceBaseForNpcId(int npcId)
+	{
+		switch (npcId)
+		{
+			case ZULRAH_SERPENTINE_ID:
+				return ZULRAH_MAGIC_DEF_SERPENTINE;
+			case ZULRAH_MAGMA_ID:
+				return ZULRAH_MAGIC_DEF_MAGMA;
+			case ZULRAH_TANZANITE_ID:
+				return ZULRAH_MAGIC_DEF_TANZANITE;
+			default:
+				return Long.MIN_VALUE;
 		}
 	}
 
@@ -1182,7 +1267,7 @@ public class DefenceTracker
 			|| name.contains("eye of ayak");
 	}
 
-	private long totalYamaAyakDrain()
+	private long totalAyakDrain()
 	{
 		long total = 0;
 		for (SpecHistoryEntry entry : specHistory)
@@ -1195,10 +1280,10 @@ public class DefenceTracker
 		return total;
 	}
 
-	static long yamaMagicDefenceAfterAyak(long stanceBase, long totalAyakDrain)
+	static long dynamicMagicDefenceAfterAyak(long stanceBase, long totalAyakDrain)
 	{
-		// A negative stance is a base stat, not a drainable value below zero. Preserve it while
-		// banking the Ayak drain for the next positive stance (+60 or +81).
+		// A non-positive stance/form is a base stat, not a drainable value below zero. Preserve it
+		// while banking the Ayak drain for the next positive stance/form.
 		if (stanceBase <= 0)
 		{
 			return stanceBase;
@@ -1539,6 +1624,7 @@ public class DefenceTracker
 			apply(new Drain(entry.getWeapon(), bossIndex, entry.getHit(), client.getWorld(), entry.getPlayerName()));
 		}
 		refreshYamaMagicDefence(localNpc);
+		refreshZulrahMagicDefence(localNpc);
 		saveCurrent();
 		pending.clear();
 		clearHeld();
@@ -1643,9 +1729,10 @@ public class DefenceTracker
 		if (localNpc != null)
 		{
 			unboundTracked.remove(bossType);
-			// The peer may currently see a different Yama stance. Reapply the shared Ayak history
-			// to this client's locally rendered stance before exposing the synced value.
+			// The peer may currently see a different Yama stance (or, conceptually, a different
+			// Zulrah form). Reapply shared Ayak history to the local live actor before exposing it.
 			refreshYamaMagicDefence(localNpc);
+			refreshZulrahMagicDefence(localNpc);
 		}
 		saveCurrent();
 		pending.clear();

@@ -221,9 +221,27 @@ class LocalDefenceSpecDetector
 		}
 		else if (tick > hitsplatTick)
 		{
-			log.debug("Local defence spec timed out waiting for hitsplat: {}", weapon);
+			// Magic attacks can splash without producing a HitsplatApplied event. For the two
+			// supported magic special attacks, the spent special energy + armed target is enough
+			// to know the attempt occurred, so preserve it as a 0-hit miss for the Magic info-box
+			// history instead of silently dropping it.
+			if (recordsSplashAsMiss(weapon))
+			{
+				log.debug("Local magic defence spec splashed with no hitsplat: {}", weapon);
+				record(weapon, 0, target);
+			}
+			else
+			{
+				log.debug("Local defence spec timed out waiting for hitsplat: {}", weapon);
+			}
 			clearPending();
 		}
+	}
+
+	/** Supported Magic attacks which can splash without a 0-damage hitsplat event. */
+	static boolean recordsSplashAsMiss(SpecialWeapon used)
+	{
+		return used == SpecialWeapon.EYE_OF_AYAK || used == SpecialWeapon.ACCURSED_SCEPTRE;
 	}
 
 	private void record(SpecialWeapon used, int rawHit, NPC npc)
