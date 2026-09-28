@@ -996,20 +996,34 @@ public class BetterPartyDefencePlugin extends Plugin
 	}
 
 	/**
-	 * A concrete dead NPC is authoritative for non-raid encounters. The tracker already removed
-	 * its local state; this method atomically invalidates the remaining sync/history metadata and
-	 * tells BPD peers so an older, longer spec history cannot be restored onto the respawn.
+	 * A concrete terminal boss death is authoritative for the logical kill which just ended.
+	 * The tracker has already removed that actor/state; invalidate the matching sync/history
+	 * metadata too so a peer cannot re-attach an older, longer history to the next spawn.
+	 *
+	 * <p>ToA is deliberately included here even though the surrounding raid instance continues:
+	 * Ba-Ba/Zebak/Akkha/Kephri/Wardens are separate boss kills, so their spec history must end
+	 * with that kill. Player deaths/runbacks do not enter this path, and phase-persistent actors
+	 * such as Kephri shield phases are filtered by {@link BossMechanics} before an ended boss is
+	 * emitted. CoX/ToB keep their existing raid-specific lifecycle rules.
 	 */
 	private void reconcileAuthoritativeNpcDeaths()
 	{
 		for (BossDefence boss : defenceTracker.consumeEndedBosses())
 		{
-			if (boss == null || isRaidEncounterBoss(boss))
+			if (!shouldBroadcastAuthoritativeNpcDeath(boss))
 			{
 				continue;
 			}
-			resetEncounterAndBroadcast(boss, currentEncounterScope(), "local NPC death");
+
+			SyncScope scope = isToaBoss(boss) ? currentRaidScopeForBoss(boss) : currentEncounterScope();
+			resetEncounterAndBroadcast(boss, scope, "local boss kill ended");
 		}
+	}
+
+	/** Package-visible for regression tests. */
+	static boolean shouldBroadcastAuthoritativeNpcDeath(BossDefence boss)
+	{
+		return boss != null && (!isRaidEncounterBoss(boss) || isToaBoss(boss));
 	}
 
 	/**

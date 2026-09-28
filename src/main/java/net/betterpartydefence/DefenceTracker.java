@@ -725,7 +725,16 @@ public class DefenceTracker
 		BossMechanics mechanics = BossMechanics.forBoss(bossType);
 		if (mechanics.endsEncounterOnActorEntry(bossNpcId))
 		{
+			// Some encounters expose a terminal/dead actor instead of letting the previous actor
+			// naturally report a normal death. Preserve that terminal signal across reset() so the
+			// plugin can broadcast an encounter reset and peers cannot carry this kill's history
+			// into the next spawn. Kephri's shield/weak zero-HP actors never reach this branch.
+			BossDefence endedBoss = bossType;
 			reset("boss final phase ended");
+			if (endedBoss != null)
+			{
+				endedBosses.add(endedBoss);
+			}
 			return;
 		}
 		if (bossType == BossDefence.KEPHRI

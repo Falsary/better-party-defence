@@ -111,6 +111,29 @@ public class DefenceTrackerParityTest
 		assertEquals(BossDefence.TUMEKENS_WARDEN, BossDefence.matchingNpc(11764, "Tumeken's Warden"));
 	}
 
+
+	@Test
+	public void authoritativeDeathResetPolicyIncludesToaKillsButNotOtherRaidLifecycles()
+	{
+		assertTrue(BetterPartyDefencePlugin.shouldBroadcastAuthoritativeNpcDeath(BossDefence.GIANT_MOLE));
+		assertTrue(BetterPartyDefencePlugin.shouldBroadcastAuthoritativeNpcDeath(BossDefence.BA_BA));
+		assertTrue(BetterPartyDefencePlugin.shouldBroadcastAuthoritativeNpcDeath(BossDefence.KEPHRI));
+		assertFalse(BetterPartyDefencePlugin.shouldBroadcastAuthoritativeNpcDeath(BossDefence.TEKTON));
+		assertFalse(BetterPartyDefencePlugin.shouldBroadcastAuthoritativeNpcDeath(BossDefence.SOTETSEG));
+	}
+
+	@Test
+	public void kephriTerminalActorPublishesEndedEncounterSignal()
+	{
+		fakeNpc("Kephri", 77, NpcID.TOA_KEPHRI_BOSS_DEAD);
+		DefenceTracker tracker = makeTracker();
+		tracker.queue(SpecialWeapon.DRAGON_WARHAMMER, 77, 1, WORLD, "Tester");
+		tracker.onGameTick();
+
+		assertFalse(tracker.hasRememberedState(BossDefence.KEPHRI));
+		assertTrue(tracker.consumeEndedBosses().contains(BossDefence.KEPHRI));
+	}
+
 	@Test
 	public void supportedWeaponFilterIsDefenceOnly()
 	{
@@ -246,6 +269,65 @@ public class DefenceTrackerParityTest
 		tracker.onGameTick();
 		assertEquals(120, field(tracker, "magicDefBonus"));
 		assertEquals(310, tracker.state().getCurrent());
+	}
+
+	@Test
+	public void eyeOfAyakMissIsKeptInMagicHistory()
+	{
+		fakeNpc("Corporeal Beast", 7);
+		DefenceTracker tracker = makeTracker();
+		tracker.queue(SpecialWeapon.EYE_OF_AYAK, 7, 0, WORLD, "Mage");
+		tracker.onGameTick();
+
+		assertFalse(tracker.hasDefenceSpecHistory());
+		assertTrue(tracker.hasMagicDefenceSpecHistory());
+		assertEquals(1, tracker.specHistory().size());
+		assertEquals(0, tracker.specHistory().get(0).getHit());
+	}
+
+	@Test
+	public void supportedMagicSplashesAreRecognizedAsMissAttempts()
+	{
+		assertTrue(LocalDefenceSpecDetector.recordsSplashAsMiss(SpecialWeapon.EYE_OF_AYAK));
+		assertTrue(LocalDefenceSpecDetector.recordsSplashAsMiss(SpecialWeapon.ACCURSED_SCEPTRE));
+		assertFalse(LocalDefenceSpecDetector.recordsSplashAsMiss(SpecialWeapon.SEERCULL));
+		assertFalse(LocalDefenceSpecDetector.recordsSplashAsMiss(SpecialWeapon.DRAGON_WARHAMMER));
+	}
+
+	@Test
+	public void zulrahMagicDefenceUsesLiveFormAndBanksAyakDrain()
+	{
+		assertEquals(-45, DefenceTracker.zulrahMagicDefenceBaseForNpcId(2042));
+		assertEquals(0, DefenceTracker.zulrahMagicDefenceBaseForNpcId(2043));
+		assertEquals(300, DefenceTracker.zulrahMagicDefenceBaseForNpcId(2044));
+
+		// A 50 Soul Rend landed while Zulrah has <= 0 Magic Defence is latent; when the
+		// +300 tanzanite form appears, that same persistent drain makes it +250.
+		assertEquals(-45, DefenceTracker.dynamicMagicDefenceAfterAyak(-45, 50));
+		assertEquals(0, DefenceTracker.dynamicMagicDefenceAfterAyak(0, 50));
+		assertEquals(250, DefenceTracker.dynamicMagicDefenceAfterAyak(300, 50));
+	}
+
+	@Test
+	public void zulrahAyakDrainCarriesFromSerpentineIntoTanzaniteForm()
+	{
+		fakeNpc("Zulrah", 70, 2042);
+		DefenceTracker tracker = makeTracker();
+		tracker.queue(SpecialWeapon.EYE_OF_AYAK, 70, 50, WORLD, "Mage");
+		tracker.onGameTick();
+
+		assertEquals(-45, tracker.state().getMagicBaseDef());
+		assertEquals(-45, tracker.state().getMagicDef());
+		assertEquals(1, tracker.specHistory().size());
+
+		removeNpc(70);
+		fakeNpc("Zulrah", 71, 2044);
+		tracker.onGameTick();
+
+		assertEquals(71, tracker.state().getNpcIndex());
+		assertEquals(300, tracker.state().getMagicBaseDef());
+		assertEquals(250, tracker.state().getMagicDef());
+		assertEquals(1, tracker.specHistory().size());
 	}
 
 	@Test
