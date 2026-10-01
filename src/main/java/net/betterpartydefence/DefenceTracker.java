@@ -21,6 +21,7 @@ import net.runelite.api.NPC;
 import net.runelite.api.Player;
 import net.runelite.api.PlayerComposition;
 import net.runelite.api.WorldView;
+import net.runelite.api.gameval.NpcID;
 import net.runelite.api.gameval.VarbitID;
 import net.runelite.api.kit.KitType;
 import net.runelite.client.plugins.specialcounter.SpecialWeapon;
@@ -628,7 +629,7 @@ public class DefenceTracker
 		bossNpcId = npc == null ? -1 : npc.getId();
 		kephriFinalResetApplied = boss == BossDefence.KEPHRI && isKephriFinalPhaseId(bossNpcId);
 		sotetsegEncounterState = boss == BossDefence.SOTETSEG
-			? client.getVarbitValue(VarbitID.TOB_CLIENT_WAVEPROGRESS_TYPE) : -1;
+			? currentSotetsegEncounterState() : -1;
 		initializeStats(boss);
 		refreshZulrahMagicDefence(npc);
 		saveCurrent();
@@ -703,6 +704,12 @@ public class DefenceTracker
 		bossNpcId = npc.getId();
 		log.debug("Rebound {} encounter npc {}:{} -> {}:{} without clearing defence",
 			bossType, oldIndex, oldId, bossIndex, bossNpcId);
+		// HMT has separate Sotetseg combat/non-combat actor IDs. Use the non-combat
+		// actor swap as a fallback maze signal, while retaining the normal ToB varbit path.
+		if (bossType == BossDefence.SOTETSEG)
+		{
+			updateSotetsegEncounterState();
+		}
 		handlePhaseNpc(npc);
 		refreshYamaMagicDefence(npc);
 		refreshZulrahMagicDefence(npc);
@@ -754,7 +761,7 @@ public class DefenceTracker
 	 */
 	private void updateSotetsegEncounterState()
 	{
-		int state = client.getVarbitValue(VarbitID.TOB_CLIENT_WAVEPROGRESS_TYPE);
+		int state = currentSotetsegEncounterState();
 		if (sotetsegEncounterState == -1)
 		{
 			sotetsegEncounterState = state;
@@ -773,6 +780,28 @@ public class DefenceTracker
 			return;
 		}
 		sotetsegEncounterState = state;
+	}
+
+	/**
+	 * Normal ToB already resets from the wave-progress maze value. HMT has separate
+	 * non-combat Sotetseg actor IDs, so treat those actors as a fallback maze signal too.
+	 * Encounter-ended (0) always wins so an actor fallback cannot keep stale state alive.
+	 */
+	private int currentSotetsegEncounterState()
+	{
+		int state = client.getVarbitValue(VarbitID.TOB_CLIENT_WAVEPROGRESS_TYPE);
+		if (state == 0)
+		{
+			return 0;
+		}
+		return isSotetsegNonCombatActor(bossNpcId) ? 2 : state;
+	}
+
+	private static boolean isSotetsegNonCombatActor(int npcId)
+	{
+		return npcId == NpcID.TOB_SOTETSEG_NONCOMBAT
+			|| npcId == NpcID.TOB_SOTETSEG_NONCOMBAT_STORY
+			|| npcId == NpcID.TOB_SOTETSEG_NONCOMBAT_HARD;
 	}
 
 	/**
@@ -1723,7 +1752,7 @@ public class DefenceTracker
 		drained = true;
 		kephriFinalResetApplied = bossType == BossDefence.KEPHRI && isKephriFinalPhaseId(bossNpcId);
 		sotetsegEncounterState = bossType == BossDefence.SOTETSEG
-			? client.getVarbitValue(VarbitID.TOB_CLIENT_WAVEPROGRESS_TYPE) : -1;
+			? currentSotetsegEncounterState() : -1;
 		yamaPhase3 = bossType == BossDefence.YAMA
 			&& (sync.getMagicBaseDef() == YAMA_MAGIC_DEF_PHASE_3
 				|| (localNpc != null && localNpc.getHealthRatio() > 0

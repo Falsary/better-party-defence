@@ -551,6 +551,40 @@ public class DefenceTrackerParityTest
 	}
 
 	@Test
+	public void sotetsegHardModeMazeActorRestoresDefenceWhenVarbitStaysCombat()
+	{
+		// Simulate an HMT maze actor swap without relying on the normal maze varbit value.
+		// The hard-mode non-combat actor must be enough to restore stats exactly once.
+		when(client.getVarbitValue(VarbitID.TOB_CLIENT_WAVEPROGRESS_TYPE)).thenReturn(1);
+		fakeNpc("Sotetseg", 40, NpcID.TOB_SOTETSEG_COMBAT_HARD);
+		DefenceTracker tracker = makeTracker();
+		tracker.queue(SpecialWeapon.DRAGON_WARHAMMER, 40, 1, WORLD, "Before HMT maze");
+		tracker.onGameTick();
+		assertEquals(140, tracker.state().getCurrent());
+		assertEquals(1, tracker.specHistoryForCurrentTarget(40).size());
+
+		removeNpc(40);
+		fakeNpc("Sotetseg", 41, NpcID.TOB_SOTETSEG_NONCOMBAT_HARD);
+		tracker.onGameTick();
+		assertEquals(41, tracker.state().getNpcIndex());
+		assertEquals(200, tracker.state().getCurrent());
+		assertTrue(tracker.specHistoryForCurrentTarget(41).isEmpty());
+		assertTrue(tracker.specHistoryForCurrentTarget(40).isEmpty());
+
+		removeNpc(41);
+		fakeNpc("Sotetseg", 42, NpcID.TOB_SOTETSEG_COMBAT_HARD);
+		tracker.onGameTick();
+		assertEquals(42, tracker.state().getNpcIndex());
+		assertEquals(200, tracker.state().getCurrent());
+		assertTrue(tracker.specHistoryForCurrentTarget(42).isEmpty());
+
+		tracker.queue(SpecialWeapon.DRAGON_WARHAMMER, 42, 1, WORLD, "After HMT maze");
+		tracker.onGameTick();
+		assertEquals(140, tracker.state().getCurrent());
+		assertEquals(1, tracker.specHistoryForCurrentTarget(42).size());
+	}
+
+	@Test
 	public void coxPartyScaling()
 	{
 		when(client.getVarbitValue(VarbitID.RAIDS_CLIENT_INDUNGEON)).thenReturn(1);
