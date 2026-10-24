@@ -4,6 +4,7 @@ import java.util.Arrays;
 import java.util.EnumSet;
 import java.util.Set;
 import lombok.Getter;
+import net.runelite.api.NPC;
 import net.runelite.client.util.Text;
 
 /**
@@ -28,6 +29,27 @@ import net.runelite.client.util.Text;
 public enum BossDefence
 {
 	// name, Defence, Magic, Attack, Strength, magic-def bonus, Defence floor, flags
+	// TFA combat levels and magic-defence bonuses from the OSRS Wiki NPC infoboxes,
+	// checked against Jagex's 21 October 2026 Defence-cap hotfix.
+	// 60% OF BASE Defence is retained by capped bosses; the uncapped bosses reach 0.
+	TFA_ARCHIVE_GUARDIAN("Archive Guardian", 260, 250, 250, 240, 130, 156, Flag.TFA),
+	TFA_EZEKIEL("Ezekiel", 130, 200, 250, 150, 200, 78, Flag.TFA),
+	TFA_BORK("Bork", 300, 90, 200, 200, 300, 180, Flag.TFA),
+	TFA_SMORKS("The Smorks", 220, 185, 1, 1, 400, 0, Flag.TFA),
+	TFA_MOIA("Moia", 195, 350, 1, 1, 30, 117, Flag.TFA),
+	TFA_DREADNOTH("Dreadnoth the Jellied", 125, 220, 280, 285, 20, 0, Flag.TFA, Flag.DEMON),
+	TFA_XARTH("Xarth", 170, 350, 250, 225, 205, 102, Flag.TFA, Flag.DEMON),
+	TFA_DAGONHAI_ELDER("Dagon'hai Elder", 100, 290, 1, 1, 100, 0, Flag.TFA),
+	// Both monks have the same in-game name, but are independent NPCs and must
+	// NEVER share a party-sync history or a Defence pool. NPC IDs from OSRS Wiki.
+	TFA_DAGONHAI_MONK_16645("Dagon'hai Monk (16645)", 100, 290, 1, 1, 100, 0, Flag.TFA),
+	TFA_DAGONHAI_MONK_16646("Dagon'hai Monk (16646)", 100, 290, 1, 1, 100, 0, Flag.TFA),
+	// Ocellus P1 and P3 use distinct combat stat blocks, and P3 never resets at
+	// quadrant changes after Jagex's 21 October hotfix. P2 is NOT guessed: the
+	// strategy table mentions a 250/0 Blade, but does not establish a trackable
+	// attackable NPC identity or its Magic/Attack/Strength stats.
+	TFA_OCELLUS_P1("Ocellus (Phase 1)", 215, 350, 1, 1, 100, 129, Flag.TFA, Flag.DEMON),
+	TFA_OCELLUS_P3("Ocellus (Phase 3)", 250, 300, 325, 250, 200, 150, Flag.TFA, Flag.DEMON),
 	ABYSSAL_PORTAL("Abyssal portal", 176, 176, 1, 1, 60, 0, Flag.COX_SCALED, Flag.COX_MAGIC_IS_DEFENSIVE),
 	// The Sire's magic-def bonus drops to -40 once it's stunned in phase 3; 20 covers the rest.
 	ABYSSAL_SIRE("Abyssal Sire", 250, 200, 180, 136, 20, 0, Flag.DEMON),
@@ -35,7 +57,6 @@ public enum BossDefence
 	AKKHAS_SHADOW("Akkha's Shadow", 30, 100, 100, 140, 10, 0),
 	ALCHEMICAL_HYDRA("Alchemical Hydra", 100, 260, 100, 100, 150, 0),
 	ARAXXOR("Araxxor", 135, 190, 320, 320, 237, 90),
-	BRANDA_THE_FIRE_QUEEN("Branda the Fire Queen", 100, 100, 300, 250, 700, 0),
 	ARTIO("Artio", 150, 90, 250, 270, 0, 0),
 	BA_BA("Ba-Ba", 80, 100, 150, 160, 280, 60),
 	CALLISTO("Callisto", 225, 140, 350, 300, 0, 0),
@@ -43,15 +64,16 @@ public enum BossDefence
 	CERBERUS("Cerberus", 100, 220, 220, 220, 65, 0),
 	CHAOS_ELEMENTAL("Chaos Elemental", 270, 270, 270, 270, 70, 0),
 	COMMANDER_ZILYANA("Commander Zilyana", 300, 300, 280, 196, 100, 0),
+	// The ejected warden core attacked in Wardens phase 2.
+	CORE("<col=00ffff>Core</col>", 100, 190, 300, 150, -30, 0),
 	CORPOREAL_BEAST("Corporeal Beast", 310, 350, 320, 320, 150, 0),
 	DAGANNOTH_PRIME("Dagannoth Prime", 255, 255, 255, 255, 255, 0),
 	DAGANNOTH_REX("Dagannoth Rex", 255, 0, 255, 255, 10, 0),
 	DAGANNOTH_SUPREME("Dagannoth Supreme", 128, 255, 255, 255, 255, 0),
 	DEATHLY_MAGE("Deathly mage", 155, 210, 1, 1, 0, 0, Flag.COX_SCALED),
 	DEATHLY_RANGER("Deathly ranger", 155, 155, 1, 1, 0, 0, Flag.COX_SCALED, Flag.COX_MAGIC_IS_DEFENSIVE),
-	// Wardens phase 3 only. Phase-2 Warden actors are filtered by NPC id in matchingNpc().
+	// Wardens phase 3 (the drainable one); the phase-2 core is tracked as CORE.
 	ELIDINIS_WARDEN("Elidinis' Warden", 150, 150, 150, 150, 20, 120),
-	ELDRIC_THE_ICE_KING("Eldric the Ice King", 100, 100, 300, 250, 700, 0),
 	GENERAL_GRAARDOR("General Graardor", 250, 80, 280, 350, 298, 0),
 	GIANT_MOLE("Giant Mole", 200, 200, 200, 200, 80, 0),
 	GREAT_OLM("Great Olm", 150, 250, 250, 250, 200, 0, Flag.COX_SCALED),
@@ -90,15 +112,16 @@ public enum BossDefence
 	TUMEKENS_WARDEN("Tumeken's Warden", 150, 150, 150, 150, 20, 120),
 	TZKAL_ZUK("TzKal-Zuk", 260, 150, 350, 600, 350, 0),
 	TZTOK_JAD("TzTok-Jad", 480, 480, 640, 960, 0, 0),
+	// Vardorvis has no Defence level at all, so only his magic defence can move.
+	VARDORVIS("Vardorvis", 0, 215, 280, 0, 580, 0),
 	VASA("Vasa Nistirio", 175, 230, 1, 1, 400, 0, Flag.COX_SCALED),
 	VENENATIS("Venenatis", 321, 300, 300, 200, 300, 0),
+	// Phase 3 (the long damage phase); Verzik ignores defence drains entirely, hence the floor.
+	VERZIK_VITUR("Verzik Vitur", 150, 300, 400, 400, 100, 150, Flag.MAGIC_USES_DEFENCE),
 	VETION("Vet'ion", 395, 300, 430, 430, 250, 0),
 	VORKATH("Vorkath", 214, 150, 560, 308, 240, 0),
 	XARPUS("Xarpus", 250, 220, 1, 1, 0, 0),
-	// Yama is stance-dependent: -30 Magic Defence normally, +60 after his primary target
-	// attacks with magic in phases 1/2, and +81 in phase 3. DefenceTracker applies those
-	// live stance changes while preserving Eye of ayak drain across them.
-	YAMA("Yama", 225, 250, 320, 350, -30, 145, Flag.DEMON),
+	YAMA("Yama", 225, 250, 320, 350, 0, 145, Flag.DEMON),
 	ZEBAK("Zebak", 70, 100, 250, 140, 200, 50),
 	// Zulrah's magic-def bonus is form-dependent (-45 serpentine, 0 magma, 300 tanzanite); using 0.
 	// A single-value entry can't follow the rotation, so the Eye of ayak drain won't read exactly per form.
@@ -114,6 +137,8 @@ public enum BossDefence
 		COX_SCALED,
 		/** Takes a smaller Challenge Mode defensive bump than the rest of CoX (Tekton). */
 		COX_CM_SMALL_DEFENCE_BUMP,
+		/** A boss in The Fractured Archive (Raids 4). */
+		TFA,
 		/** A demon, so the arclight family drains it harder. */
 		DEMON
 	}
@@ -146,28 +171,50 @@ public enum BossDefence
 	}
 
 	/**
-	 * Match a concrete NPC actor. Wardens reuse the same visible names in phases 2 and 3,
-	 * but only the phase-3 actors use the normal drainable Defence model represented here.
-	 * Keep name-only matching for saved/synchronised logical state, and use this method whenever
-	 * a live NPC is available.
+	 * Phase-specific and same-name actor identification must use the real NPC
+	 * rather than rendered visibility or the NPC name alone. In particular,
+	 * both Dagon'hai monks have independent Defence pools, and the Ocellus
+	 * hooded NPC and unverified noncombat forms must not acquire combat stats.
 	 */
-	public static BossDefence matchingNpc(int npcId, String name)
+	public static BossDefence matchingNpc(NPC npc)
 	{
-		BossDefence boss = matchingNpcName(name);
-		if (boss == ELIDINIS_WARDEN)
+		if (npc == null || npc.getName() == null)
 		{
-			return npcId == 11761 || npcId == 11763 ? boss : null;
+			return null;
 		}
-		if (boss == TUMEKENS_WARDEN)
+		String name = Text.removeTags(npc.getName()).trim();
+		if ("Dagon'hai Monk".equalsIgnoreCase(name))
 		{
-			return npcId == 11762 || npcId == 11764 ? boss : null;
+			if (npc.getId() == 16645)
+			{
+				return TFA_DAGONHAI_MONK_16645;
+			}
+			if (npc.getId() == 16646)
+			{
+				return TFA_DAGONHAI_MONK_16646;
+			}
+			return null; // Unknown monk actors must not share either monk's state.
 		}
-		return boss;
+		if ("Ocellus".equalsIgnoreCase(name))
+		{
+			// Wiki infobox and later combat-level corrections disagree between
+			// 1197 and 1601. Both distinguish the combat P3 NPC from P1 (1121).
+			if (npc.getCombatLevel() == 1197 || npc.getCombatLevel() == 1601)
+			{
+				return TFA_OCELLUS_P3;
+			}
+			if (npc.getId() == 16673 || npc.getId() == 16674)
+			{
+				return TFA_OCELLUS_P1;
+			}
+			return null; // P2/unknown or non-combat hooded forms: fail closed.
+		}
+		return matchingNpcName(name);
 	}
 
 	/**
-	 * The entry for an in-game NPC name. Exact first, then a word-boundary prefix so a
-	 * phase suffix the table doesn't list still matches its base entry (e.g. "Vet'ion Reborn").
+	 * Name-only matching for other callers. Ambiguous TFA names intentionally
+	 * require {@link #matchingNpc(NPC)} so no monk or Ocellus phase is guessed.
 	 */
 	public static BossDefence matchingNpcName(String name)
 	{

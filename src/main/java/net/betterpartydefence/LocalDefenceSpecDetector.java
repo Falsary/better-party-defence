@@ -58,7 +58,7 @@ class LocalDefenceSpecDetector
 	private NPC target;
 	private int hitsplatTick = -1;
 	private boolean hpChangedOnSpecCycle;
-	private final List<Hitsplat> hitsplats = new ArrayList<>();
+	private final List<Integer> hitsplats = new ArrayList<>();
 
 	@Inject
 	LocalDefenceSpecDetector(
@@ -142,7 +142,7 @@ class LocalDefenceSpecDetector
 		}
 
 		NPC npc = (NPC) interacting;
-		if (npc.getName() == null || BossDefence.matchingNpc(npc.getId(), npc.getName()) == null)
+		if (npc.getName() == null || BossDefence.matchingNpc(npc) == null)
 		{
 			log.debug("Local defence spec {} ignored: unsupported target {}", used, npc.getName());
 			return;
@@ -172,7 +172,7 @@ class LocalDefenceSpecDetector
 
 		if (client.getTickCount() == hitsplatTick)
 		{
-			hitsplats.add(splat);
+			hitsplats.add(splat.getAmount());
 		}
 	}
 
@@ -202,9 +202,12 @@ class LocalDefenceSpecDetector
 				{
 					return;
 				}
-				Hitsplat last = hitsplats.get(hitsplats.size() - 1);
-				Hitsplat previous = hitsplats.get(hitsplats.size() - 2);
-				int connected = Math.min(last.getAmount(), 1) + Math.min(previous.getAmount(), 1);
+				// RuneLite's upstream fix (PR #20377, merged 2026-10-20) establishes
+				// hitsplat delivery order: delayed weapon hits first, then thrall,
+				// Vengeance, and finally instant weapon hits. Ralos is delayed and
+				// produces two hitsplats. Never select the LAST two: those can be
+				// thrall damage, including when the thrall is hidden by Entity Hider.
+				int connected = RalosHitResolver.countConfirmedHits(hitsplats);
 				record(weapon, connected, target);
 			}
 			else
@@ -214,34 +217,16 @@ class LocalDefenceSpecDetector
 					return;
 				}
 				// The weapon hitsplat is the last mine hitsplat on the target for the expected tick.
-				int rawHit = hitsplats.get(hitsplats.size() - 1).getAmount();
+				int rawHit = hitsplats.get(hitsplats.size() - 1);
 				record(weapon, rawHit, target);
 			}
 			clearPending();
 		}
 		else if (tick > hitsplatTick)
 		{
-			// Magic attacks can splash without producing a HitsplatApplied event. For the two
-			// supported magic special attacks, the spent special energy + armed target is enough
-			// to know the attempt occurred, so preserve it as a 0-hit miss for the Magic info-box
-			// history instead of silently dropping it.
-			if (recordsSplashAsMiss(weapon))
-			{
-				log.debug("Local magic defence spec splashed with no hitsplat: {}", weapon);
-				record(weapon, 0, target);
-			}
-			else
-			{
-				log.debug("Local defence spec timed out waiting for hitsplat: {}", weapon);
-			}
+			log.debug("Local defence spec timed out waiting for hitsplat: {}", weapon);
 			clearPending();
 		}
-	}
-
-	/** Supported Magic attacks which can splash without a 0-damage hitsplat event. */
-	static boolean recordsSplashAsMiss(SpecialWeapon used)
-	{
-		return used == SpecialWeapon.EYE_OF_AYAK || used == SpecialWeapon.ACCURSED_SCEPTRE;
 	}
 
 	private void record(SpecialWeapon used, int rawHit, NPC npc)

@@ -32,7 +32,7 @@ public class BpdDefenceSync extends PartyMemberMessage
 	private int bossPlane;
 	private int healthPercent;
 	private long sentAtMillis;
-	/** Monotonic per-encounter logical state version used to reject stale peer snapshots. */
+	/** Logical snapshot version. Zero denotes a legacy sender with no version field. */
 	private long stateVersion;
 
 	private long current;
@@ -58,15 +58,9 @@ public class BpdDefenceSync extends PartyMemberMessage
 	{
 	}
 
-	public BpdDefenceSync(
-		int world,
-		SyncState state,
-		int scopeType,
-		int scopeId,
-		int bossX,
-		int bossY,
-		int bossPlane,
-		int healthPercent)
+	/** Retained for callers compiled against the original unversioned message. */
+	public BpdDefenceSync(int world, SyncState state, int scopeType, int scopeId,
+		int bossX, int bossY, int bossPlane, int healthPercent)
 	{
 		this(world, state, scopeType, scopeId, bossX, bossY, bossPlane, healthPercent, 0L);
 	}

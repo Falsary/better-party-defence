@@ -35,7 +35,20 @@ enum BossMechanics
 			return npcId == NpcID.TOA_KEPHRI_BOSS_DEAD;
 		}
 	},
-	SOTETSEG(true);
+	SOTETSEG(true),
+	/**
+	 * Boss actor changes/temporary zero-health during phases are not a raid reset.
+	 * P3 Ocellus must retain reductions over every quadrant (21 Oct hotfix).
+	 * Guard the live state until the authoritative raid exit/new-attempt reset.
+	 */
+	TFA_PHASE_PERSISTENT(true)
+	{
+		@Override
+		boolean preserveStateAtZeroHp(int npcId)
+		{
+			return true;
+		}
+	};
 
 	private final boolean phasePersistent;
 
@@ -73,6 +86,13 @@ enum BossMechanics
 		if (boss == BossDefence.SOTETSEG)
 		{
 			return SOTETSEG;
+		}
+		if (boss == BossDefence.TFA_ARCHIVE_GUARDIAN
+			|| boss == BossDefence.TFA_XARTH
+			|| boss == BossDefence.TFA_OCELLUS_P1
+			|| boss == BossDefence.TFA_OCELLUS_P3)
+		{
+			return TFA_PHASE_PERSISTENT;
 		}
 		return STANDARD;
 	}

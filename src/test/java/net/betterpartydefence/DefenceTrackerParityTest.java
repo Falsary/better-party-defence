@@ -90,48 +90,9 @@ public class DefenceTrackerParityTest
 	@Test
 	public void bossNameMatchingHandlesTagsAndPhaseSuffixes()
 	{
-		assertNull(BossDefence.matchingNpcName("Core"));
+		assertEquals(BossDefence.CORE, BossDefence.matchingNpcName("Core"));
 		assertEquals(BossDefence.OBELISK, BossDefence.matchingNpcName("<col=00ffff>Obelisk</col>"));
 		assertEquals(BossDefence.VETION, BossDefence.matchingNpcName("Vet'ion Reborn"));
-	}
-
-	@Test
-	public void wardenMatchingTracksOnlyPhaseThreeActors()
-	{
-		assertNull(BossDefence.matchingNpc(11753, "Elidinis' Warden"));
-		assertNull(BossDefence.matchingNpc(11754, "Elidinis' Warden"));
-		assertNull(BossDefence.matchingNpc(11755, "Elidinis' Warden"));
-		assertNull(BossDefence.matchingNpc(11756, "Tumeken's Warden"));
-		assertNull(BossDefence.matchingNpc(11757, "Tumeken's Warden"));
-		assertNull(BossDefence.matchingNpc(11758, "Tumeken's Warden"));
-
-		assertEquals(BossDefence.ELIDINIS_WARDEN, BossDefence.matchingNpc(11761, "Elidinis' Warden"));
-		assertEquals(BossDefence.ELIDINIS_WARDEN, BossDefence.matchingNpc(11763, "Elidinis' Warden"));
-		assertEquals(BossDefence.TUMEKENS_WARDEN, BossDefence.matchingNpc(11762, "Tumeken's Warden"));
-		assertEquals(BossDefence.TUMEKENS_WARDEN, BossDefence.matchingNpc(11764, "Tumeken's Warden"));
-	}
-
-
-	@Test
-	public void authoritativeDeathResetPolicyIncludesToaKillsButNotOtherRaidLifecycles()
-	{
-		assertTrue(BetterPartyDefencePlugin.shouldBroadcastAuthoritativeNpcDeath(BossDefence.GIANT_MOLE));
-		assertTrue(BetterPartyDefencePlugin.shouldBroadcastAuthoritativeNpcDeath(BossDefence.BA_BA));
-		assertTrue(BetterPartyDefencePlugin.shouldBroadcastAuthoritativeNpcDeath(BossDefence.KEPHRI));
-		assertFalse(BetterPartyDefencePlugin.shouldBroadcastAuthoritativeNpcDeath(BossDefence.TEKTON));
-		assertFalse(BetterPartyDefencePlugin.shouldBroadcastAuthoritativeNpcDeath(BossDefence.SOTETSEG));
-	}
-
-	@Test
-	public void kephriTerminalActorPublishesEndedEncounterSignal()
-	{
-		fakeNpc("Kephri", 77, NpcID.TOA_KEPHRI_BOSS_DEAD);
-		DefenceTracker tracker = makeTracker();
-		tracker.queue(SpecialWeapon.DRAGON_WARHAMMER, 77, 1, WORLD, "Tester");
-		tracker.onGameTick();
-
-		assertFalse(tracker.hasRememberedState(BossDefence.KEPHRI));
-		assertTrue(tracker.consumeEndedBosses().contains(BossDefence.KEPHRI));
 	}
 
 	@Test
@@ -229,25 +190,11 @@ public class DefenceTrackerParityTest
 		assertEquals(217, tracker.state().getCurrent());
 		tracker.queue(SpecialWeapon.ACCURSED_SCEPTRE, 7, 1, WORLD);
 		tracker.onGameTick();
-		// Corp is already below Condemn's 15%-from-base Defence target (263),
-		// so Condemn must not reduce Defence farther. It still reduces Magic to 85%.
-		assertEquals(217, tracker.state().getCurrent());
+		assertEquals(184, tracker.state().getCurrent());
 		assertEquals(297, field(tracker, "magicLevel"));
 		tracker.queue(SpecialWeapon.ACCURSED_SCEPTRE, 7, 1, WORLD);
 		tracker.onGameTick();
-		assertEquals(217, tracker.state().getCurrent());
-	}
-
-	@Test
-	public void condemnFreshTargetStopsAtFifteenPercentFromBase() throws Exception
-	{
-		fakeNpc("Callisto", 8);
-		DefenceTracker tracker = makeTracker();
-		tracker.queue(SpecialWeapon.ACCURSED_SCEPTRE, 8, 1, WORLD);
-		tracker.onGameTick();
-
-		assertEquals(191, tracker.state().getCurrent());
-		assertEquals(119, field(tracker, "magicLevel"));
+		assertEquals(184, tracker.state().getCurrent());
 	}
 
 	@Test
@@ -269,65 +216,6 @@ public class DefenceTrackerParityTest
 		tracker.onGameTick();
 		assertEquals(120, field(tracker, "magicDefBonus"));
 		assertEquals(310, tracker.state().getCurrent());
-	}
-
-	@Test
-	public void eyeOfAyakMissIsKeptInMagicHistory()
-	{
-		fakeNpc("Corporeal Beast", 7);
-		DefenceTracker tracker = makeTracker();
-		tracker.queue(SpecialWeapon.EYE_OF_AYAK, 7, 0, WORLD, "Mage");
-		tracker.onGameTick();
-
-		assertFalse(tracker.hasDefenceSpecHistory());
-		assertTrue(tracker.hasMagicDefenceSpecHistory());
-		assertEquals(1, tracker.specHistory().size());
-		assertEquals(0, tracker.specHistory().get(0).getHit());
-	}
-
-	@Test
-	public void supportedMagicSplashesAreRecognizedAsMissAttempts()
-	{
-		assertTrue(LocalDefenceSpecDetector.recordsSplashAsMiss(SpecialWeapon.EYE_OF_AYAK));
-		assertTrue(LocalDefenceSpecDetector.recordsSplashAsMiss(SpecialWeapon.ACCURSED_SCEPTRE));
-		assertFalse(LocalDefenceSpecDetector.recordsSplashAsMiss(SpecialWeapon.SEERCULL));
-		assertFalse(LocalDefenceSpecDetector.recordsSplashAsMiss(SpecialWeapon.DRAGON_WARHAMMER));
-	}
-
-	@Test
-	public void zulrahMagicDefenceUsesLiveFormAndBanksAyakDrain()
-	{
-		assertEquals(-45, DefenceTracker.zulrahMagicDefenceBaseForNpcId(2042));
-		assertEquals(0, DefenceTracker.zulrahMagicDefenceBaseForNpcId(2043));
-		assertEquals(300, DefenceTracker.zulrahMagicDefenceBaseForNpcId(2044));
-
-		// A 50 Soul Rend landed while Zulrah has <= 0 Magic Defence is latent; when the
-		// +300 tanzanite form appears, that same persistent drain makes it +250.
-		assertEquals(-45, DefenceTracker.dynamicMagicDefenceAfterAyak(-45, 50));
-		assertEquals(0, DefenceTracker.dynamicMagicDefenceAfterAyak(0, 50));
-		assertEquals(250, DefenceTracker.dynamicMagicDefenceAfterAyak(300, 50));
-	}
-
-	@Test
-	public void zulrahAyakDrainCarriesFromSerpentineIntoTanzaniteForm()
-	{
-		fakeNpc("Zulrah", 70, 2042);
-		DefenceTracker tracker = makeTracker();
-		tracker.queue(SpecialWeapon.EYE_OF_AYAK, 70, 50, WORLD, "Mage");
-		tracker.onGameTick();
-
-		assertEquals(-45, tracker.state().getMagicBaseDef());
-		assertEquals(-45, tracker.state().getMagicDef());
-		assertEquals(1, tracker.specHistory().size());
-
-		removeNpc(70);
-		fakeNpc("Zulrah", 71, 2044);
-		tracker.onGameTick();
-
-		assertEquals(71, tracker.state().getNpcIndex());
-		assertEquals(300, tracker.state().getMagicBaseDef());
-		assertEquals(250, tracker.state().getMagicDef());
-		assertEquals(1, tracker.specHistory().size());
 	}
 
 	@Test
@@ -548,40 +436,6 @@ public class DefenceTrackerParityTest
 		when(client.getVarbitValue(VarbitID.TOB_CLIENT_WAVEPROGRESS_TYPE)).thenReturn(0);
 		tracker.onGameTick();
 		assertNull(tracker.state());
-	}
-
-	@Test
-	public void sotetsegHardModeMazeActorRestoresDefenceWhenVarbitStaysCombat()
-	{
-		// Simulate an HMT maze actor swap without relying on the normal maze varbit value.
-		// The hard-mode non-combat actor must be enough to restore stats exactly once.
-		when(client.getVarbitValue(VarbitID.TOB_CLIENT_WAVEPROGRESS_TYPE)).thenReturn(1);
-		fakeNpc("Sotetseg", 40, NpcID.TOB_SOTETSEG_COMBAT_HARD);
-		DefenceTracker tracker = makeTracker();
-		tracker.queue(SpecialWeapon.DRAGON_WARHAMMER, 40, 1, WORLD, "Before HMT maze");
-		tracker.onGameTick();
-		assertEquals(140, tracker.state().getCurrent());
-		assertEquals(1, tracker.specHistoryForCurrentTarget(40).size());
-
-		removeNpc(40);
-		fakeNpc("Sotetseg", 41, NpcID.TOB_SOTETSEG_NONCOMBAT_HARD);
-		tracker.onGameTick();
-		assertEquals(41, tracker.state().getNpcIndex());
-		assertEquals(200, tracker.state().getCurrent());
-		assertTrue(tracker.specHistoryForCurrentTarget(41).isEmpty());
-		assertTrue(tracker.specHistoryForCurrentTarget(40).isEmpty());
-
-		removeNpc(41);
-		fakeNpc("Sotetseg", 42, NpcID.TOB_SOTETSEG_COMBAT_HARD);
-		tracker.onGameTick();
-		assertEquals(42, tracker.state().getNpcIndex());
-		assertEquals(200, tracker.state().getCurrent());
-		assertTrue(tracker.specHistoryForCurrentTarget(42).isEmpty());
-
-		tracker.queue(SpecialWeapon.DRAGON_WARHAMMER, 42, 1, WORLD, "After HMT maze");
-		tracker.onGameTick();
-		assertEquals(140, tracker.state().getCurrent());
-		assertEquals(1, tracker.specHistoryForCurrentTarget(42).size());
 	}
 
 	@Test

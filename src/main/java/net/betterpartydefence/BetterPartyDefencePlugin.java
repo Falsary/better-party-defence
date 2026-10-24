@@ -21,6 +21,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -28,6 +29,7 @@ import java.util.Set;
 import javax.swing.JFileChooser;
 import javax.swing.SwingUtilities;
 import javax.swing.filechooser.FileNameExtensionFilter;
+import java.awt.image.BufferedImage;
 import javax.inject.Inject;
 import javax.inject.Singleton;
 import lombok.Value;
@@ -54,6 +56,7 @@ import net.runelite.client.eventbus.Subscribe;
 import net.runelite.client.events.PartyChanged;
 import net.runelite.client.events.ConfigChanged;
 import net.runelite.client.events.PluginChanged;
+import net.runelite.client.game.ItemManager;
 import net.runelite.client.game.SkillIconManager;
 import net.runelite.client.party.PartyMember;
 import net.runelite.client.party.PartyService;
@@ -114,6 +117,9 @@ public class BetterPartyDefencePlugin extends Plugin
 	private SkillIconManager skillIconManager;
 
 	@Inject
+	private ItemManager itemManager;
+
+	@Inject
 	private DefenceTracker defenceTracker;
 
 	@Inject
@@ -134,6 +140,8 @@ public class BetterPartyDefencePlugin extends Plugin
 	private TrackerFontManager trackerFontManager;
 	private DefenceInfoBox defenceBox;
 	private DefenceInfoBox magicDefenceBox;
+	/** BPD-owned weapon icons. Only an infobox projection of the current target's accepted history. */
+	private final Map<SpecialWeapon, SpecWeaponInfoBox> specWeaponBoxes = new LinkedHashMap<>();
 	private static final int DUPLICATE_WINDOW_TICKS = 1;
 	private static final int SYNC_HISTORY_DUPLICATE_WINDOW_TICKS = 2;
 	private static final int NON_INSTANCE_HP_TOLERANCE = 20;
@@ -308,6 +316,8 @@ public class BetterPartyDefencePlugin extends Plugin
 		// the transport for remote specs, not a prerequisite for drawing our own tracked target.
 		localSpecDetector.onGameTick();
 		defenceTracker.onGameTick();
+		reconcileTfaRaidExit();
+		reconcileTfaPhaseChange();
 		initialSyncDisplayGate.expire(tick);
 		releaseInitialSyncGatesForDrainedStates();
 		reconcileAuthoritativeNpcDeaths();
@@ -347,6 +357,7 @@ public class BetterPartyDefencePlugin extends Plugin
 	{
 		if (event != null)
 		{
+			checkTfaNewAttempt(event.getNpc());
 			maybeBroadcastBossPresenceForNpc(event.getNpc(), true, false);
 		}
 	}
@@ -996,34 +1007,20 @@ public class BetterPartyDefencePlugin extends Plugin
 	}
 
 	/**
-	 * A concrete terminal boss death is authoritative for the logical kill which just ended.
-	 * The tracker has already removed that actor/state; invalidate the matching sync/history
-	 * metadata too so a peer cannot re-attach an older, longer history to the next spawn.
-	 *
-	 * <p>ToA is deliberately included here even though the surrounding raid instance continues:
-	 * Ba-Ba/Zebak/Akkha/Kephri/Wardens are separate boss kills, so their spec history must end
-	 * with that kill. Player deaths/runbacks do not enter this path, and phase-persistent actors
-	 * such as Kephri shield phases are filtered by {@link BossMechanics} before an ended boss is
-	 * emitted. CoX/ToB keep their existing raid-specific lifecycle rules.
+	 * A concrete dead NPC is authoritative for non-raid encounters. The tracker already removed
+	 * its local state; this method atomically invalidates the remaining sync/history metadata and
+	 * tells BPD peers so an older, longer spec history cannot be restored onto the respawn.
 	 */
 	private void reconcileAuthoritativeNpcDeaths()
 	{
 		for (BossDefence boss : defenceTracker.consumeEndedBosses())
 		{
-			if (!shouldBroadcastAuthoritativeNpcDeath(boss))
+			if (boss == null || isRaidEncounterBoss(boss))
 			{
 				continue;
 			}
-
-			SyncScope scope = isToaBoss(boss) ? currentRaidScopeForBoss(boss) : currentEncounterScope();
-			resetEncounterAndBroadcast(boss, scope, "local boss kill ended");
+			resetEncounterAndBroadcast(boss, currentEncounterScope(), "local NPC death");
 		}
-	}
-
-	/** Package-visible for regression tests. */
-	static boolean shouldBroadcastAuthoritativeNpcDeath(BossDefence boss)
-	{
-		return boss != null && (!isRaidEncounterBoss(boss) || isToaBoss(boss));
 	}
 
 	/**
@@ -1207,7 +1204,7 @@ public class BetterPartyDefencePlugin extends Plugin
 				continue;
 			}
 
-			BossDefence boss = BossDefence.matchingNpc(npc.getId(), npc.getName());
+			BossDefence boss = BossDefence.matchingNpc(npc);
 			if (boss == null || !seen.add(boss))
 			{
 				continue;
@@ -1257,7 +1254,7 @@ public class BetterPartyDefencePlugin extends Plugin
 			return;
 		}
 
-		BossDefence boss = BossDefence.matchingNpc(npc.getId(), npc.getName());
+		BossDefence boss = BossDefence.matchingNpc(npc);
 		if (boss == null || !peerSyncAllowedAtCurrentEncounter(boss))
 		{
 			return;
@@ -1535,11 +1532,85 @@ public class BetterPartyDefencePlugin extends Plugin
 
 
 	/**
-	 * Raid state is encounter-scoped rather than render-scoped. Once a drained raid target is tied
-	 * to a concrete raid scope, keep it through deaths/runbacks and only clear it when that scope
-	 * actually disappears or changes. This is deliberately independent of the 20-second world
-	 * absence timeout.
+	 * A TFA raid has five rooms. While running back after a death (or moving
+	 * between rooms), a previously drained NPC can be absent from the scene.
+	 * Never use NPC visibility or a room template fingerprint as proof of an
+	 * encounter reset. Exiting the instanced raid is authoritative cleanup.
 	 */
+	private void reconcileTfaRaidExit()
+	{
+		WorldView world = client.getTopLevelWorldView();
+		if (world == null || world.isInstance())
+		{
+			return;
+		}
+		clearAllTfaState("left The Fractured Archive instance");
+	}
+
+	/**
+	 * Seeing the first boss again after any later TFA room is evidence of a
+	 * fresh raid. Do not clear for a fresh *render* of Guardian within its
+	 * current fight: it can happen during a death/runback.
+	 */
+	/**
+	 * P1 and P3 have different base levels and different Defence caps. As soon
+	 * as the actual P3 actor becomes attackable, P1 is permanently over; remove
+	 * its remembered snapshot rather than exposing an obsolete previous target.
+	 * Do NOT clear or reinitialize P3 during quadrant transitions.
+	 */
+	private void reconcileTfaPhaseChange()
+	{
+		if (!defenceTracker.hasRememberedState(BossDefence.TFA_OCELLUS_P1))
+		{
+			return;
+		}
+		WorldView world = client.getTopLevelWorldView();
+		if (world == null || !world.isInstance()
+			|| findLiveNpcForBoss(BossDefence.TFA_OCELLUS_P3) == null)
+		{
+			return;
+		}
+		applyEncounterReset(BossDefence.TFA_OCELLUS_P1, null,
+			"Ocellus entered Phase 3 with a new Defence stat block", true);
+	}
+
+	private void checkTfaNewAttempt(NPC npc)
+	{
+		if (BossDefence.matchingNpc(npc) != BossDefence.TFA_ARCHIVE_GUARDIAN)
+		{
+			return;
+		}
+		for (BossDefence boss : BossDefence.values())
+		{
+			if (isTfaBoss(boss) && boss != BossDefence.TFA_ARCHIVE_GUARDIAN
+				&& defenceTracker.hasRememberedState(boss))
+			{
+				clearAllTfaState("fresh TFA run started at Archive Guardian");
+				return;
+			}
+		}
+	}
+
+	private void clearAllTfaState(String reason)
+	{
+		boolean changed = false;
+		for (BossDefence boss : BossDefence.values())
+		{
+			if (isTfaBoss(boss) && defenceTracker.hasRememberedState(boss))
+			{
+				applyEncounterReset(boss, null, reason, true);
+				changed = true;
+			}
+		}
+		if (changed)
+		{
+			removeInfoBox();
+			initialSyncDisplayGate.clear();
+			lastBossPresenceBroadcastMillis.clear();
+			log.debug("Cleared TFA raid: {}", reason);
+		}
+	}
+
 	private void reconcileRaidEncounterLifecycle()
 	{
 		for (BossDefence boss : new ArrayList<>(defenceTracker.drainedBosses()))
@@ -1564,6 +1635,15 @@ public class BetterPartyDefencePlugin extends Plugin
 				{
 					retainedRaidScopes.put(boss, currentCoxScope);
 				}
+				continue;
+			}
+
+			// TFA has no verified exposed shared controller/raid epoch yet. Scene
+			// fingerprint varies as we move among five instanced rooms, so it
+			// cannot by itself prove a new raid or a wipe. Preserve while in
+			// an instance; reconcileTfaRaidExit() handles concrete exits.
+			if (isTfaBoss(boss))
+			{
 				continue;
 			}
 
@@ -1627,7 +1707,7 @@ public class BetterPartyDefencePlugin extends Plugin
 			return controller > 0 ? new SyncScope(raidScope, controller) : null;
 		}
 
-		if (!isToaBoss(boss))
+		if (!isToaBoss(boss) && !isTfaBoss(boss))
 		{
 			return null;
 		}
@@ -1640,7 +1720,12 @@ public class BetterPartyDefencePlugin extends Plugin
 
 	private static boolean isRaidEncounterBoss(BossDefence boss)
 	{
-		return raidScopeType(boss) != -1 || isToaBoss(boss);
+		return raidScopeType(boss) != -1 || isToaBoss(boss) || isTfaBoss(boss);
+	}
+
+	private static boolean isTfaBoss(BossDefence boss)
+	{
+		return boss != null && boss.has(BossDefence.Flag.TFA);
 	}
 
 	private static boolean isToaBoss(BossDefence boss)
@@ -1654,6 +1739,7 @@ public class BetterPartyDefencePlugin extends Plugin
 			case AKKHA:
 			case AKKHAS_SHADOW:
 			case BA_BA:
+			case CORE:
 			case ELIDINIS_WARDEN:
 			case KEPHRI:
 			case OBELISK:
@@ -2107,6 +2193,19 @@ public class BetterPartyDefencePlugin extends Plugin
 
 		if (!syncScopeStillValid(activeSyncScope))
 		{
+			// TFA scene fingerprints can change at room boundaries even while the
+			// SAME raid is active. A stale party transport scope is NOT proof that
+			// the encounter ended; never reset stored Defence here.
+			WorldView tfaWorldView = client.getTopLevelWorldView();
+			if (isTfaBoss(activeSyncScope.getBoss())
+				&& tfaWorldView != null && tfaWorldView.isInstance())
+			{
+				log.debug("Dropping stale TFA sync transport for {} without clearing live raid state",
+					activeSyncScope.getBoss());
+				activeSyncScope = null;
+				lastSyncSignature = null;
+				return;
+			}
 			// A CoX controller becoming unavailable while RAIDS_CLIENT_INDUNGEON is still 1
 			// only means the sync transport scope is stale. It does NOT mean Tekton/Olm ended.
 			// Drop the transport association and let DefenceTracker's authoritative CoX
@@ -2182,6 +2281,7 @@ public class BetterPartyDefencePlugin extends Plugin
 			case NYLOCAS_VASILIAS:
 			case SOTETSEG:
 			case XARPUS:
+			case VERZIK_VITUR:
 				return BpdDefenceSync.SCOPE_TOB;
 			default:
 				return -1;
@@ -2227,11 +2327,18 @@ public class BetterPartyDefencePlugin extends Plugin
 			return;
 		}
 
-		BossDefence boss = BossDefence.matchingNpc(npc.getId(), npc.getName());
+		BossDefence boss = BossDefence.matchingNpc(npc);
 		if (boss != null)
 		{
 			previouslySyncedBosses.add(boss);
 		}
+	}
+
+	private NPC findNpcByIndex(int index)
+	{
+		WorldView worldView = client.getTopLevelWorldView();
+		return index < 0 || worldView == null || worldView.npcs() == null
+			? null : worldView.npcs().byIndex(index);
 	}
 
 	private NPC findBoundNpc()
@@ -2261,7 +2368,7 @@ public class BetterPartyDefencePlugin extends Plugin
 		{
 			NPC npc = iterator.next();
 			if (npc != null && !npc.isDead() && npc.getHealthRatio() != 0 && npc.getName() != null
-				&& BossDefence.matchingNpc(npc.getId(), npc.getName()) == boss)
+				&& BossDefence.matchingNpc(npc) == boss)
 			{
 				return npc;
 			}
@@ -2385,7 +2492,8 @@ public class BetterPartyDefencePlugin extends Plugin
 				continue;
 			}
 
-			BossDefence boss = BossDefence.matchingNpcName(state.getName());
+			NPC stateNpc = findNpcByIndex(state.getNpcIndex());
+			BossDefence boss = BossDefence.matchingNpc(stateNpc);
 			if (boss != null)
 			{
 				initialSyncDisplayGate.release(state.getNpcIndex(), boss);
@@ -2433,6 +2541,60 @@ public class BetterPartyDefencePlugin extends Plugin
 			infoBoxManager.removeInfoBox(magicDefenceBox);
 			magicDefenceBox = null;
 		}
+
+		updateSpecWeaponInfoBoxes(state, live && !awaitingInitialSync);
+	}
+
+	/**
+	 * Keep these counters tied to the same active encounter as BPD's Defence info box.
+	 * Rebuilding from history each tick, rather than incrementing independent counters,
+	 * automatically handles resets, swaps, new phases, late joins and absolute party sync.
+	 */
+	private void updateSpecWeaponInfoBoxes(DefenceTracker.DefenceState state, boolean live)
+	{
+		if (!config.specWeaponInfoBoxes() || !live || state == null || !state.isDrained())
+		{
+			clearSpecWeaponInfoBoxes();
+			return;
+		}
+
+		Map<SpecialWeapon, SpecWeaponSummary> summaries = SpecWeaponSummary.fromHistory(
+			defenceTracker.specHistoryForCurrentTarget(state.getNpcIndex()));
+		for (SpecialWeapon existing : new ArrayList<>(specWeaponBoxes.keySet()))
+		{
+			if (!summaries.containsKey(existing))
+			{
+				infoBoxManager.removeInfoBox(specWeaponBoxes.remove(existing));
+			}
+		}
+		for (Map.Entry<SpecialWeapon, SpecWeaponSummary> entry : summaries.entrySet())
+		{
+			SpecialWeapon weapon = entry.getKey();
+			SpecWeaponInfoBox box = specWeaponBoxes.get(weapon);
+			if (box == null)
+			{
+				int[] itemIds = weapon.getItemID();
+				BufferedImage icon = itemIds != null && itemIds.length > 0
+					? itemManager.getImage(itemIds[0]) : null;
+				if (icon == null)
+				{
+					icon = skillIconManager.getSkillImage(Skill.ATTACK);
+				}
+				box = new SpecWeaponInfoBox(icon, this, weapon);
+				specWeaponBoxes.put(weapon, box);
+				infoBoxManager.addInfoBox(box);
+			}
+			box.update(entry.getValue());
+		}
+	}
+
+	private void clearSpecWeaponInfoBoxes()
+	{
+		for (SpecWeaponInfoBox box : specWeaponBoxes.values())
+		{
+			infoBoxManager.removeInfoBox(box);
+		}
+		specWeaponBoxes.clear();
 	}
 
 	/**
@@ -2461,6 +2623,7 @@ public class BetterPartyDefencePlugin extends Plugin
 
 	private void removeInfoBox()
 	{
+		clearSpecWeaponInfoBoxes();
 		if (defenceBox != null)
 		{
 			infoBoxManager.removeInfoBox(defenceBox);

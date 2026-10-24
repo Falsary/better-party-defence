@@ -58,7 +58,7 @@ public class NpcDefenceOverlay extends Overlay
 		renderMainTarget(graphics, current);
 
 		DefenceState previous = previousTargetState.previousState();
-		if (previous != null)
+		if (previous != null && !initialSyncDisplayGate.isWaiting(previous, client.getTickCount()))
 		{
 			NPC npc = liveNpc(previous.getNpcIndex());
 			if (npc != null)
@@ -120,8 +120,7 @@ public class NpcDefenceOverlay extends Overlay
 	{
 		// The checkbox controls only optional pre-spec preview. Any actual local/party drain
 		// remains displayable because drained=true is part of the stored/shared state.
-		return state != null
-			&& (state.isDrained() || config.defenceAlwaysShow())
+		return state != null && (state.isDrained() || config.defenceAlwaysShow())
 			&& state.getNpcIndex() >= 0
 			&& !initialSyncDisplayGate.isWaiting(state, client.getTickCount());
 	}

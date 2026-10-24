@@ -29,7 +29,7 @@ public interface BetterPartyDefenceConfig extends Config
 
 	@ConfigSection(
 		name = "Info Boxes",
-		description = "RuneLite status-bar info boxes for Defence and Magic defence.",
+		description = "RuneLite status-bar info boxes for Defence, Magic defence, and BPD weapon counters.",
 		position = 2,
 		closedByDefault = true)
 	String INFO_BOXES = "infoBoxes";
@@ -145,10 +145,18 @@ public interface BetterPartyDefenceConfig extends Config
 	default boolean extraInfoInInfoBox() { return true; }
 
 	@ConfigItem(
+		keyName = "specWeaponInfoBoxes",
+		name = "Weapon spec info boxes",
+		description = "Show Better Party Defence's own weapon-icon counters using accepted encounter spec history and party sync. Turn off to hide the extra counters.",
+		position = 4,
+		section = INFO_BOXES)
+	default boolean specWeaponInfoBoxes() { return true; }
+
+	@ConfigItem(
 		keyName = "magicDefenceInfoBox",
 		name = "Magic info box",
 		description = "Show tracked Magic-defence changes in a RuneLite info box. Requires Show magic defence to be enabled.",
-		position = 4,
+		position = 5,
 		section = INFO_BOXES)
 	default boolean magicDefenceInfoBox() { return true; }
 
@@ -156,7 +164,7 @@ public interface BetterPartyDefenceConfig extends Config
 		keyName = "defenceInfoBoxUseThemeSkillIcon",
 		name = "Use themed info-box icons",
 		description = "Use Defence and Magic skill icons from the active RuneLite theme in Better Party Defence info boxes when available.",
-		position = 5,
+		position = 6,
 		section = INFO_BOXES)
 	default boolean defenceInfoBoxUseThemeSkillIcon() { return false; }
 
@@ -285,7 +293,7 @@ public interface BetterPartyDefenceConfig extends Config
 		description = "Choose whether the tracker shows Magic-defence bonus, Magic level, percent of the starting magic-defence roll, or bonus plus percent.",
 		position = 2,
 		section = MAGIC)
-	default MagicDefenceDisplay magicDefenceDisplay() { return MagicDefenceDisplay.PERCENT; }
+	default MagicDefenceDisplay magicDefenceDisplay() { return MagicDefenceDisplay.BONUS; }
 
 	@ConfigItem(
 		keyName = "magicDefenceSameRow",

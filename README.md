@@ -110,6 +110,20 @@ Better Party Defence currently supports the following bosses and encounter targe
 - Tumeken's Warden
 - Zebak
 
+### The Fractured Archive
+
+- Archive Guardian
+- Ezekiel
+- Bork
+- The Smorks
+- Moia
+- Dreadnoth the Jellied
+- Xarth
+- Dagon'hai Elder
+- Dagon'hai Monk (both monks tracked independently)
+- Ocellus (Phase 1)
+- Ocellus (Phase 3)
+
 ### Other bosses
 
 - Abyssal Sire
@@ -155,6 +169,7 @@ Some bosses and encounters are not currently supported by the Defence tracker.
 
 Notable examples include:
 
+- The Fractured Archive: The Blade (Ocellus Phase 2)
 - Duke Sucellus
 - The Leviathan
 - The Whisperer

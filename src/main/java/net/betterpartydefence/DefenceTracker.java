@@ -2,7 +2,6 @@ package net.betterpartydefence;
 
 import java.util.ArrayList;
 import java.util.Collections;
-import java.util.Comparator;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -16,14 +15,10 @@ import lombok.Value;
 import lombok.extern.slf4j.Slf4j;
 import net.runelite.api.Actor;
 import net.runelite.api.Client;
-import net.runelite.api.ItemComposition;
 import net.runelite.api.NPC;
 import net.runelite.api.Player;
-import net.runelite.api.PlayerComposition;
 import net.runelite.api.WorldView;
-import net.runelite.api.gameval.NpcID;
 import net.runelite.api.gameval.VarbitID;
-import net.runelite.api.kit.KitType;
 import net.runelite.client.plugins.specialcounter.SpecialWeapon;
 import net.runelite.client.util.Text;
 
@@ -55,7 +50,7 @@ public class DefenceTracker
 
 	private static final int DWH_DRAIN_PCT = 30;
 	private static final int ELDER_MAUL_DRAIN_PCT = 35;
-	/** Condemn cannot lower Defence/Magic more than 15% below their encounter starting levels. */
+	/** Condemn leaves 85% of the levels it touches, applied to the current values rather than the base. */
 	private static final int CONDEMN_KEEPS_PCT = 85;
 	private static final int ARCLIGHT_DRAIN_PCT = 5;
 	private static final int ARCLIGHT_DEMON_DRAIN_PCT = 10;
@@ -64,37 +59,6 @@ public class DefenceTracker
 	/** Each landed Ralos glaive takes an eighth of the target's current Magic level off its Defence. */
 	private static final int RALOS_GLAIVE_MAGIC_DIVISOR = 8;
 	private static final int ANCHOR_DAMAGE_DIVISOR = 10;
-
-	// Yama changes only his Magic-defence bonus, not his Magic level. The Eye of ayak
-	// drain is persistent across those bonus changes, so it must be reapplied to each stance.
-	private static final int YAMA_MAGIC_DEF_MELEE = -30;
-	private static final int YAMA_MAGIC_DEF_MAGIC = 60;
-	private static final int YAMA_MAGIC_DEF_PHASE_3 = 81;
-	/** NPC health ratios are on a 0..255 scale; phase 3 starts at one third HP. */
-	private static final int YAMA_PHASE_3_MAX_HEALTH_RATIO = 85;
-
-	// Zulrah's Magic-defence bonus changes with the live NPC form. Soul Rend (Eye of ayak)
-	// carries its drain into later form changes, so a drain landed on serpentine/magma must be
-	// remembered and applied when tanzanite (+300) appears.
-	private static final int ZULRAH_SERPENTINE_ID = 2042;
-	private static final int ZULRAH_MAGMA_ID = 2043;
-	private static final int ZULRAH_TANZANITE_ID = 2044;
-	private static final int ZULRAH_MAGIC_DEF_SERPENTINE = -45;
-	private static final int ZULRAH_MAGIC_DEF_MAGMA = 0;
-	private static final int ZULRAH_MAGIC_DEF_TANZANITE = 300;
-
-	private static final Comparator<Drain> SAME_TICK_DRAIN_ORDER = Comparator
-		.comparingInt((Drain d) -> sameTickPriority(d.getWeapon()))
-		.thenComparing(d -> normalizeHistoryPlayer(d.getPlayerName()))
-		.thenComparingInt(Drain::getHit)
-		.thenComparing(d -> d.getWeapon() == null ? "" : d.getWeapon().name());
-
-	private static final Comparator<SpecHistoryEntry> SAME_TICK_HISTORY_ORDER = Comparator
-		.comparingInt((SpecHistoryEntry e) -> sameTickPriority(e.getWeapon()))
-		.thenComparing(e -> normalizeHistoryPlayer(e.getPlayerName()))
-		.thenComparingInt(SpecHistoryEntry::getHit)
-		.thenComparing(e -> e.getWeapon() == null ? "" : e.getWeapon().name());
-
 
 	private static final int CM_SCALE_PCT = 50;
 	private static final int TEKTON_CM_SMALL_PARTY = 4;
@@ -119,19 +83,6 @@ public class DefenceTracker
 	private boolean kephriFinalResetApplied;
 	/** Sotetseg's encounter varbit: 1=combat, 2=maze, 0=encounter ended. */
 	private int sotetsegEncounterState = -1;
-	/** Once Yama enters phase 3 it stays phase 3 even if void flares heal him back over 33.3%. */
-	private boolean yamaPhase3;
-	/**
-	 * Concrete top-level instance in which the current remembered Yama encounter lives.
-	 * Actor/phase changes do not change this fingerprint; leaving/teleporting/dying out of the
-	 * instance does, which is the authoritative reset boundary for Yama.
-	 */
-	private Integer yamaEncounterInstanceFingerprint;
-	/**
-	 * Branda and Eldric share one concrete Royal Titans instance. Keep the identity at
-	 * encounter level so killing one Titan never invalidates the surviving Titan.
-	 */
-	private Integer royalTitansEncounterInstanceFingerprint;
 	private long bossDef = -1;
 	private long bossStartDef;
 	private long minDef;
@@ -253,7 +204,6 @@ public class DefenceTracker
 		int bossNpcId;
 		boolean kephriFinalResetApplied;
 		int sotetsegEncounterState;
-		boolean yamaPhase3;
 		long bossDef;
 		long bossStartDef;
 		long minDef;
@@ -362,16 +312,7 @@ public class DefenceTracker
 	/** Client thread. */
 	public void onGameTick()
 	{
-		// Network delivery order is not game order. Drain every event accumulated for this game tick
-		// into one deterministic batch before mutating Defence. This matters most for a DWH and BGS
-		// landing together: every BPD client must perform the same percentage-before-flat arithmetic.
-		List<Drain> tickDrains = new ArrayList<>();
 		for (Drain drain = pending.poll(); drain != null; drain = pending.poll())
-		{
-			tickDrains.add(drain);
-		}
-		tickDrains.sort(SAME_TICK_DRAIN_ORDER);
-		for (Drain drain : tickDrains)
 		{
 			process(drain);
 		}
@@ -380,11 +321,11 @@ public class DefenceTracker
 		{
 			NPC queuedNpc = npcByIndex(queuedIndex);
 			if (queuedNpc != null && queuedNpc.getName() != null
-				&& BossDefence.matchingNpc(queuedNpc.getId(), queuedNpc.getName()) != null)
+				&& BossDefence.matchingNpc(queuedNpc) != null)
 			{
 				if (bossIndex != queuedIndex)
 				{
-					BossDefence queuedBoss = BossDefence.matchingNpc(queuedNpc.getId(), queuedNpc.getName());
+					BossDefence queuedBoss = BossDefence.matchingNpc(queuedNpc);
 					saveCurrent();
 					if (!restore(queuedIndex, queuedBoss) && !restoreForBoss(queuedBoss, queuedNpc))
 					{
@@ -414,8 +355,6 @@ public class DefenceTracker
 			reset("Chambers raid ended");
 		}
 		wasInCoxRaid = inCoxRaid;
-		reconcileYamaInstanceLifecycle();
-		reconcileRoyalTitansInstanceLifecycle();
 
 		if (bossType == BossDefence.SOTETSEG)
 		{
@@ -453,8 +392,6 @@ public class DefenceTracker
 			if (npc != null)
 			{
 				handlePhaseNpc(npc);
-				refreshYamaMagicDefence(npc);
-				refreshZulrahMagicDefence(npc);
 				if (bossIndex != -1 && (npc.isDead() || npc.getHealthRatio() == 0))
 				{
 					BossMechanics mechanics = BossMechanics.forBoss(bossType);
@@ -489,7 +426,7 @@ public class DefenceTracker
 	{
 		NPC target = interactingNpc();
 		BossDefence targetBoss = target == null || target.getName() == null
-			? null : BossDefence.matchingNpc(target.getId(), target.getName());
+			? null : BossDefence.matchingNpc(target);
 		if (targetBoss == null || target.getIndex() == bossIndex)
 		{
 			return;
@@ -540,7 +477,7 @@ public class DefenceTracker
 			return;
 		}
 		String name = npc.getName();
-		BossDefence incomingBoss = BossDefence.matchingNpc(npc.getId(), name);
+		BossDefence incomingBoss = BossDefence.matchingNpc(npc);
 		if (incomingBoss == null && bossIndex != index)
 		{
 			log.debug("{} hit {} dropped: '{}' (npc {}) is not a tracked monster",
@@ -602,7 +539,6 @@ public class DefenceTracker
 	{
 		if (queuedIndex == index)
 		{
-			queuedDrains.sort(SAME_TICK_DRAIN_ORDER);
 			for (Drain held : queuedDrains)
 			{
 				apply(held);
@@ -620,7 +556,8 @@ public class DefenceTracker
 
 	private void setBoss(String name, int index)
 	{
-		BossDefence boss = BossDefence.matchingNpcName(name);
+		NPC bossNpc = npcByIndex(index);
+		BossDefence boss = BossDefence.matchingNpc(bossNpc);
 		specHistory.clear();
 		bossName = name;
 		bossIndex = index;
@@ -629,9 +566,8 @@ public class DefenceTracker
 		bossNpcId = npc == null ? -1 : npc.getId();
 		kephriFinalResetApplied = boss == BossDefence.KEPHRI && isKephriFinalPhaseId(bossNpcId);
 		sotetsegEncounterState = boss == BossDefence.SOTETSEG
-			? currentSotetsegEncounterState() : -1;
+			? client.getVarbitValue(VarbitID.TOB_CLIENT_WAVEPROGRESS_TYPE) : -1;
 		initializeStats(boss);
-		refreshZulrahMagicDefence(npc);
 		saveCurrent();
 		log.debug("Tracking supported NPC '{}' index={} id={} baseDef={} floor={}",
 			bossName, bossIndex, bossNpcId, bossStartDef, minDef);
@@ -650,7 +586,6 @@ public class DefenceTracker
 		demon = boss != null && boss.has(BossDefence.Flag.DEMON);
 		accursedApplied = false;
 		drained = false;
-		yamaPhase3 = false;
 
 		// In CoX, the boss's combat levels are scaled up by the (scaled) party size and again
 		// in Challenge Mode, but the magic-defence bonus is not. Defence always scales as a
@@ -704,15 +639,7 @@ public class DefenceTracker
 		bossNpcId = npc.getId();
 		log.debug("Rebound {} encounter npc {}:{} -> {}:{} without clearing defence",
 			bossType, oldIndex, oldId, bossIndex, bossNpcId);
-		// HMT has separate Sotetseg combat/non-combat actor IDs. Use the non-combat
-		// actor swap as a fallback maze signal, while retaining the normal ToB varbit path.
-		if (bossType == BossDefence.SOTETSEG)
-		{
-			updateSotetsegEncounterState();
-		}
 		handlePhaseNpc(npc);
-		refreshYamaMagicDefence(npc);
-		refreshZulrahMagicDefence(npc);
 		saveCurrent();
 	}
 
@@ -732,16 +659,7 @@ public class DefenceTracker
 		BossMechanics mechanics = BossMechanics.forBoss(bossType);
 		if (mechanics.endsEncounterOnActorEntry(bossNpcId))
 		{
-			// Some encounters expose a terminal/dead actor instead of letting the previous actor
-			// naturally report a normal death. Preserve that terminal signal across reset() so the
-			// plugin can broadcast an encounter reset and peers cannot carry this kill's history
-			// into the next spawn. Kephri's shield/weak zero-HP actors never reach this branch.
-			BossDefence endedBoss = bossType;
 			reset("boss final phase ended");
-			if (endedBoss != null)
-			{
-				endedBosses.add(endedBoss);
-			}
 			return;
 		}
 		if (bossType == BossDefence.KEPHRI
@@ -761,7 +679,7 @@ public class DefenceTracker
 	 */
 	private void updateSotetsegEncounterState()
 	{
-		int state = currentSotetsegEncounterState();
+		int state = client.getVarbitValue(VarbitID.TOB_CLIENT_WAVEPROGRESS_TYPE);
 		if (sotetsegEncounterState == -1)
 		{
 			sotetsegEncounterState = state;
@@ -780,149 +698,6 @@ public class DefenceTracker
 			return;
 		}
 		sotetsegEncounterState = state;
-	}
-
-	/**
-	 * Normal ToB already resets from the wave-progress maze value. HMT has separate
-	 * non-combat Sotetseg actor IDs, so treat those actors as a fallback maze signal too.
-	 * Encounter-ended (0) always wins so an actor fallback cannot keep stale state alive.
-	 */
-	private int currentSotetsegEncounterState()
-	{
-		int state = client.getVarbitValue(VarbitID.TOB_CLIENT_WAVEPROGRESS_TYPE);
-		if (state == 0)
-		{
-			return 0;
-		}
-		return isSotetsegNonCombatActor(bossNpcId) ? 2 : state;
-	}
-
-	private static boolean isSotetsegNonCombatActor(int npcId)
-	{
-		return npcId == NpcID.TOB_SOTETSEG_NONCOMBAT
-			|| npcId == NpcID.TOB_SOTETSEG_NONCOMBAT_STORY
-			|| npcId == NpcID.TOB_SOTETSEG_NONCOMBAT_HARD;
-	}
-
-	/**
-	 * Yama is an instanced encounter. Keep his state through target swaps, actor changes and all
-	 * phases, but discard it as soon as the client is definitively no longer in the same instance.
-	 *
-	 * <p>A null WorldView is treated as a transient loading state and is not a reset signal. Once a
-	 * concrete non-instanced view or a different instance fingerprint is observed, the remembered
-	 * Defence/Ayak history belongs to the old encounter and is cleared.</p>
-	 */
-	private void reconcileYamaInstanceLifecycle()
-	{
-		if (!hasRememberedState(BossDefence.YAMA))
-		{
-			yamaEncounterInstanceFingerprint = null;
-			return;
-		}
-
-		WorldView worldView = client.getTopLevelWorldView();
-		if (worldView == null)
-		{
-			return;
-		}
-
-		if (!worldView.isInstance())
-		{
-			clearBossState(BossDefence.YAMA, "left Yama instance");
-			return;
-		}
-
-		int currentFingerprint = instanceFingerprint(worldView);
-		if (yamaEncounterInstanceFingerprint == null)
-		{
-			yamaEncounterInstanceFingerprint = currentFingerprint;
-			log.debug("Remembering Yama instance fingerprint {}", currentFingerprint);
-			return;
-		}
-
-		if (yamaEncounterInstanceFingerprint != currentFingerprint)
-		{
-			clearBossState(BossDefence.YAMA, "Yama instance changed");
-		}
-	}
-
-	/**
-	 * Royal Titans is a shared instanced encounter. Branda and Eldric keep independent
-	 * Defence histories while this client remains in the same instance. Leaving, dying
-	 * out, teleporting out, or entering a different instance invalidates both histories.
-	 */
-	private void reconcileRoyalTitansInstanceLifecycle()
-	{
-		boolean remembersBranda = hasRememberedState(BossDefence.BRANDA_THE_FIRE_QUEEN);
-		boolean remembersEldric = hasRememberedState(BossDefence.ELDRIC_THE_ICE_KING);
-		if (!remembersBranda && !remembersEldric)
-		{
-			royalTitansEncounterInstanceFingerprint = null;
-			return;
-		}
-
-		WorldView worldView = client.getTopLevelWorldView();
-		if (worldView == null)
-		{
-			// A transient loading frame is not enough evidence to end the encounter.
-			return;
-		}
-
-		if (!worldView.isInstance())
-		{
-			clearRoyalTitansState("left Royal Titans instance");
-			return;
-		}
-
-		int currentFingerprint = instanceFingerprint(worldView);
-		if (royalTitansEncounterInstanceFingerprint == null)
-		{
-			royalTitansEncounterInstanceFingerprint = currentFingerprint;
-			log.debug("Remembering Royal Titans instance fingerprint {}", currentFingerprint);
-			return;
-		}
-
-		if (royalTitansEncounterInstanceFingerprint != currentFingerprint)
-		{
-			clearRoyalTitansState("Royal Titans instance changed");
-		}
-	}
-
-	private void clearRoyalTitansState(String reason)
-	{
-		clearBossState(BossDefence.BRANDA_THE_FIRE_QUEEN, reason);
-		clearBossState(BossDefence.ELDRIC_THE_ICE_KING, reason);
-		royalTitansEncounterInstanceFingerprint = null;
-	}
-
-	private static int instanceFingerprint(WorldView worldView)
-	{
-		int hash = 17;
-		hash = 31 * hash + worldView.getBaseX();
-		hash = 31 * hash + worldView.getBaseY();
-		int[][][] chunks = worldView.getInstanceTemplateChunks();
-		if (chunks != null)
-		{
-			for (int[][] plane : chunks)
-			{
-				if (plane == null)
-				{
-					continue;
-				}
-				for (int[] row : plane)
-				{
-					if (row == null)
-					{
-						continue;
-					}
-					for (int chunk : row)
-					{
-						hash = 31 * hash + chunk;
-					}
-				}
-			}
-		}
-		return hash;
 	}
 
 	private boolean shouldRebindSameEncounter(BossDefence incomingBoss)
@@ -961,7 +736,7 @@ public class DefenceTracker
 		while (iterator.hasNext())
 		{
 			NPC npc = iterator.next();
-			if (npc != null && npc.getName() != null && BossDefence.matchingNpc(npc.getId(), npc.getName()) == boss)
+			if (npc != null && npc.getName() != null && BossDefence.matchingNpc(npc) == boss)
 			{
 				return npc;
 			}
@@ -1097,16 +872,14 @@ public class DefenceTracker
 				}
 				break;
 			case ACCURSED_SCEPTRE:
-				// Condemn can lower Defence and Magic only as far as 15% below their
-				// starting levels. Existing debuffs count toward that 15%, so it must not
-				// multiply an already-drained current level. The curse also does not stack.
+				// Condemn takes 15% off the Defence and Magic levels the monster has right
+				// now, so landing it after a warhammer drains more than landing it first.
+				// The curse doesn't stack, so only the first one to land does anything.
 				if (hit > 0 && !accursedApplied)
 				{
 					accursedApplied = true;
-					long condemnDefTarget = bossStartDef * CONDEMN_KEEPS_PCT / PERCENT;
-					long condemnMagicTarget = magicStartLevel * CONDEMN_KEEPS_PCT / PERCENT;
-					bossDef = Math.min(bossDef, condemnDefTarget);
-					magicLevel = Math.min(magicLevel, condemnMagicTarget);
+					bossDef = bossDef * CONDEMN_KEEPS_PCT / PERCENT;
+					magicLevel = magicLevel * CONDEMN_KEEPS_PCT / PERCENT;
 				}
 				break;
 			case SEERCULL:
@@ -1114,30 +887,11 @@ public class DefenceTracker
 				magicLevel -= hit;
 				break;
 			case EYE_OF_AYAK:
-				// Soul Rend drains Magic Defence by damage dealt and cannot push a positive
-				// bonus below 0. Yama and Zulrah are special: the drain can be latent while
-				// their current stance/form has <= 0 Magic Defence, and must carry forward
-				// when the live bonus later becomes positive.
-				if (hit > 0)
+				// Soul Rend lowers the Magic-defence bonus by the damage dealt,
+				// stacking down to a floor of 0 (negative bonuses are left as-is).
+				if (hit > 0 && magicDefBonus > 0)
 				{
-					if (bossType == BossDefence.YAMA)
-					{
-						long stanceBase = currentYamaMagicDefenceBase(npc);
-						magicStartDefBonus = stanceBase;
-						magicDefBonus = dynamicMagicDefenceAfterAyak(
-							stanceBase, totalAyakDrain() + hit);
-					}
-					else if (bossType == BossDefence.ZULRAH)
-					{
-						long formBase = currentZulrahMagicDefenceBase(npc);
-						magicStartDefBonus = formBase;
-						magicDefBonus = dynamicMagicDefenceAfterAyak(
-							formBase, totalAyakDrain() + hit);
-					}
-					else if (magicDefBonus > 0)
-					{
-						magicDefBonus = Math.max(0, magicDefBonus - hit);
-					}
+					magicDefBonus = Math.max(0, magicDefBonus - hit);
 				}
 				break;
 			default:
@@ -1145,188 +899,6 @@ public class DefenceTracker
 		}
 		bossDef = Math.max(bossDef, minDef);
 		magicLevel = Math.max(magicLevel, 0);
-	}
-
-
-	/**
-	 * Keep Yama's displayed Magic Defence aligned with his live stance without losing Eye of ayak
-	 * drain. P1/P2 are -30 for a non-magic primary target and +60 after that target attacks with
-	 * magic; P3 is always +81. Soul Rend drain is reconstructed from immutable encounter history,
-	 * so changing stance never destroys or double-applies it.
-	 */
-	private void refreshYamaMagicDefence(NPC npc)
-	{
-		if (bossType != BossDefence.YAMA || npc == null)
-		{
-			return;
-		}
-
-		long stanceBase = currentYamaMagicDefenceBase(npc);
-		long ayakDrain = totalAyakDrain();
-		long updated = dynamicMagicDefenceAfterAyak(stanceBase, ayakDrain);
-		if (magicStartDefBonus != stanceBase || magicDefBonus != updated)
-		{
-			log.debug("Yama Magic Defence stance {} -> {}, Ayak drain={}, current={}",
-				magicStartDefBonus, stanceBase, ayakDrain, updated);
-			magicStartDefBonus = stanceBase;
-			magicDefBonus = updated;
-		}
-	}
-
-	/**
-	 * Keep Zulrah's Magic Defence aligned with the live form while preserving cumulative Eye of
-	 * ayak drain. Serpentine is -45, magma is 0, and tanzanite is +300. A Soul Rend which lands
-	 * while the current form has no drainable positive bonus is still remembered and becomes
-	 * visible when Zulrah changes into tanzanite form.
-	 */
-	private void refreshZulrahMagicDefence(NPC npc)
-	{
-		if (bossType != BossDefence.ZULRAH || npc == null)
-		{
-			return;
-		}
-
-		long formBase = currentZulrahMagicDefenceBase(npc);
-		long ayakDrain = totalAyakDrain();
-		long updated = dynamicMagicDefenceAfterAyak(formBase, ayakDrain);
-		if (magicStartDefBonus != formBase || magicDefBonus != updated)
-		{
-			log.debug("Zulrah Magic Defence form id={} base={} Ayak drain={} current={}",
-				npc.getId(), formBase, ayakDrain, updated);
-			magicStartDefBonus = formBase;
-			magicDefBonus = updated;
-		}
-	}
-
-	private long currentZulrahMagicDefenceBase(NPC npc)
-	{
-		if (npc != null)
-		{
-			long mapped = zulrahMagicDefenceBaseForNpcId(npc.getId());
-			if (mapped != Long.MIN_VALUE)
-			{
-				return mapped;
-			}
-		}
-
-		// Unknown/transient actor: preserve whichever real form was last observed instead of
-		// snapping the display back to the enum's neutral placeholder.
-		if (magicStartDefBonus == ZULRAH_MAGIC_DEF_SERPENTINE
-			|| magicStartDefBonus == ZULRAH_MAGIC_DEF_MAGMA
-			|| magicStartDefBonus == ZULRAH_MAGIC_DEF_TANZANITE)
-		{
-			return magicStartDefBonus;
-		}
-		return ZULRAH_MAGIC_DEF_MAGMA;
-	}
-
-	/** Package-visible for regression tests. Long.MIN_VALUE means "not a Zulrah form". */
-	static long zulrahMagicDefenceBaseForNpcId(int npcId)
-	{
-		switch (npcId)
-		{
-			case ZULRAH_SERPENTINE_ID:
-				return ZULRAH_MAGIC_DEF_SERPENTINE;
-			case ZULRAH_MAGMA_ID:
-				return ZULRAH_MAGIC_DEF_MAGMA;
-			case ZULRAH_TANZANITE_ID:
-				return ZULRAH_MAGIC_DEF_TANZANITE;
-			default:
-				return Long.MIN_VALUE;
-		}
-	}
-
-	private long currentYamaMagicDefenceBase(NPC npc)
-	{
-		if (npc != null && isYamaPhase3(npc))
-		{
-			return YAMA_MAGIC_DEF_PHASE_3;
-		}
-
-		// Yama keys this stance to the weapon used by his current primary target. RuneLite exposes
-		// that target and their rendered weapon, so follow it directly instead of guessing from
-		// websocket/spec timing. This also works for the other player in a duo.
-		Actor target = npc == null ? null : npc.getInteracting();
-		if (target instanceof Player)
-		{
-			Player player = (Player) target;
-			return playerIsUsingMagicWeapon(player) ? YAMA_MAGIC_DEF_MAGIC : YAMA_MAGIC_DEF_MELEE;
-		}
-
-		if (magicStartDefBonus == YAMA_MAGIC_DEF_MAGIC || magicStartDefBonus == YAMA_MAGIC_DEF_MELEE)
-		{
-			return magicStartDefBonus;
-		}
-		return YAMA_MAGIC_DEF_MELEE;
-	}
-
-	private boolean isYamaPhase3(NPC npc)
-	{
-		if (!yamaPhase3 && npc != null && npc.getHealthRatio() > 0
-			&& npc.getHealthRatio() <= YAMA_PHASE_3_MAX_HEALTH_RATIO)
-		{
-			yamaPhase3 = true;
-			log.debug("Yama entered phase 3; Magic Defence base is now +{}", YAMA_MAGIC_DEF_PHASE_3);
-		}
-		return yamaPhase3;
-	}
-
-	/**
-	 * RuneLite exposes other players' equipped weapon IDs but not their private combat-style varp.
-	 * Yama's normal mage setups use a staff/wand/sceptre/trident/shadow/Ayak, so classify those
-	 * weapon families from the rendered primary target's equipment. If Yama temporarily has no
-	 * primary target, the last observed P1/P2 stance is retained.
-	 */
-	private boolean playerIsUsingMagicWeapon(Player player)
-	{
-		if (player == null)
-		{
-			return false;
-		}
-		PlayerComposition composition = player.getPlayerComposition();
-		if (composition == null)
-		{
-			return false;
-		}
-		int weaponId = composition.getEquipmentId(KitType.WEAPON);
-		if (weaponId < 0)
-		{
-			return false;
-		}
-		ItemComposition weapon = client.getItemDefinition(weaponId);
-		String name = weapon == null || weapon.getName() == null
-			? "" : weapon.getName().toLowerCase();
-		return name.contains("staff")
-			|| name.contains("wand")
-			|| name.contains("sceptre")
-			|| name.contains("scepter")
-			|| name.contains("trident")
-			|| name.contains("tumeken's shadow")
-			|| name.contains("eye of ayak");
-	}
-
-	private long totalAyakDrain()
-	{
-		long total = 0;
-		for (SpecHistoryEntry entry : specHistory)
-		{
-			if (entry != null && entry.getWeapon() == SpecialWeapon.EYE_OF_AYAK && entry.getHit() > 0)
-			{
-				total += entry.getHit();
-			}
-		}
-		return total;
-	}
-
-	static long dynamicMagicDefenceAfterAyak(long stanceBase, long totalAyakDrain)
-	{
-		// A non-positive stance/form is a base stat, not a drainable value below zero. Preserve it
-		// while banking the Ayak drain for the next positive stance/form.
-		if (stanceBase <= 0)
-		{
-			return stanceBase;
-		}
-		return Math.max(0, stanceBase - Math.max(0, totalAyakDrain));
 	}
 
 	/**
@@ -1499,6 +1071,98 @@ public class DefenceTracker
 		return toSyncState(best);
 	}
 
+	/**
+	 * Reconcile concurrent BPD snapshots only where their accepted spec histories prove
+	 * a shared encounter prefix and contain unambiguous, non-overlapping new entries.
+	 * The caller has already validated world, raid scope, freshness and equal version.
+	 *
+	 * <p>Never merge identical or unidentifiable events: without per-event IDs such
+	 * cases cannot be distinguished from network duplicates. False Defence drains
+	 * are worse than declining a merge which a later authoritative snapshot can fix.
+	 *
+	 * @return true only if the local state was changed by a safe reconciliation.
+	 */
+	public boolean mergeConcurrentSyncState(SyncState incoming, NPC localNpc)
+	{
+		if (incoming == null || localNpc == null || incoming.getBossType() == null
+			|| BossDefence.matchingNpc(localNpc) != incoming.getBossType()
+			|| localNpc.isDead() || localNpc.getHealthRatio() == 0)
+		{
+			return false;
+		}
+
+		SyncState local = syncStateForBoss(incoming.getBossType());
+		if (local == null || !local.isDrained() || !incoming.isDrained()
+			|| local.getBase() != incoming.getBase()
+			|| local.getMin() != incoming.getMin()
+			|| local.getMagicBaseLevel() != incoming.getMagicBaseLevel()
+			|| local.getMagicBaseDef() != incoming.getMagicBaseDef()
+			|| local.isMagicUsesDefence() != incoming.isMagicUsesDefence()
+			|| local.isDemon() != incoming.isDemon())
+		{
+			return false;
+		}
+
+		List<SpecHistoryEntry> additions = ConcurrentSyncHistory.incomingOnly(
+			local.getHistory(), incoming.getHistory());
+		if (additions == null)
+		{
+			return false;
+		}
+		for (SpecHistoryEntry event : additions)
+		{
+			if (event.getWeapon() == null || !isSupportedWeapon(event.getWeapon())
+				|| event.getHit() < 0)
+			{
+				return false;
+			}
+		}
+
+		// Do not merge over a pending local spec: wait for its ordinary tick processing,
+		// rather than risk replaying the same attack from two transports.
+		for (Drain queued : pending)
+		{
+			if (queued != null && queued.getNpcIndex() == localNpc.getIndex())
+			{
+				return false;
+			}
+		}
+		// Operate on the bound target's existing state without applySyncState(), which
+		// clears pending hits and changes the user's active display selection.
+		saveCurrent();
+		SavedState target = tracked.get(localNpc.getIndex());
+		if (target == null || target.bossType != incoming.getBossType()
+			|| !target.history.equals(local.getHistory()))
+		{
+			return false;
+		}
+		SavedState selectedBefore = snapshotCurrent();
+		if (selectedBefore == null)
+		{
+			// Do not select a boss solely because a passive party update arrived.
+			return false;
+		}
+		boolean restoreSelection = selectedBefore.npcIndex != localNpc.getIndex()
+			|| selectedBefore.bossType != incoming.getBossType();
+		loadSavedState(target);
+		for (SpecHistoryEntry event : additions)
+		{
+			// Preserve RuneLite's weapon-specific hit conversion, including Ralos.
+			int hit = event.getWeapon().computeHit(event.getHit(), localNpc);
+			calculateDefence(event.getWeapon(), hit, localNpc);
+			specHistory.add(event);
+		}
+		drained = true;
+		saveCurrent();
+		if (restoreSelection)
+		{
+			loadSavedState(selectedBefore);
+		}
+		log.debug("Merged {} distinct concurrent spec(s) for {} history={}",
+			additions.size(), incoming.getBossType(), local.getHistory().size() + additions.size());
+		return true;
+	}
+
 	/** Whether this target already has a live actor binding on this client. */
 	public boolean hasBoundNpc(BossDefence boss)
 	{
@@ -1544,8 +1208,6 @@ public class DefenceTracker
 		saved.kephriFinalResetApplied = false;
 		saved.sotetsegEncounterState = sync.getBossType() == BossDefence.SOTETSEG
 			? client.getVarbitValue(VarbitID.TOB_CLIENT_WAVEPROGRESS_TYPE) : -1;
-		saved.yamaPhase3 = sync.getBossType() == BossDefence.YAMA
-			&& sync.getMagicBaseDef() == YAMA_MAGIC_DEF_PHASE_3;
 		saved.bossDef = sync.getCurrent();
 		saved.bossStartDef = sync.getBase();
 		saved.minDef = sync.getMin();
@@ -1567,157 +1229,6 @@ public class DefenceTracker
 		unboundTracked.put(saved.bossType, saved);
 		log.debug("Cached passive BPD sync for {} def={}/{} specs={}",
 			saved.bossType, saved.bossDef, saved.bossStartDef, saved.history.size());
-	}
-
-	/**
-	 * Merge a same-version peer snapshot which diverged only at the tail of an otherwise identical
-	 * encounter history. This is the concurrent-spec case: two peers each observed a real spec
-	 * before either received the other's snapshot. Replacing either absolute state would delete a
-	 * real event, so keep the common prefix and take the multiset union of both concurrent tails.
-	 *
-	 * <p>The merged tail is ordered deterministically. RuneLite's party message does not carry the
-	 * server's hidden player/PID execution order, so BPD cannot reconstruct that hidden ordering
-	 * perfectly. It does, however, guarantee that every BPD client uses the same order. In
-	 * particular DWH is evaluated before BGS so percentage and flat drains cannot diverge by packet
-	 * arrival order.</p>
-	 */
-	public boolean mergeConcurrentSyncState(SyncState incoming, NPC localNpc)
-	{
-		if (incoming == null || incoming.getBossType() == null || localNpc == null)
-		{
-			return false;
-		}
-
-		SyncState local = syncStateForBoss(incoming.getBossType());
-		if (local == null || local.getHistory() == null || incoming.getHistory() == null)
-		{
-			return false;
-		}
-
-		List<SpecHistoryEntry> left = local.getHistory();
-		List<SpecHistoryEntry> right = incoming.getHistory();
-		if (left.isEmpty() || right.isEmpty())
-		{
-			return false;
-		}
-
-		int prefix = 0;
-		int shared = Math.min(left.size(), right.size());
-		while (prefix < shared && sameHistoryEvent(left.get(prefix), right.get(prefix)))
-		{
-			prefix++;
-		}
-
-		// Prefix-only relationships are already handled by normal newer/longer snapshot logic. A
-		// true concurrent merge requires both peers to have observed something after the fork.
-		if (prefix >= left.size() || prefix >= right.size())
-		{
-			return false;
-		}
-
-		List<SpecHistoryEntry> merged = new ArrayList<>(left.subList(0, prefix));
-		List<SpecHistoryEntry> tail = new ArrayList<>(left.subList(prefix, left.size()));
-
-		// Multiset max rather than a plain set: repeated identical specs by the same player remain
-		// representable, while the same real event observed by both peers is not doubled.
-		Map<String, Integer> leftCounts = historyCounts(tail);
-		Map<String, Integer> incomingSeen = new LinkedHashMap<>();
-		for (int i = prefix; i < right.size(); i++)
-		{
-			SpecHistoryEntry entry = right.get(i);
-			String key = historyEventKey(entry);
-			int occurrence = incomingSeen.merge(key, 1, Integer::sum);
-			if (occurrence > leftCounts.getOrDefault(key, 0))
-			{
-				tail.add(entry);
-			}
-		}
-		tail.sort(SAME_TICK_HISTORY_ORDER);
-		merged.addAll(tail);
-
-		// Activate the concrete encounter, rebuild from its real starting/scaled stats, then replay
-		// every accepted event exactly once. This makes the number a deterministic function of the
-		// merged history instead of of whichever websocket packet arrived last.
-		saveCurrent();
-		bossType = incoming.getBossType();
-		bossName = localNpc.getName() == null ? bossType.getNpcName() : localNpc.getName();
-		bossIndex = localNpc.getIndex();
-		bossNpcId = localNpc.getId();
-		boolean priorKephriFinal = kephriFinalResetApplied;
-		int priorSotetsegState = sotetsegEncounterState;
-		boolean priorYamaPhase3 = yamaPhase3
-			|| (incoming.getBossType() == BossDefence.YAMA
-				&& incoming.getMagicBaseDef() == YAMA_MAGIC_DEF_PHASE_3);
-		specHistory.clear();
-		initializeStats(bossType);
-		kephriFinalResetApplied = priorKephriFinal;
-		sotetsegEncounterState = priorSotetsegState;
-		yamaPhase3 = priorYamaPhase3;
-		for (SpecHistoryEntry entry : merged)
-		{
-			if (entry == null || entry.getWeapon() == null)
-			{
-				continue;
-			}
-			apply(new Drain(entry.getWeapon(), bossIndex, entry.getHit(), client.getWorld(), entry.getPlayerName()));
-		}
-		refreshYamaMagicDefence(localNpc);
-		refreshZulrahMagicDefence(localNpc);
-		saveCurrent();
-		pending.clear();
-		clearHeld();
-		log.debug("Merged concurrent BPD state for {} commonPrefix={} localSpecs={} incomingSpecs={} mergedSpecs={} def={}",
-			bossType, prefix, left.size(), right.size(), specHistory.size(), bossDef);
-		return true;
-	}
-
-	private static Map<String, Integer> historyCounts(List<SpecHistoryEntry> entries)
-	{
-		Map<String, Integer> counts = new LinkedHashMap<>();
-		for (SpecHistoryEntry entry : entries)
-		{
-			counts.merge(historyEventKey(entry), 1, Integer::sum);
-		}
-		return counts;
-	}
-
-	private static boolean sameHistoryEvent(SpecHistoryEntry a, SpecHistoryEntry b)
-	{
-		return historyEventKey(a).equals(historyEventKey(b));
-	}
-
-	private static String historyEventKey(SpecHistoryEntry entry)
-	{
-		if (entry == null)
-		{
-			return "";
-		}
-		return normalizeHistoryPlayer(entry.getPlayerName()) + '|'
-			+ (entry.getWeapon() == null ? "" : entry.getWeapon().name()) + '|' + entry.getHit();
-	}
-
-	private static String normalizeHistoryPlayer(String player)
-	{
-		return player == null ? "" : Text.removeTags(player).trim().toLowerCase();
-	}
-
-	private static int sameTickPriority(SpecialWeapon weapon)
-	{
-		if (weapon == null)
-		{
-			return 1000;
-		}
-		switch (weapon)
-		{
-			case ELDER_MAUL:
-				return 0;
-			case DRAGON_WARHAMMER:
-				return 10;
-			case BANDOS_GODSWORD:
-				return 100;
-			default:
-				return 50;
-		}
 	}
 
 	/**
@@ -1752,11 +1263,7 @@ public class DefenceTracker
 		drained = true;
 		kephriFinalResetApplied = bossType == BossDefence.KEPHRI && isKephriFinalPhaseId(bossNpcId);
 		sotetsegEncounterState = bossType == BossDefence.SOTETSEG
-			? currentSotetsegEncounterState() : -1;
-		yamaPhase3 = bossType == BossDefence.YAMA
-			&& (sync.getMagicBaseDef() == YAMA_MAGIC_DEF_PHASE_3
-				|| (localNpc != null && localNpc.getHealthRatio() > 0
-					&& localNpc.getHealthRatio() <= YAMA_PHASE_3_MAX_HEALTH_RATIO));
+			? client.getVarbitValue(VarbitID.TOB_CLIENT_WAVEPROGRESS_TYPE) : -1;
 		wasInCoxRaid = client.getVarbitValue(VarbitID.RAIDS_CLIENT_INDUNGEON) == 1;
 
 		specHistory.clear();
@@ -1767,10 +1274,6 @@ public class DefenceTracker
 		if (localNpc != null)
 		{
 			unboundTracked.remove(bossType);
-			// The peer may currently see a different Yama stance (or, conceptually, a different
-			// Zulrah form). Reapply shared Ayak history to the local live actor before exposing it.
-			refreshYamaMagicDefence(localNpc);
-			refreshZulrahMagicDefence(localNpc);
 		}
 		saveCurrent();
 		pending.clear();
@@ -1802,7 +1305,6 @@ public class DefenceTracker
 		s.bossNpcId = bossNpcId;
 		s.kephriFinalResetApplied = kephriFinalResetApplied;
 		s.sotetsegEncounterState = sotetsegEncounterState;
-		s.yamaPhase3 = yamaPhase3;
 		s.bossDef = bossDef;
 		s.bossStartDef = bossStartDef;
 		s.minDef = minDef;
@@ -1906,7 +1408,6 @@ public class DefenceTracker
 		bossNpcId = s.bossNpcId;
 		kephriFinalResetApplied = s.kephriFinalResetApplied;
 		sotetsegEncounterState = s.sotetsegEncounterState;
-		yamaPhase3 = s.yamaPhase3;
 		bossDef = s.bossDef;
 		bossStartDef = s.bossStartDef;
 		minDef = s.minDef;
@@ -1971,7 +1472,6 @@ public class DefenceTracker
 		bossNpcId = -1;
 		kephriFinalResetApplied = false;
 		sotetsegEncounterState = -1;
-		yamaPhase3 = false;
 		bossDef = -1;
 		bossStartDef = 0;
 		minDef = 0;
@@ -2069,10 +1569,6 @@ public class DefenceTracker
 		{
 			return;
 		}
-		if (boss == BossDefence.YAMA)
-		{
-			yamaEncounterInstanceFingerprint = null;
-		}
 
 		boolean clearingActive = bossType == boss;
 		tracked.entrySet().removeIf(entry -> entry.getValue() != null && entry.getValue().bossType == boss);
@@ -2122,8 +1618,6 @@ public class DefenceTracker
 			log.debug("Reset defence tracker: {}", reason);
 		}
 		clearActiveFields();
-		yamaEncounterInstanceFingerprint = null;
-		royalTitansEncounterInstanceFingerprint = null;
 		tracked.clear();
 		unboundTracked.clear();
 		endedBosses.clear();
