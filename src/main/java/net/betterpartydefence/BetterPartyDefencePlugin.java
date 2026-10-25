@@ -189,6 +189,8 @@ public class BetterPartyDefencePlugin extends Plugin
 	private final Set<Long> knownBpdPartyMembers = new HashSet<>();
 	/** Debounces the all-party-dead ToA state so one wipe clears once, not every tick. */
 	private boolean toaPartyWasFullyDead;
+	/** Once The Blade/P3 is seen, never accept stale Phase 1 Defence during this raid. */
+	private boolean ocellusPhaseOneEnded;
 	private ActiveSyncScope activeSyncScope;
 	private SyncScope lastPresenceScope;
 	private long lastPresenceBroadcastMillis;
@@ -272,6 +274,7 @@ public class BetterPartyDefencePlugin extends Plugin
 		recentEncounterResets.clear();
 		knownBpdPartyMembers.clear();
 		toaPartyWasFullyDead = false;
+		ocellusPhaseOneEnded = false;
 		activeSyncScope = null;
 		lastPresenceScope = null;
 		lastPresenceBroadcastMillis = 0L;
@@ -443,6 +446,7 @@ public class BetterPartyDefencePlugin extends Plugin
 			recentEncounterResets.clear();
 			knownBpdPartyMembers.clear();
 			toaPartyWasFullyDead = false;
+			ocellusPhaseOneEnded = false;
 			lastPresenceScope = null;
 			lastPresenceBroadcastMillis = 0L;
 			lastSyncSignature = null;
@@ -958,6 +962,10 @@ public class BetterPartyDefencePlugin extends Plugin
 		}
 
 		BossDefence boss = sync.getBossType();
+		if (boss == BossDefence.TFA_OCELLUS_P1 && ocellusPhaseOneEnded)
+		{
+			return; // A late party snapshot must not bring back P1 in P2/P3.
+		}
 		NPC localBoss = findLiveNpcForBoss(boss);
 		if (localBoss != null && !peerSyncAllowedAtCurrentEncounter(boss))
 		{
@@ -1548,36 +1556,61 @@ public class BetterPartyDefencePlugin extends Plugin
 	}
 
 	/**
-	 * Seeing the first boss again after any later TFA room is evidence of a
-	 * fresh raid. Do not clear for a fresh *render* of Guardian within its
-	 * current fight: it can happen during a death/runback.
-	 */
-	/**
-	 * P1 and P3 have different base levels and different Defence caps. As soon
-	 * as the actual P3 actor becomes attackable, P1 is permanently over; remove
-	 * its remembered snapshot rather than exposing an obsolete previous target.
-	 * Do NOT clear or reinitialize P3 during quadrant transitions.
+	 * P2 is The Blade, a separate target from Ocellus P1. The repaired Blade
+	 * actor (16683) signals the start of P2, even though it has no health-bar
+	 * ratio or ordinary attack options. Never carry P1's drain into P2. P3
+	 * has its own stat block and retains its drain across quadrants.
 	 */
 	private void reconcileTfaPhaseChange()
 	{
-		if (!defenceTracker.hasRememberedState(BossDefence.TFA_OCELLUS_P1))
-		{
-			return;
-		}
 		WorldView world = client.getTopLevelWorldView();
-		if (world == null || !world.isInstance()
-			|| findLiveNpcForBoss(BossDefence.TFA_OCELLUS_P3) == null)
+		if (world == null || !world.isInstance())
 		{
 			return;
 		}
-		applyEncounterReset(BossDefence.TFA_OCELLUS_P1, null,
-			"Ocellus entered Phase 3 with a new Defence stat block", true);
+
+		boolean phaseThree = findLiveNpcForBoss(BossDefence.TFA_OCELLUS_P3) != null;
+		boolean phaseTwo = false;
+		if (!phaseThree && world.npcs() != null)
+		{
+			Iterator<? extends NPC> iterator = world.npcs().iterator();
+			while (iterator != null && iterator.hasNext())
+			{
+				NPC npc = iterator.next();
+				if (isOcellusPhaseTwoBlade(npc))
+				{
+					phaseTwo = true;
+					break;
+				}
+			}
+		}
+		if (phaseTwo || phaseThree)
+		{
+			ocellusPhaseOneEnded = true;
+		}
+		if (ocellusPhaseOneEnded && defenceTracker.hasRememberedState(BossDefence.TFA_OCELLUS_P1))
+		{
+			applyEncounterReset(BossDefence.TFA_OCELLUS_P1, null,
+				"Ocellus left Phase 1", true);
+		}
+	}
+
+	/** Phase 2 actor ID from the OSRS Wiki; excludes the broken Blade prop (62706). */
+	static boolean isOcellusPhaseTwoBlade(NPC npc)
+	{
+		return npc != null && npc.getId() == 16683 && npc.getName() != null
+			&& "The Blade".equalsIgnoreCase(Text.removeTags(npc.getName()).trim());
 	}
 
 	private void checkTfaNewAttempt(NPC npc)
 	{
 		if (BossDefence.matchingNpc(npc) != BossDefence.TFA_ARCHIVE_GUARDIAN)
 		{
+			return;
+		}
+		if (ocellusPhaseOneEnded)
+		{
+			clearAllTfaState("new TFA attempt at Archive Guardian");
 			return;
 		}
 		for (BossDefence boss : BossDefence.values())
@@ -1593,6 +1626,7 @@ public class BetterPartyDefencePlugin extends Plugin
 
 	private void clearAllTfaState(String reason)
 	{
+		ocellusPhaseOneEnded = false;
 		boolean changed = false;
 		for (BossDefence boss : BossDefence.values())
 		{
@@ -2510,6 +2544,7 @@ public class BetterPartyDefencePlugin extends Plugin
 		boolean showDefence = config.defenceInfoBox() && live && !awaitingInitialSync
 			&& (defenceTracker.hasDefenceSpecHistory() || config.defenceAlwaysShow());
 		boolean showMagic = config.magicDefence() && config.magicDefenceInfoBox() && live && !awaitingInitialSync
+			&& MagicDefenceVisibility.isVisible(state)
 			&& (defenceTracker.hasMagicDefenceSpecHistory() || config.defenceAlwaysShow());
 
 		if (showDefence && defenceBox == null)

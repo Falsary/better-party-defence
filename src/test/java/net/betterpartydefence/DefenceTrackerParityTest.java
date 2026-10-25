@@ -122,6 +122,53 @@ public class DefenceTrackerParityTest
 	}
 
 	@Test
+	public void tfaMagicIsHiddenWhileInternalMagicAndNormalDefenceRemainIntact()
+	{
+		fakeNpc("Archive Guardian", 71);
+		DefenceTracker tracker = makeTracker();
+		tracker.queue(SpecialWeapon.DRAGON_WARHAMMER, 71, 1, WORLD);
+		tracker.onGameTick();
+
+		DefenceTracker.DefenceState state = tracker.state();
+		assertTrue(state.isTfaBoss());
+		assertFalse(MagicDefenceVisibility.isVisible(state));
+		assertEquals(182, state.getCurrent());
+		// Preserve Magic for Ralos calculations and complete party sync.
+		assertEquals(250, state.getMagicLevel());
+		assertEquals(130, state.getMagicDef());
+	}
+
+	@Test
+	public void dagonhaiMonkRetainsUncappedNormalDefenceAndHidesMagic()
+	{
+		fakeNpc("Dagon'hai Monk", 73, 16645);
+		DefenceTracker tracker = makeTracker();
+		tracker.queue(SpecialWeapon.DRAGON_WARHAMMER, 73, 1, WORLD);
+		tracker.onGameTick();
+
+		DefenceTracker.DefenceState state = tracker.state();
+		assertTrue(state.isTfaBoss());
+		assertFalse(MagicDefenceVisibility.isVisible(state));
+		assertEquals(0, state.getMin());
+		assertTrue(state.getCurrent() < state.getBase());
+		assertEquals(290, state.getMagicLevel());
+	}
+
+	@Test
+	public void magicOutsideTfaStillDisplays()
+	{
+		fakeNpc("Corporeal Beast", 75);
+		DefenceTracker tracker = makeTracker();
+		tracker.queue(SpecialWeapon.EYE_OF_AYAK, 75, 30, WORLD);
+		tracker.onGameTick();
+
+		DefenceTracker.DefenceState state = tracker.state();
+		assertFalse(state.isTfaBoss());
+		assertTrue(MagicDefenceVisibility.isVisible(state));
+		assertEquals(120, state.getMagicDef());
+	}
+
+	@Test
 	public void magicOnlySpecDoesNotCreateDefenceHistory()
 	{
 		fakeNpc("Corporeal Beast", 7);

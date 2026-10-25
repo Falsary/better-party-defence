@@ -55,6 +55,12 @@ public class DefenceInfoBox extends InfoBox
 		{
 			return "";
 		}
+		// DefenceInfoBox is normally removed by the plugin on target changes.
+		// This extra guard prevents one stale frame of Magic data on a TFA target.
+		if (stat == Stat.MAGIC_DEFENCE && !MagicDefenceVisibility.isVisible(state))
+		{
+			return "";
+		}
 		updateTooltip(state);
 		if (stat == Stat.MAGIC_DEFENCE)
 		{
@@ -303,7 +309,17 @@ public class DefenceInfoBox extends InfoBox
 		{
 			return config.magicDefenceColor();
 		}
+		// Keep the Defence infobox WHITE normally; match the overhead only at
+		// the low-Defence and fully-drained thresholds. Never use drain amount colour.
 		DefenceState state = tracker.state();
-		return state == null ? Color.WHITE : DefenceReadout.defenceColor(state, config);
+		if (state == null)
+		{
+			return Color.WHITE;
+		}
+		if (DefenceReadout.isFullyDrained(state))
+		{
+			return config.defenceCappedColor();
+		}
+		return DefenceReadout.isLowDefence(state, config) ? config.defenceLowColor() : Color.WHITE;
 	}
 }

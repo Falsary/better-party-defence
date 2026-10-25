@@ -10,7 +10,7 @@ public class InitialSyncDisplayGateTest
 	private DefenceTracker.DefenceState state(int index, boolean drained)
 	{
 		return new DefenceTracker.DefenceState(index, "Example boss",
-			100, 0, 100, 0, 0, 0, 0, 0, 0, drained);
+			100, 0, 100, 0, 0, 0, 0, 0, 0, drained, false);
 	}
 
 	@Test

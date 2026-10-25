@@ -143,6 +143,13 @@ public class DefenceTracker
 		long magicBaseLevel;
 		/** Whether at least one supported defence-draining spec has landed on this target. */
 		boolean drained;
+		/** Display-only classification for TFA bosses, including party-synced/previous targets. */
+		boolean tfaBoss;
+
+		public boolean isTfaBoss()
+		{
+			return tfaBoss;
+		}
 	}
 
 	/** One accepted spec in the current tracked encounter, for the info-box hover history. */
@@ -966,7 +973,8 @@ public class DefenceTracker
 			* (saved.magicStartDefBonus + MAGIC_ROLL_BONUS_OFFSET);
 		return new DefenceState(saved.npcIndex, Text.removeTags(saved.bossName), saved.bossDef, saved.minDef,
 			saved.bossStartDef, roll, baseRoll, saved.magicDefBonus, saved.magicStartDefBonus,
-			saved.magicLevel, saved.magicStartLevel, saved.drained);
+			saved.magicLevel, saved.magicStartLevel, saved.drained,
+			saved.bossType.has(BossDefence.Flag.TFA));
 	}
 
 	private SyncState toSyncState(SavedState saved)

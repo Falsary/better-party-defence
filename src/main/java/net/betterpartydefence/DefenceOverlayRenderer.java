@@ -100,7 +100,10 @@ final class DefenceOverlayRenderer
 	private List<List<Segment>> rows(DefenceState state)
 	{
 		Segment defence = defenceSegment(state);
-		Segment magic = config.magicDefence() ? magicSegment(state) : null;
+		// Honour the same Magic policy for active, previous and synced targets.
+		// TFA: keep normal Defence visible but suppress unverified Magic readouts.
+		Segment magic = config.magicDefence() && MagicDefenceVisibility.isVisible(state)
+			? magicSegment(state) : null;
 		if (magic == null)
 		{
 			return Collections.singletonList(Collections.singletonList(defence));

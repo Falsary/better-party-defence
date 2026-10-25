@@ -63,17 +63,29 @@ final class DefenceReadout
 		return Math.max(0, fullLevel ? state.getBase() : state.getBase() - state.getMin());
 	}
 
-	static Color defenceColor(DefenceState state, BetterPartyDefenceConfig config)
+	/** Shared with the overhead: a capped target is fully drained even when its floor is non-zero. */
+	static boolean isFullyDrained(DefenceState state)
+	{
+		return state.getCurrent() <= state.getMin();
+	}
+
+	/** Shared low threshold calculation so overhead and infobox change colours at the same level. */
+	static boolean isLowDefence(DefenceState state, BetterPartyDefenceConfig config)
 	{
 		long aboveFloor = Math.max(state.getCurrent() - state.getMin(), 0);
-		if (aboveFloor == 0)
-		{
-			return config.defenceCappedColor();
-		}
 		long threshold = config.defenceLowThresholdUnit() == DefenceThresholdUnit.PERCENT
 			? (state.getBase() - state.getMin()) * Math.min(PERCENT, config.defenceLowThreshold()) / PERCENT
 			: config.defenceLowThreshold();
-		return aboveFloor <= threshold ? config.defenceLowColor() : config.defenceHighColor();
+		return aboveFloor > 0 && aboveFloor <= threshold;
+	}
+
+	static Color defenceColor(DefenceState state, BetterPartyDefenceConfig config)
+	{
+		if (isFullyDrained(state))
+		{
+			return config.defenceCappedColor();
+		}
+		return isLowDefence(state, config) ? config.defenceLowColor() : config.defenceHighColor();
 	}
 
 	private static long percent(long part, long whole)
