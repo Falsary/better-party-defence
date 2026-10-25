@@ -121,8 +121,9 @@ Better Party Defence currently supports the following bosses and encounter targe
 - Xarth
 - Dagon'hai Elder
 - Dagon'hai Monk (both monks tracked independently)
-- Ocellus (Phase 1)
-- Ocellus (Phase 3)
+- Ocellus 
+
+Magic defence tracking has been temporarily disabled within TFA until encounter-specific mechanics are confirmed.
 
 ### Other bosses
 
@@ -186,6 +187,8 @@ Support may be expanded where reliable Defence-drain tracking is applicable.
 
  These work well enough to ship on by default, although may still have untested edge cases. 
  In current use they are working as intended, but additional real-world testing may uncover situations that still need refinement.
+
+
 
  
   
