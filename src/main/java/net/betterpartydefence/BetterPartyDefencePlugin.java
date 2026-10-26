@@ -1556,10 +1556,10 @@ public class BetterPartyDefencePlugin extends Plugin
 	}
 
 	/**
-	 * P2 is The Blade, a separate target from Ocellus P1. The repaired Blade
-	 * actor (16683) signals the start of P2, even though it has no health-bar
-	 * ratio or ordinary attack options. Never carry P1's drain into P2. P3
-	 * has its own stat block and retains its drain across quadrants.
+	 * Phase 2 must never reuse Phase 1's stored values. The Blade actor by
+	 * itself was not a sufficient transition signal: the Ocellus actor changes
+	 * during the portal phase, and its Phase 1 actor can reach zero health.
+	 * We deliberately do NOT create an invented Phase 2 DefenceState here.
 	 */
 	private void reconcileTfaPhaseChange()
 	{
@@ -1571,22 +1571,29 @@ public class BetterPartyDefencePlugin extends Plugin
 
 		boolean phaseThree = findLiveNpcForBoss(BossDefence.TFA_OCELLUS_P3) != null;
 		boolean phaseTwo = false;
-		if (!phaseThree && world.npcs() != null)
+		boolean phaseOneDefeated = false;
+		if (world.npcs() != null)
 		{
 			Iterator<? extends NPC> iterator = world.npcs().iterator();
 			while (iterator != null && iterator.hasNext())
 			{
 				NPC npc = iterator.next();
-				if (isOcellusPhaseTwoBlade(npc))
+				if (isOcellusPhaseTwoActor(npc))
 				{
 					phaseTwo = true;
-					break;
+				}
+				if (isOcellusPhaseOneDefeated(npc))
+				{
+					phaseOneDefeated = true;
 				}
 			}
 		}
-		if (phaseTwo || phaseThree)
+
+		if ((phaseTwo || phaseThree || phaseOneDefeated) && !ocellusPhaseOneEnded)
 		{
 			ocellusPhaseOneEnded = true;
+			// Clear the old infoboxes on the transition tick, not a tick after.
+			removeInfoBox();
 		}
 		if (ocellusPhaseOneEnded && defenceTracker.hasRememberedState(BossDefence.TFA_OCELLUS_P1))
 		{
@@ -1595,11 +1602,37 @@ public class BetterPartyDefencePlugin extends Plugin
 		}
 	}
 
-	/** Phase 2 actor ID from the OSRS Wiki; excludes the broken Blade prop (62706). */
+	/**
+	 * The noncombat Ocellus actors in the portal transition and the repaired
+	 * Blade are phase-boundary cues, not trackable P2 Defence targets. The ID
+	 * check is also name-guarded to avoid unrelated NPCs.
+	 */
+	static boolean isOcellusPhaseTwoActor(NPC npc)
+	{
+		if (npc == null || npc.getName() == null)
+		{
+			return false;
+		}
+		String name = Text.removeTags(npc.getName()).trim();
+		return ("Ocellus".equalsIgnoreCase(name)
+			&& (npc.getId() == 16675 || npc.getId() == 16676))
+			|| ("The Blade".equalsIgnoreCase(name) && npc.getId() == 16683);
+	}
+
+	/** Retained for source compatibility and for the already known Blade actor. */
 	static boolean isOcellusPhaseTwoBlade(NPC npc)
 	{
 		return npc != null && npc.getId() == 16683 && npc.getName() != null
 			&& "The Blade".equalsIgnoreCase(Text.removeTags(npc.getName()).trim());
+	}
+
+	/** An observed Phase 1 actor at zero HP is stronger evidence than disappearance. */
+	static boolean isOcellusPhaseOneDefeated(NPC npc)
+	{
+		return npc != null && npc.getName() != null
+			&& "Ocellus".equalsIgnoreCase(Text.removeTags(npc.getName()).trim())
+			&& (npc.getId() == 16673 || npc.getId() == 16674)
+			&& (npc.isDead() || npc.getHealthRatio() == 0);
 	}
 
 	private void checkTfaNewAttempt(NPC npc)
@@ -2653,7 +2686,13 @@ public class BetterPartyDefencePlugin extends Plugin
 		}
 
 		NPC npc = worldView.npcs().byIndex(state.getNpcIndex());
-		return npc != null && !npc.isDead() && npc.getHealthRatio() != 0;
+		if (npc == null || npc.isDead() || npc.getHealthRatio() == 0 || isOcellusPhaseTwoActor(npc))
+		{
+			return false;
+		}
+		// A reused NPC index must not make a remembered P1 value look like P2.
+		return !state.isTfaBoss() || !"Ocellus".equalsIgnoreCase(state.getName())
+			|| !ocellusPhaseOneEnded || BossDefence.matchingNpc(npc) == BossDefence.TFA_OCELLUS_P3;
 	}
 
 	private void removeInfoBox()
