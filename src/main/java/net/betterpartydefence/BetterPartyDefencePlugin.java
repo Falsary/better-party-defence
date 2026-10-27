@@ -1207,7 +1207,7 @@ public class BetterPartyDefencePlugin extends Plugin
 		while (iterator != null && iterator.hasNext())
 		{
 			NPC npc = iterator.next();
-			if (npc == null || npc.isDead() || npc.getHealthRatio() == 0 || npc.getName() == null)
+			if (!BossDefence.isLiveNpc(npc) || npc.getName() == null)
 			{
 				continue;
 			}
@@ -1257,7 +1257,7 @@ public class BetterPartyDefencePlugin extends Plugin
 	{
 		if (!config.syncWithOtherPartyDefenceUsers() || !partyService.isInParty()
 			|| client.getGameState() != GameState.LOGGED_IN
-			|| npc == null || npc.isDead() || npc.getHealthRatio() == 0 || npc.getName() == null)
+			|| !BossDefence.isLiveNpc(npc) || npc.getName() == null)
 		{
 			return;
 		}
@@ -1610,8 +1610,9 @@ public class BetterPartyDefencePlugin extends Plugin
 	}
 
 	/**
-	 * Transition-phase Ocellus actors mark the P1 boundary. The repaired Blade
-	 * (16683) is also a marker, but now has an independent trackable P2 state.
+	 * Ocellus phase-2 actors mark the P1 boundary, even if temporarily
+	 * non-attackable. The Blade prop (16683) is a transition marker only,
+	 * and must NEVER receive spec credit or own a Defence state.
 	 * IDs are name-guarded to avoid unrelated NPCs.
 	 */
 	static boolean isOcellusPhaseTwoActor(NPC npc)
@@ -2441,7 +2442,7 @@ public class BetterPartyDefencePlugin extends Plugin
 		while (iterator != null && iterator.hasNext())
 		{
 			NPC npc = iterator.next();
-			if (npc != null && !npc.isDead() && npc.getHealthRatio() != 0 && npc.getName() != null
+			if (BossDefence.isLiveNpc(npc) && npc.getName() != null
 				&& BossDefence.matchingNpc(npc) == boss)
 			{
 				return npc;
@@ -2693,13 +2694,26 @@ public class BetterPartyDefencePlugin extends Plugin
 		}
 
 		NPC npc = worldView.npcs().byIndex(state.getNpcIndex());
-		if (npc == null || npc.isDead() || npc.getHealthRatio() == 0)
+		if (!BossDefence.isLiveNpc(npc))
 		{
 			return false;
 		}
-		// A reused NPC index must not make a remembered P1 value look like P2.
-		return !state.isTfaBoss() || !"Ocellus".equalsIgnoreCase(state.getName())
-			|| !ocellusPhaseOneEnded || BossDefence.matchingNpc(npc) == BossDefence.TFA_OCELLUS_P3;
+		// A recycled NPC index must never display P1 numbers on the P2 actor.
+		// Compare each Ocellus phase against its own base and floor. This also
+		// permits the *actual* P2 target, instead of permitting only P3.
+		if (state.isTfaBoss() && npc.getName() != null
+			&& "Ocellus".equalsIgnoreCase(Text.removeTags(npc.getName()).trim()))
+		{
+			BossDefence actor = BossDefence.matchingNpc(npc);
+			return actor != null
+				&& (actor == BossDefence.TFA_OCELLUS_P1
+					|| actor == BossDefence.TFA_OCELLUS_P2
+					|| actor == BossDefence.TFA_OCELLUS_P3)
+				&& actor.getBaseDef() == state.getBase()
+				&& actor.getMinDef() == state.getMin()
+				&& (actor != BossDefence.TFA_OCELLUS_P1 || !ocellusPhaseOneEnded);
+		}
+		return true;
 	}
 
 	private void removeInfoBox()

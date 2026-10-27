@@ -44,9 +44,10 @@ public enum BossDefence
 	// NEVER share a party-sync history or a Defence pool. NPC IDs from OSRS Wiki.
 	TFA_DAGONHAI_MONK_16645("Dagon'hai Monk (16645)", 100, 290, 1, 1, 100, 0, Flag.TFA),
 	TFA_DAGONHAI_MONK_16646("Dagon'hai Monk (16646)", 100, 290, 1, 1, 100, 0, Flag.TFA),
-	// Each Ocellus phase has an independent Defence pool. Phase 2's target is
-	// The Blade (NPC 16683), not Ocellus. Per Jagex's Oct 21 Defence hotfix,
-	// the Blade drains to 0; P1 and P3 stop at 60% of their base Defence.
+	// Each Ocellus phase has an independent Defence pool. P2 is the *attackable*
+	// Ocellus actor during the portal sequence; NPC 16683 is a separate, inert
+	// Blade prop. Per Jagex's Oct 21 Defence hotfix, P2 drains to 0;
+	// P1 and P3 stop at 60% of their base Defence.
 	// The Blade's Magic level (220) and bonus (100) are sourced independently;
 	// non-Defence combat levels here are provisional and must not be used to
 	// assert accurate Magic tracking (TFA Magic readouts remain suppressed).
@@ -198,14 +199,25 @@ public enum BossDefence
 			}
 			return null; // Unknown monk actors must not share either monk's state.
 		}
-		// Only the repaired Blade NPC in the P2 arena is a tracked target.
-		// The broken Blade object and other Ocellus transition actors are not.
+		// The Blade world NPC (including the repaired version, 16683) is a prop.
+		// Combat specs land on the attackable Ocellus actor, never on the prop.
 		if ("The Blade".equalsIgnoreCase(name))
 		{
-			return npc.getId() == 16683 ? TFA_OCELLUS_P2 : null;
+			return null;
 		}
 		if ("Ocellus".equalsIgnoreCase(name))
 		{
+			// 16675 is a transition-only actor, not a Defence target.
+			// Keep it out of the P3 combat-level fallback too.
+			if (npc.getId() == 16675)
+			{
+				return null;
+			}
+			// Only confirmed P2 combat actor 16676 can own the P2 pool.
+			if (npc.getId() == 16676)
+			{
+				return TFA_OCELLUS_P2;
+			}
 			// Wiki infobox and later combat-level corrections disagree between
 			// 1197 and 1601. Both distinguish the combat P3 NPC from P1 (1121).
 			if (npc.getCombatLevel() == 1197 || npc.getCombatLevel() == 1601)
@@ -216,9 +228,32 @@ public enum BossDefence
 			{
 				return TFA_OCELLUS_P1;
 			}
-			return null; // P2/unknown or non-combat hooded forms: fail closed.
+			return null; // Unknown or non-combat hooded forms: fail closed.
 		}
 		return matchingNpcName(name);
+	}
+
+	/**
+	 * This exact NPC ID is the confirmed attackable P2 Ocellus target.
+	 * Do not depend on the transformed composition's Attack option: it may
+	 * be absent during NPC updates, despite the actor being damageable.
+	 * Transition actor 16675 and the Blade prop 16683 are always excluded.
+	 */
+	static boolean isAttackableOcellusPhaseTwo(NPC npc)
+	{
+		return npc != null && npc.getId() == 16676 && npc.getName() != null
+			&& "Ocellus".equalsIgnoreCase(Text.removeTags(npc.getName()).trim());
+	}
+
+	/**
+	 * Zero health ratio can also mean 'no health bar yet'. Do not treat an
+	 * confirmed P2 actor as dead solely because its ratio is unavailable.
+	 * Never make this exception for the P1/P3 or transition-only actors.
+	 */
+	static boolean isLiveNpc(NPC npc)
+	{
+		return npc != null && !npc.isDead()
+			&& (npc.getHealthRatio() != 0 || isAttackableOcellusPhaseTwo(npc));
 	}
 
 	/**
@@ -234,7 +269,7 @@ public enum BossDefence
 		String trimmed = Text.removeTags(name).trim();
 		if ("The Blade".equalsIgnoreCase(trimmed))
 		{
-			return null; // P2 requires NPC ID 16683; name is not enough.
+			return null; // Props are never tracked by name.
 		}
 		for (BossDefence boss : values())
 		{

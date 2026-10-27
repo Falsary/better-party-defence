@@ -5,6 +5,7 @@ import static org.junit.Assert.*;
 import java.util.HashSet;
 import java.util.Set;
 import net.runelite.api.NPC;
+import net.runelite.api.NPCComposition;
 import org.junit.Test;
 import static org.mockito.Mockito.*;
 
@@ -79,11 +80,57 @@ public class TfaBossDefenceTest
             BossDefence.matchingNpc(npc("Ocellus", 16677, 1601)));
         assertNull(BossDefence.matchingNpc(npc("Ocellus", 16675, 0)));
         assertEquals(BossDefence.TFA_OCELLUS_P2,
-            BossDefence.matchingNpc(npc("The Blade", 16683, 0)));
+            BossDefence.matchingNpc(npc("Ocellus", 16676, 1200))); // exact NPC ID
+        assertNull(BossDefence.matchingNpc(npc("The Blade", 16683, 0)));
         assertNull(BossDefence.matchingNpc(npc("The Blade", 62706, 0)));
         assertNull(BossDefence.matchingNpc(npc("The Blade", 16684, 0)));
         assertNull(BossDefence.matchingNpcName("The Blade"));
         assertNull(BossDefence.matchingNpcName("Ocellus"));
+    }
+
+    private static NPC actorWithActions(int id, String... actions)
+    {
+        NPC n = npc("Ocellus", id, 1200);
+        NPCComposition comp = mock(NPCComposition.class);
+        when(comp.getActions()).thenReturn(actions);
+        when(n.getTransformedComposition()).thenReturn(comp);
+        return n;
+    }
+
+    @Test
+    public void ocellusPhaseTwoTracksOnlyConfirmed16676CombatTarget()
+    {
+        NPC attackable = actorWithActions(16676, null, "Attack", "Examine");
+        when(attackable.getHealthRatio()).thenReturn(0); // no visible health bar yet
+        assertTrue(BossDefence.isAttackableOcellusPhaseTwo(attackable));
+        assertEquals(BossDefence.TFA_OCELLUS_P2, BossDefence.matchingNpc(attackable));
+        assertTrue(BossDefence.isLiveNpc(attackable));
+
+        NPC actionsMissing = actorWithActions(16676, "Examine");
+        assertTrue(BossDefence.isAttackableOcellusPhaseTwo(actionsMissing));
+        assertEquals(BossDefence.TFA_OCELLUS_P2, BossDefence.matchingNpc(actionsMissing));
+
+        NPC transition = actorWithActions(16675, "Attack", "Examine");
+        assertFalse(BossDefence.isAttackableOcellusPhaseTwo(transition));
+        assertNull(BossDefence.matchingNpc(transition));
+        assertFalse(BossDefence.isLiveNpc(transition));
+
+        assertNull(BossDefence.matchingNpc(npc("The Blade", 16683, 0)));
+        assertNull(BossDefence.matchingNpcName("The Blade"));
+        assertNull(BossDefence.matchingNpc(npc("Ocellus", 16672, 0)));
+    }
+
+    @Test
+    public void ocellusPhaseTwoIdentificationDoesNotDependOnCompositionActions()
+    {
+        NPC n = npc("Ocellus", 16676, 1200);
+        NPCComposition transformed = mock(NPCComposition.class);
+        when(transformed.getActions()).thenReturn(new String[] {"Examine"});
+        when(n.getTransformedComposition()).thenReturn(transformed);
+        assertEquals(BossDefence.TFA_OCELLUS_P2, BossDefence.matchingNpc(n));
+
+        when(n.getTransformedComposition()).thenReturn(null);
+        assertEquals(BossDefence.TFA_OCELLUS_P2, BossDefence.matchingNpc(n));
     }
 
     @Test

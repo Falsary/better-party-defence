@@ -132,6 +132,6 @@ public class NpcDefenceOverlay extends Overlay
 			return null;
 		}
 		NPC npc = client.getTopLevelWorldView().npcs().byIndex(index);
-		return npc != null && !npc.isDead() && npc.getHealthRatio() != 0 ? npc : null;
+		return BossDefence.isLiveNpc(npc) ? npc : null;
 	}
 }

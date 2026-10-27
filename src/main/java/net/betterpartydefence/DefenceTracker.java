@@ -143,13 +143,8 @@ public class DefenceTracker
 		long magicBaseLevel;
 		/** Whether at least one supported defence-draining spec has landed on this target. */
 		boolean drained;
-		/** Display-only classification for TFA bosses, including party-synced/previous targets. */
+		/** Presentation-only flag from the identified boss, including party-synced targets. */
 		boolean tfaBoss;
-
-		public boolean isTfaBoss()
-		{
-			return tfaBoss;
-		}
 	}
 
 	/** One accepted spec in the current tracked encounter, for the info-box hover history. */
@@ -1094,7 +1089,7 @@ public class DefenceTracker
 	{
 		if (incoming == null || localNpc == null || incoming.getBossType() == null
 			|| BossDefence.matchingNpc(localNpc) != incoming.getBossType()
-			|| localNpc.isDead() || localNpc.getHealthRatio() == 0)
+			|| !BossDefence.isLiveNpc(localNpc))
 		{
 			return false;
 		}
@@ -1187,7 +1182,7 @@ public class DefenceTracker
 			if (saved.bossType == boss)
 			{
 				NPC npc = npcByIndex(saved.npcIndex);
-				if (npc != null && !npc.isDead() && npc.getHealthRatio() != 0)
+				if (BossDefence.isLiveNpc(npc))
 				{
 					return true;
 				}
@@ -1516,7 +1511,7 @@ public class DefenceTracker
 		{
 			SavedState saved = remaining.get(i);
 			NPC npc = npcByIndex(saved.npcIndex);
-			if (npc != null && !npc.isDead() && npc.getHealthRatio() != 0)
+			if (BossDefence.isLiveNpc(npc))
 			{
 				loadSavedState(saved);
 				return;
@@ -1595,7 +1590,7 @@ public class DefenceTracker
 		{
 			SavedState saved = remaining.get(i);
 			NPC npc = npcByIndex(saved.npcIndex);
-			if (npc != null && !npc.isDead() && npc.getHealthRatio() != 0)
+			if (BossDefence.isLiveNpc(npc))
 			{
 				loadSavedState(saved);
 				return;
