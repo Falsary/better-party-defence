@@ -90,6 +90,7 @@ enum BossMechanics
 		if (boss == BossDefence.TFA_ARCHIVE_GUARDIAN
 			|| boss == BossDefence.TFA_XARTH
 			|| boss == BossDefence.TFA_OCELLUS_P1
+			|| boss == BossDefence.TFA_OCELLUS_P2
 			|| boss == BossDefence.TFA_OCELLUS_P3)
 		{
 			return TFA_PHASE_PERSISTENT;

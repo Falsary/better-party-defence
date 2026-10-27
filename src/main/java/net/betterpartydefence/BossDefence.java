@@ -44,11 +44,14 @@ public enum BossDefence
 	// NEVER share a party-sync history or a Defence pool. NPC IDs from OSRS Wiki.
 	TFA_DAGONHAI_MONK_16645("Dagon'hai Monk (16645)", 100, 290, 1, 1, 100, 0, Flag.TFA),
 	TFA_DAGONHAI_MONK_16646("Dagon'hai Monk (16646)", 100, 290, 1, 1, 100, 0, Flag.TFA),
-	// Ocellus P1 and P3 use distinct combat stat blocks, and P3 never resets at
-	// quadrant changes after Jagex's 21 October hotfix. P2 is NOT guessed: the
-	// strategy table mentions a 250/0 Blade, but does not establish a trackable
-	// attackable NPC identity or its Magic/Attack/Strength stats.
+	// Each Ocellus phase has an independent Defence pool. Phase 2's target is
+	// The Blade (NPC 16683), not Ocellus. Per Jagex's Oct 21 Defence hotfix,
+	// the Blade drains to 0; P1 and P3 stop at 60% of their base Defence.
+	// The Blade's Magic level (220) and bonus (100) are sourced independently;
+	// non-Defence combat levels here are provisional and must not be used to
+	// assert accurate Magic tracking (TFA Magic readouts remain suppressed).
 	TFA_OCELLUS_P1("Ocellus (Phase 1)", 215, 350, 1, 1, 100, 129, Flag.TFA, Flag.DEMON),
+	TFA_OCELLUS_P2("The Blade", 250, 220, 1, 1, 100, 0, Flag.TFA),
 	TFA_OCELLUS_P3("Ocellus (Phase 3)", 250, 300, 325, 250, 200, 150, Flag.TFA, Flag.DEMON),
 	ABYSSAL_PORTAL("Abyssal portal", 176, 176, 1, 1, 60, 0, Flag.COX_SCALED, Flag.COX_MAGIC_IS_DEFENSIVE),
 	// The Sire's magic-def bonus drops to -40 once it's stunned in phase 3; 20 covers the rest.
@@ -195,6 +198,12 @@ public enum BossDefence
 			}
 			return null; // Unknown monk actors must not share either monk's state.
 		}
+		// Only the repaired Blade NPC in the P2 arena is a tracked target.
+		// The broken Blade object and other Ocellus transition actors are not.
+		if ("The Blade".equalsIgnoreCase(name))
+		{
+			return npc.getId() == 16683 ? TFA_OCELLUS_P2 : null;
+		}
 		if ("Ocellus".equalsIgnoreCase(name))
 		{
 			// Wiki infobox and later combat-level corrections disagree between
@@ -223,6 +232,10 @@ public enum BossDefence
 			return null;
 		}
 		String trimmed = Text.removeTags(name).trim();
+		if ("The Blade".equalsIgnoreCase(trimmed))
+		{
+			return null; // P2 requires NPC ID 16683; name is not enough.
+		}
 		for (BossDefence boss : values())
 		{
 			String candidate = Text.removeTags(boss.npcName).trim();

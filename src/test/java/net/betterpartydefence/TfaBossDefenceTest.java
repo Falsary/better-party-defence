@@ -35,6 +35,7 @@ public class TfaBossDefenceTest
             {BossDefence.TFA_DAGONHAI_MONK_16645, 100, 0},
             {BossDefence.TFA_DAGONHAI_MONK_16646, 100, 0},
             {BossDefence.TFA_OCELLUS_P1, 215, 129},
+            {BossDefence.TFA_OCELLUS_P2, 250, 0},
             {BossDefence.TFA_OCELLUS_P3, 250, 150}
         };
         for (Object[] entry : cases)
@@ -77,6 +78,11 @@ public class TfaBossDefenceTest
         assertEquals(BossDefence.TFA_OCELLUS_P3,
             BossDefence.matchingNpc(npc("Ocellus", 16677, 1601)));
         assertNull(BossDefence.matchingNpc(npc("Ocellus", 16675, 0)));
+        assertEquals(BossDefence.TFA_OCELLUS_P2,
+            BossDefence.matchingNpc(npc("The Blade", 16683, 0)));
+        assertNull(BossDefence.matchingNpc(npc("The Blade", 62706, 0)));
+        assertNull(BossDefence.matchingNpc(npc("The Blade", 16684, 0)));
+        assertNull(BossDefence.matchingNpcName("The Blade"));
         assertNull(BossDefence.matchingNpcName("Ocellus"));
     }
 

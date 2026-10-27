@@ -1559,7 +1559,7 @@ public class BetterPartyDefencePlugin extends Plugin
 	 * Phase 2 must never reuse Phase 1's stored values. The Blade actor by
 	 * itself was not a sufficient transition signal: the Ocellus actor changes
 	 * during the portal phase, and its Phase 1 actor can reach zero health.
-	 * We deliberately do NOT create an invented Phase 2 DefenceState here.
+	 * Phase 2 is The Blade's own 250 -> 0 Defence pool, never P1's state.
 	 */
 	private void reconcileTfaPhaseChange()
 	{
@@ -1600,12 +1600,19 @@ public class BetterPartyDefencePlugin extends Plugin
 			applyEncounterReset(BossDefence.TFA_OCELLUS_P1, null,
 				"Ocellus left Phase 1", true);
 		}
+		// P3 starts from its own Defence baseline, never from P2 Blade drains.
+		// Reset only on the definitive P3 actor, not on a P2 portal/quadrant change.
+		if (phaseThree && defenceTracker.hasRememberedState(BossDefence.TFA_OCELLUS_P2))
+		{
+			applyEncounterReset(BossDefence.TFA_OCELLUS_P2, null,
+				"The Blade left Phase 2", true);
+		}
 	}
 
 	/**
-	 * The noncombat Ocellus actors in the portal transition and the repaired
-	 * Blade are phase-boundary cues, not trackable P2 Defence targets. The ID
-	 * check is also name-guarded to avoid unrelated NPCs.
+	 * Transition-phase Ocellus actors mark the P1 boundary. The repaired Blade
+	 * (16683) is also a marker, but now has an independent trackable P2 state.
+	 * IDs are name-guarded to avoid unrelated NPCs.
 	 */
 	static boolean isOcellusPhaseTwoActor(NPC npc)
 	{
@@ -2686,7 +2693,7 @@ public class BetterPartyDefencePlugin extends Plugin
 		}
 
 		NPC npc = worldView.npcs().byIndex(state.getNpcIndex());
-		if (npc == null || npc.isDead() || npc.getHealthRatio() == 0 || isOcellusPhaseTwoActor(npc))
+		if (npc == null || npc.isDead() || npc.getHealthRatio() == 0)
 		{
 			return false;
 		}
