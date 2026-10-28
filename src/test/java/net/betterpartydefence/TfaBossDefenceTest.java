@@ -144,4 +144,28 @@ public class TfaBossDefenceTest
         assertFalse(BossMechanics.forBoss(BossDefence.TFA_OCELLUS_P1)
             .resetsStatsOnActorEntry(16674));
     }
+    @Test
+    public void ocellusP2MatchesVerifiedActorIdRegardlessOfName()
+    {
+        NPC sword = npc("The Blade", 16676, 1200);
+        when(sword.getHealthRatio()).thenReturn(0);
+        assertEquals(BossDefence.TFA_OCELLUS_P2, BossDefence.matchingNpc(sword));
+        assertTrue(BossDefence.isAttackableOcellusPhaseTwo(sword));
+        assertTrue(BossDefence.isLiveNpc(sword));
+        assertTrue(BetterPartyDefencePlugin.isOcellusPhaseTwoActor(sword));
+
+        NPC ocellus = npc("Ocellus", 16676, 1200);
+        assertEquals(BossDefence.TFA_OCELLUS_P2, BossDefence.matchingNpc(ocellus));
+
+        NPC otherName = npc("Charged Blade", 16676, 1200);
+        assertEquals(BossDefence.TFA_OCELLUS_P2, BossDefence.matchingNpc(otherName));
+
+        assertNull(BossDefence.matchingNpc(npc("Ocellus", 16675, 1200)));
+        assertNull(BossDefence.matchingNpc(npc("The Blade", 16683, 0)));
+        assertEquals(BossDefence.TFA_OCELLUS_P1,
+            BossDefence.matchingNpc(npc("Ocellus", 16673, 1121)));
+        assertEquals(BossDefence.TFA_OCELLUS_P3,
+            BossDefence.matchingNpc(npc("Ocellus", 16677, 1601)));
+    }
+
 }

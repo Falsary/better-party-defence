@@ -1373,7 +1373,7 @@ public class BetterPartyDefencePlugin extends Plugin
 		{
 			DefenceTracker.SyncState sync = target.getState();
 			NPC npc = target.getNpcIndex() < 0 ? null : worldView.npcs().byIndex(target.getNpcIndex());
-			if (sync == null || !sync.isDrained() || npc == null || npc.isDead() || npc.getHealthRatio() == 0
+			if (sync == null || !sync.isDrained() || !BossDefence.isLiveNpc(npc)
 				|| !peerSyncAllowedAtCurrentEncounter(sync.getBossType()))
 			{
 				continue;
@@ -1617,13 +1617,23 @@ public class BetterPartyDefencePlugin extends Plugin
 	 */
 	static boolean isOcellusPhaseTwoActor(NPC npc)
 	{
-		if (npc == null || npc.getName() == null)
+		if (npc == null)
+		{
+			return false;
+		}
+		// 16676 is the P2 combat actor regardless of its current display name.
+		// The other two IDs only signal the P1->P2 transition; they never
+		// receive Defence tracking or spec credit.
+		if (npc.getId() == 16676)
+		{
+			return true;
+		}
+		if (npc.getName() == null)
 		{
 			return false;
 		}
 		String name = Text.removeTags(npc.getName()).trim();
-		return ("Ocellus".equalsIgnoreCase(name)
-			&& (npc.getId() == 16675 || npc.getId() == 16676))
+		return ("Ocellus".equalsIgnoreCase(name) && npc.getId() == 16675)
 			|| ("The Blade".equalsIgnoreCase(name) && npc.getId() == 16683);
 	}
 

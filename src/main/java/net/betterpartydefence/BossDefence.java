@@ -182,7 +182,18 @@ public enum BossDefence
 	 */
 	public static BossDefence matchingNpc(NPC npc)
 	{
-		if (npc == null || npc.getName() == null)
+		if (npc == null)
+		{
+			return null;
+		}
+		// The P2 combat target is NPC 16676. Its display name is not a
+		// reliable identifier: players attack the charging Blade during P2.
+		// Match by the verified actor ID before applying name-based exclusions.
+		if (npc.getId() == 16676)
+		{
+			return TFA_OCELLUS_P2;
+		}
+		if (npc.getName() == null)
 		{
 			return null;
 		}
@@ -213,11 +224,6 @@ public enum BossDefence
 			{
 				return null;
 			}
-			// Only confirmed P2 combat actor 16676 can own the P2 pool.
-			if (npc.getId() == 16676)
-			{
-				return TFA_OCELLUS_P2;
-			}
 			// Wiki infobox and later combat-level corrections disagree between
 			// 1197 and 1601. Both distinguish the combat P3 NPC from P1 (1121).
 			if (npc.getCombatLevel() == 1197 || npc.getCombatLevel() == 1601)
@@ -241,8 +247,7 @@ public enum BossDefence
 	 */
 	static boolean isAttackableOcellusPhaseTwo(NPC npc)
 	{
-		return npc != null && npc.getId() == 16676 && npc.getName() != null
-			&& "Ocellus".equalsIgnoreCase(Text.removeTags(npc.getName()).trim());
+		return npc != null && npc.getId() == 16676;
 	}
 
 	/**
