@@ -105,15 +105,20 @@ public class NpcDefenceOverlay extends Overlay
 	private void renderAtNpc(Graphics2D graphics, DefenceState state, NPC npc,
 		DefenceOverlayPosition position, int yOffset)
 	{
-		// Ocellus P2's attackable Blade (16676) must always render at the NPC centre,
-		// regardless of the player's normal overlay position or vertical offset.
+		// The Blade in Ocellus P2 (16676) has a much taller model than its
+		// useful combat display area. Treat its true midpoint as the top of
+		// the usable area, retaining all player-selected positioning options.
+		// ABOVE/RIGHT now anchor at that midpoint, CENTRE halfway to its feet,
+		// and AT_NPC_FEET at its feet. The user's Y offset still applies below.
+		int zOffset;
 		if (npc.getId() == 16676)
 		{
-			position = DefenceOverlayPosition.CENTRE_OF_NPC;
-			yOffset = 0;
+			zOffset = (int) (npc.getLogicalHeight() * 0.5 * position.getHeightFactor());
 		}
-
-		int zOffset = (int) (npc.getLogicalHeight() * position.getHeightFactor()) + position.getHeightOffset();
+		else
+		{
+			zOffset = (int) (npc.getLogicalHeight() * position.getHeightFactor()) + position.getHeightOffset();
+		}
 		Point anchor = npc.getCanvasTextLocation(graphics, "", zOffset);
 		if (anchor == null)
 		{
