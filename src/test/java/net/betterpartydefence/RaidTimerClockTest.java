@@ -39,6 +39,21 @@ public class RaidTimerClockTest
 		assertTrue(late.tickAt(9_000) < 600);
 	}
 
+	@Test public void lateJoinerAndEarlyClientAgreeOnTheSameRealTick()
+	{
+		RaidTimerClock early = running(1_000, 0);
+		RaidTimerClock late = running(9_000, 500);
+
+		// The early client reached elapsed 500 at local tick 1500; the late client
+		// sampled elapsed 500 at local tick 9000. Nine ticks later both must agree.
+		assertEquals(509L, early.tickAt(1_509));
+		assertEquals(509L, late.tickAt(9_009));
+		for (int offset = 0; offset < 30; offset++)
+		{
+			assertEquals(early.tickAt(1_500 + offset), late.tickAt(9_000 + offset));
+		}
+	}
+
 	@Test public void resampleCorrectionRebasesFutureTicksWithoutHistory()
 	{
 		RaidTimerClock clock = running(1_000, 0);
@@ -146,6 +161,15 @@ public class RaidTimerClockTest
 		assertNull(RaidTimerClock.parseTimerScript(6582, new Object[]{6582, 0, 0}));
 		assertNull(RaidTimerClock.parseTimerScript(10037, new Object[]{10037, 0, 0}));
 		assertNull(RaidTimerClock.parseTimerScript(10038, new Object[]{10038, 0, 0}));
+	}
+
+	@Test public void tobHudScriptsAreNotTimerInputs()
+	{
+		// ToB's HUD is room progress, not an elapsed timer; none of these may be treated
+		// as a sample even when they carry integers in the same argument positions.
+		assertNull(RaidTimerClock.parseTimerScript(2296, new Object[]{2296, 0, 0}));
+		assertNull(RaidTimerClock.parseTimerScript(2304, new Object[]{2304, 0, 0}));
+		assertNull(RaidTimerClock.parseTimerScript(4490, new Object[]{4490, 0, 0}));
 	}
 
 	@Test public void timerScriptArgumentsAreStrictlyValidated()

@@ -365,6 +365,29 @@ public class EncounterTickSyncTest
         assertFalse(EncounterTimeline.before(first, second));
     }
 
+    @Test public void raidTimeClockClientsConvergeOnOneHistory()
+    {
+        String anchor = "raid-time:v1:toa:i731";
+        tracker.setSharedTickAnchor(anchor, 5000, 100);
+        local(5007, SpecialWeapon.DRAGON_WARHAMMER, 1);
+
+        DefenceTracker peer = new DefenceTracker(client, mock(BetterPartyDefenceConfig.class));
+        peer.setSharedTickAnchor(anchor, 120, 100);
+        when(client.getTickCount()).thenReturn(127);
+        peer.queueLocal(SpecialWeapon.BANDOS_GODSWORD, 1, 20, 301, "Bob");
+        peer.onGameTick();
+
+        tracker.queue(SpecialWeapon.BANDOS_GODSWORD, 1, 20, 301, "Bob");
+        tracker.onGameTick();
+        peer.queue(SpecialWeapon.DRAGON_WARHAMMER, 1, 1, 301, "Alice");
+        peer.onGameTick();
+
+        assertTrue(tracker.mergeEventSyncState(peer.syncState(), npc));
+        assertTrue(peer.mergeEventSyncState(tracker.syncState(), npc));
+        assertEquals(189, tracker.state().getCurrent());
+        assertEquals(tracker.syncState(), peer.syncState());
+    }
+
     @Test public void sameRaidElapsedTickIsASameTickNotAnArrivalOrder()
     {
         String anchor = "raid-time:v1:toa:i731";
@@ -383,6 +406,31 @@ public class EncounterTickSyncTest
         assertEquals(107L, second.getEncounterTick());
         assertFalse(EncounterTimeline.before(first, second));
         assertFalse(EncounterTimeline.before(second, first));
+    }
+
+    @Test public void distinctIdenticalAttacksAreBothPreserved()
+    {
+        SpecHistoryEntry first = new SpecHistoryEntry("Bob", SpecialWeapon.BANDOS_GODSWORD, 20,
+            "first", "clock", 5);
+        SpecHistoryEntry second = new SpecHistoryEntry("Bob", SpecialWeapon.BANDOS_GODSWORD, 20,
+            "second", "clock", 12);
+
+        List<SpecHistoryEntry> merged = EncounterTimeline.union(Arrays.asList(first), Arrays.asList(second));
+
+        assertNotNull(merged);
+        assertEquals(2, merged.size());
+        assertTrue(merged.contains(first));
+        assertTrue(merged.contains(second));
+    }
+
+    @Test public void sameEventIdWithDifferentClockDataIsRejected()
+    {
+        local(100, SpecialWeapon.DRAGON_WARHAMMER, 1);
+        SpecHistoryEntry own = tracker.specHistory().get(0);
+        SpecHistoryEntry conflicting = new SpecHistoryEntry(own.getPlayerName(), own.getWeapon(),
+            own.getHit(), own.getEventId(), "raid-time:v1:toa:i2", 900);
+
+        assertNull(EncounterTimeline.union(Arrays.asList(own), Arrays.asList(conflicting)));
     }
 
     @Test public void differentRaidTimeDomainsRemainUnordered()

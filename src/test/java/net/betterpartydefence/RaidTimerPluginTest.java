@@ -109,6 +109,24 @@ public class RaidTimerPluginTest
 		assertEquals(124L, entry.getEncounterTick());
 	}
 
+	@Test public void tfaTimerKeepsItsControllerScopeAcrossRoomScenes()
+	{
+		when(world.isInstance()).thenReturn(true);
+		when(client.getVarpValue(net.runelite.api.gameval.VarPlayerID.TFA_MYCONTROLLER)).thenReturn(77);
+		when(client.getTickCount()).thenReturn(5_000);
+		timerScript(RaidTimerClock.TFA_TIMER_SCRIPT, 0, 0);
+
+		// A later room has a different scene, but the same party controller and the same
+		// running timer. The established domain must not change mid-raid.
+		when(world.getBaseX()).thenReturn(4_000);
+		when(client.getTickCount()).thenReturn(5_005);
+		timerScript(RaidTimerClock.TFA_TIMER_SCRIPT, 5, 0);
+		SpecHistoryEntry entry = localSpec(5_007);
+
+		assertEquals("raid-time:v1:tfa:c77", entry.getTickAnchor());
+		assertEquals(7L, entry.getEncounterTick());
+	}
+
 	@Test public void stoppedTimerStopsAnchoringNewSpecs()
 	{
 		when(world.isInstance()).thenReturn(true);

@@ -3,9 +3,12 @@ package net.betterpartydefence;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
+import java.util.function.Function;
 import net.betterpartydefence.DefenceTracker.SpecHistoryEntry;
 
 /**
@@ -153,9 +156,21 @@ final class EncounterTimeline
 	 */
 	static <S> S replay(List<SpecHistoryEntry> events, S baseline, Replay<S> replay)
 	{
+		return replay(events, baseline, replay, null);
+	}
+
+	/**
+	 * As {@link #replay(List, Object, Replay)}, but collapses interchangeable choices. Two
+	 * available events with the same non-null effect key produce the same next state from the
+	 * same state, so exploring one of them represents both. This is exact symmetry reduction,
+	 * not a heuristic: it only removes permutations that cannot change the result.
+	 */
+	static <S> S replay(List<SpecHistoryEntry> events, S baseline, Replay<S> replay,
+		Function<SpecHistoryEntry, String> effectKey)
+	{
 		// Do not construct an unbounded graph or guess an order beyond the supported capacity.
 		if (events.size() > MAX_EVENTS) { return baseline; }
-		Search<S> search = new Search<>(events, replay);
+		Search<S> search = new Search<>(events, replay, effectKey);
 		search.visit(baseline, new boolean[events.size()], 0);
 		return search.exhausted ? baseline : search.best;
 	}
@@ -164,16 +179,19 @@ final class EncounterTimeline
 	{
 		private final List<SpecHistoryEntry> events;
 		private final Replay<S> replay;
+		private final Function<SpecHistoryEntry, String> effectKey;
 		private final List<List<Integer>> successors = new ArrayList<>();
 		private final int[] remainingPredecessors;
 		private S best;
 		private int steps;
 		private boolean exhausted;
 
-		private Search(List<SpecHistoryEntry> events, Replay<S> replay)
+		private Search(List<SpecHistoryEntry> events, Replay<S> replay,
+			Function<SpecHistoryEntry, String> effectKey)
 		{
 			this.events = events;
 			this.replay = replay;
+			this.effectKey = effectKey;
 			remainingPredecessors = new int[events.size()];
 			for (int i = 0; i < events.size(); i++)
 			{
@@ -202,10 +220,21 @@ final class EncounterTimeline
 				best = best == null ? state : replay.conservative(best, state);
 				return;
 			}
+			Set<String> triedEffects = effectKey == null ? null : new HashSet<>();
 			for (int i = 0; i < events.size() && !exhausted; i++)
 			{
 				if (!used[i] && remainingPredecessors[i] == 0)
 				{
+					if (triedEffects != null)
+					{
+						String key = effectKey.apply(events.get(i));
+						if (key != null && !triedEffects.add(key))
+						{
+							// An interchangeable event is still available; this branch is a
+							// permutation of one already explored from this exact state.
+							continue;
+						}
+					}
 					used[i] = true;
 					for (int next : successors.get(i)) { remainingPredecessors[next]--; }
 					visit(replay.apply(state, events.get(i)), used, depth + 1);

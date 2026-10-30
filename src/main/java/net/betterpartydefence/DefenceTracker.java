@@ -1330,6 +1330,42 @@ public class DefenceTracker
 		return true;
 	}
 
+	/**
+	 * Exact symmetry key for the timeline replay. Two available events with the same key have
+	 * the same effect from the same state, so their relative order cannot change the result.
+	 * Keys are deliberately conservative: different hits stay distinct wherever the formula
+	 * uses the hit value, and only the weapons whose formula ignores its magnitude collapse it.
+	 */
+	String effectKey(SpecHistoryEntry event, NPC npc)
+	{
+		if (event == null || event.getWeapon() == null)
+		{
+			return null;
+		}
+		SpecialWeapon weapon = event.getWeapon();
+		int hit = npc == null ? event.getHit() : weapon.computeHit(event.getHit(), npc);
+		switch (weapon)
+		{
+			case DRAGON_WARHAMMER:
+			case ELDER_MAUL:
+				// Damage magnitude is irrelevant; only "hit" vs the Tekton zero-drain case.
+				return hit > 0
+					? weapon.name() + ":positive"
+					: weapon.name() + ":zero:" + (weapon.computeDrainPercent(hit, npc) > 0 ? 1 : 0);
+			case ARCLIGHT:
+			case DARKLIGHT:
+			case EMBERLIGHT:
+				// Drain uses the encounter's starting Defence, not the damage dealt.
+				return weapon.name() + (hit > 0 ? ":positive" : ":zero");
+			case ACCURSED_SCEPTRE:
+				// Only the first positive Condemn applies; every positive hit is interchangeable.
+				return weapon.name() + (hit > 0 ? ":positive" : ":zero");
+			default:
+				// BGS spill, Ralos glaive count, Seercull/Ayak and the rest use the hit value.
+				return weapon.name() + ":" + hit;
+		}
+	}
+
 	/** Reuse the existing weapon formulas and the actual encounter's scaled baseline. */
 	private void replayTimeline(List<SpecHistoryEntry> events, NPC npc)
 	{
@@ -1364,7 +1400,7 @@ public class DefenceTracker
 				a.accursedApplied &= b.accursedApplied;
 				return a;
 			}
-		});
+		}, event -> effectKey(event, npc));
 		loadSavedState(result);
 		specHistory.addAll(events);
 		drained = true;
