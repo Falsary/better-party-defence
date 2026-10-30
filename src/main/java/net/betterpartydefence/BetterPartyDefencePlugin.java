@@ -165,10 +165,18 @@ public class BetterPartyDefencePlugin extends Plugin
 		VarbitID.TOA_CLIENT_P4, VarbitID.TOA_CLIENT_P5, VarbitID.TOA_CLIENT_P6, VarbitID.TOA_CLIENT_P7
 	};
 	private final Map<SpecEventKey, Integer> recentSpecEvents = new HashMap<>();
-	private final Map<SyncedSpecKey, Integer> recentSyncedSpecs = new HashMap<>();
+	private final SnapshotEchoGuard<SyncedSpecKey> recentSyncedSpecs =
+		new SnapshotEchoGuard<>(SYNC_HISTORY_DUPLICATE_WINDOW_TICKS);
+	private final java.util.ArrayDeque<BpdDefenceSync> pendingSnapshots = new java.util.ArrayDeque<>();
+	private volatile long partyEpoch;
 	private final List<InfoBox> hiddenSpecialCounterInfoBoxes = new ArrayList<>();
 	private Integer hiddenSpecialCounterNpcIndex;
 	private boolean wasInParty;
+	/** Local tick observed on the shared raid-entry boundary, used as a common relative origin. */
+	private boolean raidClockSignalsInitialized;
+	private boolean wasInSupportedRaidForClock;
+	private boolean sharedRaidClockActive;
+	private int sharedRaidStartTick;
 	private Integer lastSyncSignature;
 	private long lastSyncBroadcastMillis;
 	/** Logical state version per boss. Prevents stale snapshots from winning when many peers broadcast. */
@@ -244,6 +252,10 @@ public class BetterPartyDefencePlugin extends Plugin
 	@Override
 	protected void shutDown()
 	{
+		partyEpoch++;
+		raidClockSignalsInitialized = false;
+		sharedRaidClockActive = false;
+		defenceTracker.setSharedTickAnchor(null, 0);
 		restoreOverlappingDefenceDisplays();
 
 		if (defenceOverlay != null)
@@ -260,6 +272,7 @@ public class BetterPartyDefencePlugin extends Plugin
 		trackerFontManager = null;
 		removeInfoBox();
 		recentSpecEvents.clear();
+		pendingSnapshots.clear();
 		recentSyncedSpecs.clear();
 		pendingWorldSyncs.clear();
 		lastPartyEncounterPresenceMillis.clear();
@@ -306,9 +319,9 @@ public class BetterPartyDefencePlugin extends Plugin
 		}
 
 		int tick = client.getTickCount();
+		updateSharedRaidTickAnchor(tick);
 		recentSpecEvents.entrySet().removeIf(entry -> tick - entry.getValue() > DUPLICATE_WINDOW_TICKS);
-		recentSyncedSpecs.entrySet().removeIf(
-			entry -> tick - entry.getValue() > SYNC_HISTORY_DUPLICATE_WINDOW_TICKS);
+		recentSyncedSpecs.prune(tick);
 		long now = System.currentTimeMillis();
 		senderEncounterPresence.entrySet().removeIf(
 			entry -> now - entry.getValue().getReceivedAtMillis() > ENCOUNTER_PRESENCE_MAX_AGE_MILLIS);
@@ -325,6 +338,7 @@ public class BetterPartyDefencePlugin extends Plugin
 		releaseInitialSyncGatesForDrainedStates();
 		reconcileAuthoritativeNpcDeaths();
 		reconcileToaFullWipe();
+		reconcileQueuedSnapshots();
 		reconcilePendingWorldSyncs();
 		reconcileActiveSyncScope();
 		maybeBroadcastEncounterPresence();
@@ -347,6 +361,57 @@ public class BetterPartyDefencePlugin extends Plugin
 		// Run the visual suppression at the end of our low-priority tick so Special Attack
 		// Counter can continue its normal detection/broadcast work first.
 		hideExistingSpecialCounterInfoBoxes();
+	}
+
+	/**
+	 * Record raid-entry on the local client clock. Party members who see this same server
+	 * boundary derive the same scope anchor and express every later spec as ticks since it.
+	 * A client which starts BPD after entry has no trustworthy start tick and stays unaligned.
+	 */
+	private void updateSharedRaidTickAnchor(int tick)
+	{
+		boolean inCoxRaid = client.getVarbitValue(VarbitID.RAIDS_CLIENT_INDUNGEON) == 1;
+		int tobController = raidController(BpdDefenceSync.SCOPE_TOB);
+		WorldView worldView = client.getTopLevelWorldView();
+		boolean inInstance = worldView != null && worldView.isInstance();
+		boolean inSupportedRaid = inCoxRaid || (inInstance && (tobController > 0
+			|| client.getVarbitValue(VarbitID.TOB_CLIENT_PARTYSTATUS) > 0
+			|| client.getVarbitValue(VarbitID.TOA_CLIENT_PARTYSTATUS) > 0));
+		if (!raidClockSignalsInitialized)
+		{
+			raidClockSignalsInitialized = true;
+		}
+		else if (inSupportedRaid && !wasInSupportedRaidForClock && !sharedRaidClockActive)
+		{
+			sharedRaidStartTick = tick;
+			sharedRaidClockActive = true;
+		}
+
+		if (!inCoxRaid && !inInstance && tobController <= 0
+			&& client.getVarbitValue(VarbitID.TOB_CLIENT_PARTYSTATUS) == 0
+			&& client.getVarbitValue(VarbitID.TOA_CLIENT_PARTYSTATUS) == 0)
+		{
+			sharedRaidClockActive = false;
+		}
+		wasInSupportedRaidForClock = inSupportedRaid;
+
+		if (!sharedRaidClockActive)
+		{
+			defenceTracker.setSharedTickAnchor(null, 0);
+			return;
+		}
+		SyncScope scope = currentEncounterScope();
+		if (scope == null)
+		{
+			defenceTracker.setSharedTickAnchor(null, 0);
+			return;
+		}
+		// Instance fingerprints stay stable when a raid controller varp clears mid-run,
+		// allowing specs before and after that transport-scope transition to share one clock.
+		String anchor = worldView != null && worldView.isInstance()
+			? "raid-start:" + BpdDefenceSync.SCOPE_INSTANCE + ":" + instanceFingerprint(worldView)
+			: "raid-start:" + scope.getType() + ":" + scope.getId();
+		defenceTracker.setSharedTickAnchor(anchor, sharedRaidStartTick);
 	}
 
 
@@ -392,7 +457,9 @@ public class BetterPartyDefencePlugin extends Plugin
 	@Subscribe
 	public void onPartyChanged(PartyChanged event)
 	{
+		partyEpoch++;
 		recentSpecEvents.clear();
+		pendingSnapshots.clear();
 		recentSyncedSpecs.clear();
 		boolean inPartyNow = event.getPartyId() != null;
 		boolean joinedOrRejoinedParty = !wasInParty && inPartyNow;
@@ -425,12 +492,17 @@ public class BetterPartyDefencePlugin extends Plugin
 		GameState state = event.getGameState();
 		if (state == GameState.HOPPING || state == GameState.LOGIN_SCREEN || state == GameState.CONNECTION_LOST)
 		{
+			partyEpoch++;
+			raidClockSignalsInitialized = false;
+			sharedRaidClockActive = false;
+			defenceTracker.setSharedTickAnchor(null, 0);
 			localSpecDetector.reset();
 			defenceTracker.reset("game state " + state);
 			removeInfoBox();
 			hiddenSpecialCounterInfoBoxes.clear();
 			hiddenSpecialCounterNpcIndex = null;
 			recentSpecEvents.clear();
+			pendingSnapshots.clear();
 			recentSyncedSpecs.clear();
 			activeSyncScope = null;
 			pendingWorldSyncs.clear();
@@ -517,9 +589,11 @@ public class BetterPartyDefencePlugin extends Plugin
 		String senderName = sender.getDisplayName();
 		// Party websocket messages are posted from the websocket thread. Keep all game-client
 		// state reads and tracker mutation on RuneLite's client thread, matching core plugin practice.
+		final long receivedInPartyEpoch = partyEpoch;
 		clientThread.invoke(() ->
 		{
-			if (!partyService.isInParty() || partyService.getMemberById(event.getMemberId()) == null)
+			if (receivedInPartyEpoch != partyEpoch || !partyService.isInParty()
+				|| partyService.getMemberById(event.getMemberId()) == null)
 			{
 				return;
 			}
@@ -532,19 +606,21 @@ public class BetterPartyDefencePlugin extends Plugin
 			SpecEventKey key = new SpecEventKey(
 				event.getMemberId(), event.getWorld(), event.getNpcIndex(), event.getPlayerId(), weapon, event.getHit());
 			int tick = client.getTickCount();
-			SyncedSpecKey syncedKey = new SyncedSpecKey(normalizePlayerName(senderName), weapon, event.getHit());
-			Integer syncedAt = recentSyncedSpecs.get(syncedKey);
-			if (syncedAt != null && tick - syncedAt <= SYNC_HISTORY_DUPLICATE_WINDOW_TICKS)
-			{
-				log.debug("Ignoring standard party spec already covered by BPD sync {}", syncedKey);
-				return;
-			}
 			Integer lastSeen = recentSpecEvents.get(key);
 			if (lastSeen != null && tick - lastSeen <= DUPLICATE_WINDOW_TICKS)
 			{
 				log.debug("Ignoring duplicate party spec event {}", key);
 				return;
 			}
+			SyncedSpecKey syncedKey = new SyncedSpecKey(event.getWorld(), event.getNpcIndex(),
+				normalizePlayerName(senderName), weapon, event.getHit());
+			if (recentSyncedSpecs.consume(syncedKey, tick))
+			{
+				recentSpecEvents.put(key, tick);
+				log.debug("Ignoring standard party spec already covered by BPD sync {}", syncedKey);
+				return;
+			}
+
 			recentSpecEvents.put(key, tick);
 
 			log.debug("Party spec: member={} ({}) weapon={} hit={} npc={} world={}",
@@ -586,6 +662,7 @@ public class BetterPartyDefencePlugin extends Plugin
 		{
 			lastSyncSignature = null;
 			lastSyncBroadcastMillis = 0L;
+			pendingSnapshots.clear();
 			recentSyncedSpecs.clear();
 			if (!config.syncWithOtherPartyDefenceUsers())
 			{
@@ -928,8 +1005,11 @@ public class BetterPartyDefencePlugin extends Plugin
 			return;
 		}
 
+		final long receivedInPartyEpoch = partyEpoch;
 		clientThread.invoke(() ->
 		{
+			if (receivedInPartyEpoch != partyEpoch || !partyService.isInParty()
+				|| partyService.getMemberById(event.getMemberId()) == null) { return; }
 			knownBpdPartyMembers.add(event.getMemberId());
 			if (!config.syncWithOtherPartyDefenceUsers())
 			{
@@ -937,8 +1017,23 @@ public class BetterPartyDefencePlugin extends Plugin
 			}
 			rememberSenderEncounterPresence(event.getMemberId(), event.getWorld(),
 				event.getScopeType(), event.getScopeId(), event.getSentAtMillis());
-			acceptBpdDefenceSync(event);
+			if (pendingSnapshots.size() >= 128) { pendingSnapshots.removeFirst(); }
+			pendingSnapshots.addLast(event);
 		});
+	}
+
+	/** Apply snapshots only after accepted local/standard observations have settled. */
+	private void reconcileQueuedSnapshots()
+	{
+		if (defenceTracker.hasUnprocessedSpecs()) { return; }
+		for (BpdDefenceSync snapshot = pendingSnapshots.pollFirst(); snapshot != null;
+			snapshot = pendingSnapshots.pollFirst())
+		{
+			if (partyService.getMemberById(snapshot.getMemberId()) != null)
+			{
+				acceptBpdDefenceSync(snapshot);
+			}
+		}
 	}
 
 	private void acceptBpdDefenceSync(BpdDefenceSync event)
@@ -1135,6 +1230,7 @@ public class BetterPartyDefencePlugin extends Plugin
 			recentEncounterResets.put(key, now);
 		}
 
+		pendingSnapshots.removeIf(snapshot -> boss.name().equals(snapshot.getBossType()));
 		defenceTracker.clearBossState(boss, reason);
 		pendingWorldSyncs.remove(boss);
 		lastPartyEncounterPresenceMillis.remove(boss);
@@ -1925,82 +2021,40 @@ public class BetterPartyDefencePlugin extends Plugin
 
 	/**
 	 * Never use network arrival order as truth. With a full eight-person party several peers can
-	 * answer the same continuity request at once. State versions are Lamport-style logical versions:
-	 * a local state change advances the version, and an accepted remote version is carried forward.
+	 * answer the same continuity request at once. State versions are retained as logical bookkeeping; event identity and history
+	 * evidence determine recovery rather than the largest peer-local number.
 	 */
 	private boolean incomingVersionIsAcceptable(BpdDefenceSync event, DefenceTracker.SyncState incoming, NPC localBoss)
 	{
-		long incomingVersion = event.getStateVersion();
-		if (incomingVersion <= 0)
-		{
-			// Mixed-version compatibility: old BPD clients have no version field. Fall back to the
-			// existing history-based reconciliation rather than breaking party sync during rollout.
-			return true;
-		}
-
-		DefenceTracker.SyncState local = defenceTracker.syncStateForBoss(incoming.getBossType());
-		long localVersion = local == null ? 0L : observeLocalStateVersion(local);
-		VersionedSyncState known = syncStateVersions.get(incoming.getBossType());
-		if (known != null)
-		{
-			localVersion = Math.max(localVersion, known.getVersion());
-		}
-
-		if (incomingVersion < localVersion)
-		{
-			log.debug("Ignoring stale BPD sync member={} boss={} version={} localVersion={}",
-				event.getMemberId(), incoming.getBossType(), incomingVersion, localVersion);
-			return false;
-		}
-
-		if (incomingVersion > localVersion || local == null)
-		{
-			return true;
-		}
-
-		int incomingSignature = syncSignature(incoming);
-		int localSignature = syncSignature(local);
-		if (incomingSignature == localSignature)
-		{
-			// Same logical state from another peer: only allow the bind-only path when needed.
-			return localBoss != null && !defenceTracker.hasBoundNpc(incoming.getBossType());
-		}
-
-		int incomingHistory = incoming.getHistory() == null ? 0 : incoming.getHistory().size();
-		int localHistory = local.getHistory() == null ? 0 : local.getHistory().size();
-
-		// Equal version + conflicting state is the concurrent-spec race. Do not let either peer
-		// overwrite the other and delete a real event. Merge the divergent tails, deterministically
-		// rebuild Defence, and publish the merged state as the next logical version.
-		if (localBoss != null && defenceTracker.mergeConcurrentSyncState(incoming, localBoss))
+		if (defenceTracker.hasUnprocessedSpecs()) { return false; }
+		DefenceTracker.SyncState before = defenceTracker.syncStateForBoss(incoming.getBossType());
+		// Event recovery is independent of Lamport snapshot order. A delayed lower-version
+		// snapshot can contain a unique spec absent locally; never discard it on version alone.
+		if (event.getEventVersion() == EncounterTimeline.VERSION && localBoss != null
+			&& defenceTracker.mergeEventSyncState(incoming, localBoss))
 		{
 			DefenceTracker.SyncState merged = defenceTracker.syncStateForBoss(incoming.getBossType());
-			if (merged != null)
-			{
-				long mergedVersion = incomingVersion + 1L;
-				syncStateVersions.put(incoming.getBossType(),
-					new VersionedSyncState(mergedVersion, syncSignature(merged)));
-				rememberSyncedSpecs(merged);
-				lastSyncSignature = null;
-				lastSyncBroadcastMillis = 0L;
-				log.debug("Merged concurrent same-version BPD sync member={} boss={} version={} -> {} def={} specs={}",
-					event.getMemberId(), incoming.getBossType(), incomingVersion, mergedVersion,
-					merged.getCurrent(), merged.getHistory() == null ? 0 : merged.getHistory().size());
-			}
+			long next = Math.max(observeLocalStateVersion(merged), event.getStateVersion());
+			syncStateVersions.put(incoming.getBossType(),
+				new VersionedSyncState(next == Long.MAX_VALUE ? next : next + 1, syncSignature(merged)));
+			rememberSyncedSpecs(merged, before, localBoss);
+			lastSyncSignature = null;
+			lastSyncBroadcastMillis = 0L;
 			return false;
 		}
-
-		if (incomingHistory > localHistory)
+		if (before != null && EncounterTimeline.hasIdentifiedEvents(before.getHistory())
+			&& !EncounterTimeline.containsIdentifiedEvents(incoming.getHistory(), before.getHistory()))
 		{
-			// If there was no divergent tail to merge, a strictly longer history is still objective
-			// evidence that this peer has progressed farther through the same encounter.
-			return true;
+			return false; // Legacy and future-version snapshots must also preserve local event IDs.
 		}
-
-		log.warn("Ignoring conflicting same-version BPD sync member={} boss={} version={} localDef={} incomingDef={} localHistory={} incomingHistory={}",
-			event.getMemberId(), incoming.getBossType(), incomingVersion, local.getCurrent(), incoming.getCurrent(),
-			localHistory, incomingHistory);
-		return false;
+		// Legacy/future snapshot numbers do not prove a shared combat chronology.
+		// A verified prefix can catch up regardless of the sender's logical version;
+		// divergent histories cannot erase or append guesses over accepted local evidence.
+		SyncHistoryRelation.Result relation = SyncHistoryRelation.compare(before, incoming);
+		return relation == SyncHistoryRelation.Result.INITIAL
+			|| relation == SyncHistoryRelation.Result.EXTENSION
+			|| (relation == SyncHistoryRelation.Result.SAME && localBoss != null
+				&& !defenceTracker.hasBoundNpc(incoming.getBossType()));
 	}
 
 	private long observeLocalStateVersion(DefenceTracker.SyncState sync)
@@ -2019,7 +2073,7 @@ public class BetterPartyDefencePlugin extends Plugin
 
 		int historySize = sync.getHistory() == null ? 0 : sync.getHistory().size();
 		long version = known == null ? Math.max(1L, historySize)
-			: Math.max(known.getVersion() + 1L, historySize);
+			: Math.max(known.getVersion() == Long.MAX_VALUE ? Long.MAX_VALUE : known.getVersion() + 1L, historySize);
 		syncStateVersions.put(sync.getBossType(), new VersionedSyncState(version, signature));
 		return version;
 	}
@@ -2043,6 +2097,7 @@ public class BetterPartyDefencePlugin extends Plugin
 
 	private void applyAcceptedSync(BpdDefenceSync event, DefenceTracker.SyncState sync, NPC localBoss)
 	{
+		DefenceTracker.SyncState before = defenceTracker.syncStateForBoss(sync.getBossType());
 		if (localBoss == null)
 		{
 			if (defenceTracker.trackedBossType() == sync.getBossType() && !defenceTracker.hasBoundNpc())
@@ -2083,7 +2138,7 @@ public class BetterPartyDefencePlugin extends Plugin
 		// Treat a received snapshot as recent activity so this client does not immediately echo it
 		// back on the same tick. It may still refresh the state later if it remains the live tracker.
 		lastSyncBroadcastMillis = System.currentTimeMillis();
-		rememberSyncedSpecs(sync);
+		rememberSyncedSpecs(sync, before, localBoss);
 		log.debug("Accepted BPD sync from member={} boss={} scope={}:{} actor={} def={}/{}",
 			event.getMemberId(), sync.getBossType(), event.getScopeType(), event.getScopeId(),
 			localBoss == null ? -1 : localBoss.getIndex(), sync.getCurrent(), sync.getBase());
@@ -2098,24 +2153,28 @@ public class BetterPartyDefencePlugin extends Plugin
 			sync.isAccursedApplied(), sync.isDrained(), sync.getHistory());
 	}
 
-	private void rememberSyncedSpecs(DefenceTracker.SyncState sync)
+	private void rememberSyncedSpecs(DefenceTracker.SyncState sync,
+		DefenceTracker.SyncState before, NPC localBoss)
 	{
-		List<DefenceTracker.SpecHistoryEntry> history = sync.getHistory();
-		if (history == null || history.isEmpty())
-		{
-			return;
-		}
-
-		// The snapshot is absolute and may contain more than one new same-tick spec. Mark every
-		// represented row briefly so the standard SpecialCounterUpdate echo cannot apply it again.
+		if (localBoss == null || sync.getHistory() == null) { return; }
+		// Multiset subtraction also handles event histories whose display order changed.
+		List<DefenceTracker.SpecHistoryEntry> previous = new ArrayList<>(
+			before == null ? java.util.Collections.emptyList() : before.getHistory());
 		int tick = client.getTickCount();
-		for (DefenceTracker.SpecHistoryEntry entry : history)
+		for (DefenceTracker.SpecHistoryEntry entry : sync.getHistory())
 		{
-			if (entry != null && entry.getWeapon() != null)
+			int match = -1;
+			for (int i = 0; i < previous.size(); i++)
 			{
-				recentSyncedSpecs.put(new SyncedSpecKey(
-					normalizePlayerName(entry.getPlayerName()), entry.getWeapon(), entry.getHit()), tick);
+				DefenceTracker.SpecHistoryEntry old = previous.get(i);
+				if (entry.equals(old) || (entry.getEventId() == null || old.getEventId() == null)
+					&& entry.getWeapon() == old.getWeapon() && entry.getHit() == old.getHit()
+					&& normalizePlayerName(entry.getPlayerName()).equals(normalizePlayerName(old.getPlayerName())))
+				{ match = i; break; }
 			}
+			if (match >= 0) { previous.remove(match); continue; }
+			recentSyncedSpecs.add(new SyncedSpecKey(client.getWorld(), localBoss.getIndex(),
+				normalizePlayerName(entry.getPlayerName()), entry.getWeapon(), entry.getHit()), tick);
 		}
 	}
 
@@ -2125,7 +2184,7 @@ public class BetterPartyDefencePlugin extends Plugin
 		{
 			return "";
 		}
-		return Text.removeTags(name).trim().toLowerCase();
+		return Text.toJagexName(Text.removeTags(name)).toLowerCase(java.util.Locale.ROOT);
 	}
 
 	private SyncScope currentEncounterScope()
@@ -2791,6 +2850,8 @@ public class BetterPartyDefencePlugin extends Plugin
 	@Value
 	private static class SyncedSpecKey
 	{
+		int world;
+		int npcIndex;
 		String playerName;
 		SpecialWeapon weapon;
 		int hit;

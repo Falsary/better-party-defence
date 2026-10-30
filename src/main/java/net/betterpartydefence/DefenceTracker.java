@@ -12,6 +12,7 @@ import java.util.concurrent.ConcurrentLinkedDeque;
 import javax.inject.Inject;
 import javax.inject.Singleton;
 import lombok.Value;
+import lombok.AllArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import net.runelite.api.Actor;
 import net.runelite.api.Client;
@@ -101,6 +102,11 @@ public class DefenceTracker
 	private boolean accursedApplied;
 	/** True once a special attack has actually landed on the tracked monster. */
 	private boolean drained;
+	private String localTickAnchor;
+	private int localAnchorTick;
+	/** Optional shared raid-boundary clock origin installed by the plugin on the client thread. */
+	private String sharedTickAnchor;
+	private int sharedTickAnchorTick;
 
 	/** Specs which contributed to the current tracked encounter, shown in the info-box tooltip. */
 	private final List<SpecHistoryEntry> specHistory = new ArrayList<>();
@@ -149,11 +155,20 @@ public class DefenceTracker
 
 	/** One accepted spec in the current tracked encounter, for the info-box hover history. */
 	@Value
+	@AllArgsConstructor
 	public static class SpecHistoryEntry
 	{
 		String playerName;
 		SpecialWeapon weapon;
 		int hit;
+		String eventId;
+		String tickAnchor;
+		long encounterTick;
+
+		public SpecHistoryEntry(String playerName, SpecialWeapon weapon, int hit)
+		{
+			this(playerName, weapon, hit, null, null, -1);
+		}
 	}
 
 	/** Absolute tracker state used by the optional BPD-to-BPD party sync. */
@@ -195,6 +210,10 @@ public class DefenceTracker
 		int hit;
 		int world;
 		String playerName;
+		String eventId;
+		int observedTick;
+		String tickAnchor;
+		int tickAnchorTick;
 	}
 
 	/** Mutable snapshot for one independently tracked target. */
@@ -219,6 +238,8 @@ public class DefenceTracker
 		boolean demon;
 		boolean accursedApplied;
 		boolean drained;
+		String localTickAnchor;
+		int localAnchorTick;
 		final List<SpecHistoryEntry> history = new ArrayList<>();
 	}
 
@@ -300,7 +321,7 @@ public class DefenceTracker
 		{
 			return;
 		}
-		Drain drain = new Drain(weapon, npcIndex, hit, world, playerName);
+		Drain drain = new Drain(weapon, npcIndex, hit, world, playerName, null, -1, null, -1);
 		if (weapon == SpecialWeapon.ELDER_MAUL)
 		{
 			pending.addFirst(drain);
@@ -309,6 +330,23 @@ public class DefenceTracker
 		{
 			pending.addLast(drain);
 		}
+	}
+
+	/** Only the originating detector allocates IDs. Standard party observations remain legacy. */
+	public void queueLocal(SpecialWeapon weapon, int npcIndex, int hit, int world, String playerName)
+	{
+		if (isSupportedWeapon(weapon))
+		{
+			pending.addLast(new Drain(weapon, npcIndex, hit, world, playerName,
+				java.util.UUID.randomUUID().toString(), client.getTickCount(), sharedTickAnchor, sharedTickAnchorTick));
+		}
+	}
+
+	/** Set or clear the current shared encounter clock origin. Called before local spec capture. */
+	void setSharedTickAnchor(String anchor, int tick)
+	{
+		sharedTickAnchor = anchor;
+		sharedTickAnchorTick = tick;
 	}
 
 	/** Client thread. */
@@ -517,6 +555,10 @@ public class DefenceTracker
 		long before = bossDef;
 		calculateDefence(drain.getWeapon(), hit, npc);
 		recordSpecHistory(drain);
+		if (EncounterTimeline.complete(specHistory))
+		{
+			replayTimeline(new ArrayList<>(specHistory), npc);
+		}
 		log.debug("{} hit {} on {}: def {} -> {} (base {}, floor {})",
 			drain.getWeapon(), hit, bossName, before, bossDef, bossStartDef, minDef);
 	}
@@ -578,6 +620,7 @@ public class DefenceTracker
 	/** Initialise (or restore) the tracked boss's combat stats without discarding its encounter binding. */
 	private void initializeStats(BossDefence boss)
 	{
+		localTickAnchor = null;
 		bossDef = boss != null ? boss.getBaseDef() : 0;
 		minDef = boss != null ? boss.getMinDef() : 0;
 		atkLevel = boss != null ? boss.getBaseAtk() : 0;
@@ -757,7 +800,35 @@ public class DefenceTracker
 		{
 			playerName = Text.removeTags(playerName).trim();
 		}
-		specHistory.add(new SpecHistoryEntry(playerName, drain.getWeapon(), drain.getHit()));
+		if (drain.getEventId() == null)
+		{
+			specHistory.add(new SpecHistoryEntry(playerName, drain.getWeapon(), drain.getHit()));
+			return;
+		}
+		String tickAnchor = drain.getTickAnchor();
+		int tickAnchorTick = drain.getTickAnchorTick();
+		// Hitsplats for the boundary tick can arrive just before the first GameTick callback
+		// which notices the raid transition. They still belong to that shared boundary.
+		if (drain.getEventId() != null && tickAnchor == null && sharedTickAnchor != null
+			&& drain.getObservedTick() == sharedTickAnchorTick)
+		{
+			tickAnchor = sharedTickAnchor;
+			tickAnchorTick = sharedTickAnchorTick;
+		}
+		if (tickAnchor != null)
+		{
+			specHistory.add(new SpecHistoryEntry(playerName, drain.getWeapon(), drain.getHit(),
+				drain.getEventId(), tickAnchor, (long) drain.getObservedTick() - tickAnchorTick));
+			return;
+		}
+		if (localTickAnchor == null || drain.getObservedTick() < localAnchorTick
+			|| specHistory.stream().noneMatch(e -> localTickAnchor.equals(e.getEventId())))
+		{
+			localTickAnchor = drain.getEventId();
+			localAnchorTick = drain.getObservedTick();
+		}
+		specHistory.add(new SpecHistoryEntry(playerName, drain.getWeapon(), drain.getHit(),
+			drain.getEventId(), localTickAnchor, (long) drain.getObservedTick() - localAnchorTick));
 	}
 
 	/**
@@ -1106,8 +1177,18 @@ public class DefenceTracker
 			return false;
 		}
 
-		List<SpecHistoryEntry> additions = ConcurrentSyncHistory.incomingOnly(
-			local.getHistory(), incoming.getHistory());
+		// The legacy reconciliation contract compares payloads, not the optional identity fields.
+		List<SpecHistoryEntry> localLegacy = new ArrayList<>();
+		List<SpecHistoryEntry> incomingLegacy = new ArrayList<>();
+		for (SpecHistoryEntry entry : local.getHistory())
+		{
+			localLegacy.add(new SpecHistoryEntry(entry.getPlayerName(), entry.getWeapon(), entry.getHit()));
+		}
+		for (SpecHistoryEntry entry : incoming.getHistory())
+		{
+			incomingLegacy.add(new SpecHistoryEntry(entry.getPlayerName(), entry.getWeapon(), entry.getHit()));
+		}
+		List<SpecHistoryEntry> additions = ConcurrentSyncHistory.incomingOnly(localLegacy, incomingLegacy);
 		if (additions == null)
 		{
 			return false;
@@ -1164,6 +1245,87 @@ public class DefenceTracker
 		log.debug("Merged {} distinct concurrent spec(s) for {} history={}",
 			additions.size(), incoming.getBossType(), local.getHistory().size() + additions.size());
 		return true;
+	}
+
+	boolean hasUnprocessedSpecs()
+	{
+		return !pending.isEmpty() || !queuedDrains.isEmpty();
+	}
+
+	boolean hasPendingFor(int npcIndex)
+	{
+		return queuedIndex == npcIndex && !queuedDrains.isEmpty()
+			|| pending.stream().anyMatch(drain -> drain.getNpcIndex() == npcIndex);
+	}
+
+	/** Recover identified events before snapshot version comparisons: lower versions can have missing IDs. */
+	public boolean mergeEventSyncState(SyncState incoming, NPC npc)
+	{
+		if (incoming == null || npc == null || !BossDefence.isLiveNpc(npc)
+			|| BossDefence.matchingNpc(npc) != incoming.getBossType()) { return false; }
+		saveCurrent();
+		SavedState target = tracked.get(npc.getIndex());
+		if (target == null || target.bossType != incoming.getBossType()
+			|| target.bossStartDef != incoming.getBase() || target.minDef != incoming.getMin()
+			|| target.magicStartLevel != incoming.getMagicBaseLevel()
+			|| target.magicStartDefBonus != incoming.getMagicBaseDef()
+			|| target.magicUsesDefence != incoming.isMagicUsesDefence()
+			|| target.demon != incoming.isDemon()) { return false; }
+		List<SpecHistoryEntry> merged = EncounterTimeline.union(target.history, incoming.getHistory());
+		if (merged == null || new java.util.HashSet<>(merged).equals(new java.util.HashSet<>(target.history))) { return false; }
+		// Without a shared identified event there is no proof that the two stat epochs agree.
+		boolean shared = target.history.stream().anyMatch(a -> incoming.getHistory().stream()
+			.anyMatch(b -> a.equals(b) || (a.getEventId() == null || b.getEventId() == null)
+				&& java.util.Objects.equals(a.getPlayerName(), b.getPlayerName())
+				&& a.getWeapon() == b.getWeapon() && a.getHit() == b.getHit()));
+		if (!shared) { return false; }
+		if (hasPendingFor(npc.getIndex())) { return false; }
+		SavedState selected = snapshotCurrent();
+		loadSavedState(target);
+		replayTimeline(merged, npc);
+		saveCurrent();
+		if (selected != null && selected.npcIndex != npc.getIndex()) { loadSavedState(selected); }
+		return true;
+	}
+
+	/** Reuse the existing weapon formulas and the actual encounter's scaled baseline. */
+	private void replayTimeline(List<SpecHistoryEntry> events, NPC npc)
+	{
+		events.sort(EncounterTimeline.DISPLAY_ORDER);
+		SavedState baseline = snapshotCurrent();
+		baseline.bossDef = baseline.bossStartDef;
+		baseline.atkLevel = bossType.getBaseAtk();
+		baseline.strLevel = bossType.getBaseStr();
+		baseline.magicLevel = baseline.magicStartLevel;
+		baseline.magicDefBonus = baseline.magicStartDefBonus;
+		baseline.accursedApplied = false;
+		baseline.history.clear();
+		SavedState result = EncounterTimeline.replay(events, baseline, new EncounterTimeline.Replay<SavedState>()
+		{
+			@Override public SavedState apply(SavedState state, SpecHistoryEntry event)
+			{
+				loadSavedState(state);
+				int hit = npc == null ? event.getHit() : event.getWeapon().computeHit(event.getHit(), npc);
+				calculateDefence(event.getWeapon(), hit, npc);
+				return snapshotCurrent();
+			}
+
+			@Override public SavedState conservative(SavedState a, SavedState b)
+			{
+				// Independent maxima also keep magic and BGS spill conservative. These are display
+				// bounds only; every later rebuild starts from baseline and retains all alternatives.
+				a.bossDef = Math.max(a.bossDef, b.bossDef);
+				a.atkLevel = Math.max(a.atkLevel, b.atkLevel);
+				a.strLevel = Math.max(a.strLevel, b.strLevel);
+				a.magicLevel = Math.max(a.magicLevel, b.magicLevel);
+				a.magicDefBonus = Math.max(a.magicDefBonus, b.magicDefBonus);
+				a.accursedApplied &= b.accursedApplied;
+				return a;
+			}
+		});
+		loadSavedState(result);
+		specHistory.addAll(events);
+		drained = true;
 	}
 
 	/** Whether this target already has a live actor binding on this client. */
@@ -1247,6 +1409,9 @@ public class DefenceTracker
 		}
 
 		saveCurrent();
+		SavedState previousTarget = localNpc == null ? null : tracked.get(localNpc.getIndex());
+		localTickAnchor = previousTarget == null ? null : previousTarget.localTickAnchor;
+		localAnchorTick = previousTarget == null ? 0 : previousTarget.localAnchorTick;
 		bossType = sync.getBossType();
 		bossName = sync.getBossName() == null ? bossType.getNpcName() : sync.getBossName();
 		bossIndex = localNpc == null ? -1 : localNpc.getIndex();
@@ -1279,8 +1444,7 @@ public class DefenceTracker
 			unboundTracked.remove(bossType);
 		}
 		saveCurrent();
-		pending.clear();
-		clearHeld();
+		// Snapshot adoption must not erase independent observations on another target.
 		log.debug("Applied BPD sync for {} actor={} def={}/{} specs={}",
 			bossType, bossIndex, bossDef, bossStartDef, specHistory.size());
 	}
@@ -1321,6 +1485,8 @@ public class DefenceTracker
 		s.demon = demon;
 		s.accursedApplied = accursedApplied;
 		s.drained = drained;
+		s.localTickAnchor = localTickAnchor;
+		s.localAnchorTick = localAnchorTick;
 		s.history.addAll(specHistory);
 		return s;
 	}
@@ -1424,6 +1590,8 @@ public class DefenceTracker
 		demon = s.demon;
 		accursedApplied = s.accursedApplied;
 		drained = s.drained;
+		localTickAnchor = s.localTickAnchor;
+		localAnchorTick = s.localAnchorTick;
 		specHistory.clear();
 		specHistory.addAll(s.history);
 	}
@@ -1469,6 +1637,7 @@ public class DefenceTracker
 
 	private void clearActiveFields()
 	{
+		localTickAnchor = null;
 		bossIndex = -1;
 		bossName = "";
 		bossType = null;

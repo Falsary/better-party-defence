@@ -216,8 +216,8 @@ class LocalDefenceSpecDetector
 				{
 					return;
 				}
-				// The weapon hitsplat is the last mine hitsplat on the target for the expected tick.
-				int rawHit = hitsplats.get(hitsplats.size() - 1);
+				// Match RuneLite: delayed hits precede thrall/Vengeance; instant hits follow them.
+				int rawHit = SpecHitResolver.resolve(weapon, hitsplats);
 				record(weapon, rawHit, target);
 			}
 			clearPending();
@@ -247,7 +247,7 @@ class LocalDefenceSpecDetector
 		// Apply locally immediately; no party or websocket round-trip is required for our own overlay.
 		// Pass the player name with the drain so the info-box hover history is tied to the same
 		// accepted event as the Defence calculation.
-		defenceTracker.queue(used, npcIndex, rawHit, world, playerName);
+		defenceTracker.queueLocal(used, npcIndex, rawHit, world, playerName);
 
 		// Hub Party Panel uses this same PartyService session. If RuneLite's core Special Attack
 		// Counter is active it already sends this exact message, so never duplicate it.

@@ -591,4 +591,19 @@ public class DefenceTrackerParityTest
 		assertEquals(2, tracker.syncTargets().size());
 	}
 
+	@Test public void snapshotMustNotDeleteQueuedSpecOnAnotherTarget()
+	{
+		NPC first = fakeNpc("Chaos Elemental", 81);
+		fakeNpc("Corporeal Beast", 82);
+		DefenceTracker source = makeTracker();
+		source.queue(SpecialWeapon.DRAGON_WARHAMMER,81,1,WORLD,"Alice");
+		source.onGameTick();
+		DefenceTracker receiver = makeTracker();
+		receiver.queue(SpecialWeapon.BANDOS_GODSWORD,82,50,WORLD,"Bob");
+		receiver.applySyncState(source.syncState(),first);
+		receiver.onGameTick();
+		assertEquals(2,receiver.syncTargets().size());
+		assertEquals("Bob",receiver.specHistory().get(0).getPlayerName());
+	}
+
 }

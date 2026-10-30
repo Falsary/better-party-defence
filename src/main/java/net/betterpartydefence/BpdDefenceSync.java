@@ -34,6 +34,8 @@ public class BpdDefenceSync extends PartyMemberMessage
 	private long sentAtMillis;
 	/** Logical snapshot version. Zero denotes a legacy sender with no version field. */
 	private long stateVersion;
+	/** Received from event-rewrite peers; uncertain totals cannot be authoritative. */
+	private boolean syncUncertain;
 
 	private long current;
 	private long min;
@@ -52,6 +54,11 @@ public class BpdDefenceSync extends PartyMemberMessage
 	private List<String> historyPlayers;
 	private List<String> historyWeapons;
 	private List<Integer> historyHits;
+	/** Additive extension: protocol 1 snapshots remain readable by installed BPD clients. */
+	private int eventVersion;
+	private List<String> historyEventIds;
+	private List<String> historyTickAnchors;
+	private List<Long> historyEncounterTicks;
 
 	/** Required for party-message deserialisation. */
 	public BpdDefenceSync()
@@ -103,11 +110,18 @@ public class BpdDefenceSync extends PartyMemberMessage
 		this.drained = state.isDrained();
 
 		List<SpecHistoryEntry> history = state.getHistory();
+		this.eventVersion = EncounterTimeline.VERSION;
+		this.historyEventIds = new ArrayList<>(history.size());
+		this.historyTickAnchors = new ArrayList<>(history.size());
+		this.historyEncounterTicks = new ArrayList<>(history.size());
 		this.historyPlayers = new ArrayList<>(history.size());
 		this.historyWeapons = new ArrayList<>(history.size());
 		this.historyHits = new ArrayList<>(history.size());
 		for (SpecHistoryEntry entry : history)
 		{
+			historyEventIds.add(entry.getEventId());
+			historyTickAnchors.add(entry.getTickAnchor());
+			historyEncounterTicks.add(entry.getEncounterTick());
 			historyPlayers.add(entry.getPlayerName());
 			historyWeapons.add(entry.getWeapon() == null ? "" : entry.getWeapon().name());
 			historyHits.add(entry.getHit());
@@ -126,31 +140,56 @@ public class BpdDefenceSync extends PartyMemberMessage
 			return null;
 		}
 
+		// Reject partial histories rather than trusting a total after silently dropping rows.
+		if (syncUncertain || historyPlayers == null || historyWeapons == null || historyHits == null
+			|| historyPlayers.size() != historyWeapons.size() || historyPlayers.size() != historyHits.size()
+			|| historyPlayers.size() > 4096 || (drained && historyPlayers.isEmpty())
+			|| base < 0 || min < 0 || min > base || current < min || current > base
+			|| attackLevel < 0 || strengthLevel < 0 || magicLevel < 0 || magicBaseLevel < 0)
+		{
+			return null;
+		}
 		List<SpecHistoryEntry> history = new ArrayList<>();
-		int size = Math.min(
-			historyPlayers == null ? 0 : historyPlayers.size(),
-			Math.min(historyWeapons == null ? 0 : historyWeapons.size(), historyHits == null ? 0 : historyHits.size()));
+		int size = historyPlayers.size();
+		boolean eventsSupported = eventVersion == EncounterTimeline.VERSION
+			&& size <= EncounterTimeline.MAX_EVENTS
+			&& historyEventIds != null && historyEventIds.size() == size
+			&& historyTickAnchors != null && historyTickAnchors.size() == size
+			&& historyEncounterTicks != null && historyEncounterTicks.size() == size;
 		for (int i = 0; i < size; i++)
 		{
 			try
 			{
 				String weaponName = historyWeapons.get(i);
 				Integer hit = historyHits.get(i);
-				if (weaponName == null || hit == null)
+				if (weaponName == null || hit == null || hit < 0)
 				{
-					continue;
+					return null;
 				}
 				SpecialWeapon weapon = SpecialWeapon.valueOf(weaponName);
+				if (!DefenceTracker.isSupportedWeapon(weapon)) { return null; }
 				String player = historyPlayers.get(i);
 				if (player == null || player.trim().isEmpty())
 				{
 					player = "Unknown";
 				}
-				history.add(new SpecHistoryEntry(player, weapon, hit));
+				String id = eventsSupported ? historyEventIds.get(i) : null;
+				String anchor = eventsSupported ? historyTickAnchors.get(i) : null;
+				Long tick = eventsSupported ? historyEncounterTicks.get(i) : null;
+				if (id != null && !id.isEmpty() && id.length() <= 128 && anchor != null
+					&& !anchor.isEmpty() && anchor.length() <= 128 && tick != null && tick >= 0)
+				{
+					history.add(new SpecHistoryEntry(player, weapon, hit, id, anchor, tick));
+				}
+				else
+				{
+					history.add(new SpecHistoryEntry(player, weapon, hit));
+				}
 			}
 			catch (RuntimeException ignored)
 			{
-				// Ignore a history row from a newer/unknown protocol rather than dropping the snapshot.
+				// An unknown row cannot safely justify this absolute snapshot.
+				return null;
 			}
 		}
 
@@ -173,6 +212,7 @@ public class BpdDefenceSync extends PartyMemberMessage
 			Collections.unmodifiableList(history));
 	}
 
+	public int getEventVersion() { return eventVersion; }
 	public int getProtocolVersion() { return protocolVersion; }
 	public int getWorld() { return world; }
 	public String getBossType() { return bossType; }
