@@ -154,7 +154,9 @@ final class EncounterTimeline
 
 	static long tickUncertainty(String anchor)
 	{
-		return anchor != null && anchor.endsWith(RaidTimerClock.TIMER_UNCERTAINTY_SUFFIX)
+		// The uncertainty segment can be followed by an isolated epoch token, so do not
+		// rely on endsWith. Scope keys are i/c plus digits and cannot contain this segment.
+		return anchor != null && anchor.contains(RaidTimerClock.TIMER_UNCERTAINTY_SUFFIX)
 			? RaidTimerClock.TIMER_UNCERTAINTY_TICKS : 0L;
 	}
 

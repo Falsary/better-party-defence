@@ -1,6 +1,7 @@
 package net.betterpartydefence;
 
 import java.util.Objects;
+import java.util.UUID;
 
 /**
  * Shared raid elapsed-time clock built only from timing values the game already keeps for its
@@ -70,6 +71,12 @@ final class RaidTimerClock
 	private boolean active;
 	/** Bumped when a same-scope backwards jump is too large to trust; isolates the next epoch. */
 	private int generation;
+	/**
+	 * Locally unique token mixed into isolated epochs. Two independent clients can both
+	 * reach generation 1 for unrelated corrections; without this token their generated
+	 * domains would collide and be compared as one timeline.
+	 */
+	private final String clientToken = UUID.randomUUID().toString().replace("-", "").substring(0, 8);
 
 	/**
 	 * Validate a script event without trusting anything but the root script's documented
@@ -163,30 +170,39 @@ final class RaidTimerClock
 			clear();
 		}
 		String nextDomain = domain(source, scopeKey);
-		int generationLength = generation > 0 ? (":g" + generation).length() : 0;
-		if (nextDomain.length() + generationLength > MAX_DOMAIN_LENGTH)
+		int epochLength = generation > 0
+			? (":" + clientToken + ":g" + generation).length() : 0;
+		if (nextDomain.length() + epochLength > MAX_DOMAIN_LENGTH)
 		{
 			return false;
 		}
 		if (!active)
 		{
+			// A different scope after an invalidation is a fresh shared epoch; the same
+			// scope keeps the isolated generation.
+			if (this.scopeKey != null && !Objects.equals(scopeKey, this.scopeKey))
+			{
+				generation = 0;
+			}
 			establish(source, nextDomain, scopeKey, raidTick, stopped, localTick);
 			return true;
 		}
 
 		boolean scopeChanged = !Objects.equals(scopeKey, this.scopeKey);
+		if (scopeChanged)
+		{
+			// A new room/raid identity is its own epoch; reset any correction generation
+			// so a client arriving in the new scope can share this domain. This applies
+			// even when the first sample in the new scope is slightly behind.
+			generation = 0;
+			establish(source, nextDomain, scopeKey, raidTick, stopped, localTick);
+			return true;
+		}
+
 		boolean resumed = this.stopped && !stopped;
 		int expected = anchorRaidTick + (localTick - anchorLocalTick);
 		if (raidTick < expected)
 		{
-			if (scopeChanged)
-			{
-				// A new room/raid identity is its own epoch; reset any correction generation
-				// so a client arriving in the new scope can share this domain.
-				generation = 0;
-				establish(source, nextDomain, scopeKey, raidTick, stopped, localTick);
-				return true;
-			}
 			if (resumed)
 			{
 				// A timer resuming after a stop is a new epoch. Bump the generation so
@@ -198,10 +214,9 @@ final class RaidTimerClock
 			if (expected - raidTick > RESET_BACKWARD_TOLERANCE)
 			{
 				// Same identity but too large a backwards jump to distinguish a correction
-				// from a new epoch. Invalidate the exact clock rather than publish an unsafe
-				// shared mapping; the next forward sample starts an isolated generation.
-				clear();
-				generation++;
+				// from a new epoch. Invalidate the exact clock without resetting the epoch
+				// counter; the next forward sample starts a distinct isolated generation.
+				invalidate();
 				return false;
 			}
 			// A small same-scope correction: keep the monotonic mapping. Timer domains carry
@@ -210,9 +225,8 @@ final class RaidTimerClock
 			return true;
 		}
 
-		// Follow the current scope so a client arriving in the same room derives the same
-		// domain. TFA keeps a stable controller scope, so this does not move across its rooms.
-		this.domain = nextDomain;
+		// Follow the current scope and preserve the isolated epoch on every normal update.
+		this.domain = domainWithGeneration(nextDomain);
 		this.scopeKey = scopeKey;
 		anchorLocalTick = localTick;
 		anchorRaidTick = raidTick;
@@ -239,6 +253,22 @@ final class RaidTimerClock
 		stopped = false;
 		active = false;
 		generation = 0;
+	}
+
+	/**
+	 * Deactivate after an ambiguous backwards jump without resetting the epoch counter.
+	 * Lifecycle clearing (leaving a raid, a new source, shutdown) uses {@link #clear()}.
+	 */
+	private void invalidate()
+	{
+		source = -1;
+		domain = null;
+		anchorLocalTick = 0;
+		anchorRaidTick = 0;
+		stopped = false;
+		active = false;
+		generation++;
+		// Keep scopeKey so the next sample can tell whether the scope itself changed.
 	}
 
 	/** Shared elapsed tick for a local game tick, or {@link #NO_TICK} when not extrapolable. */
@@ -290,12 +320,21 @@ final class RaidTimerClock
 		boolean stopped, int localTick)
 	{
 		this.source = source;
-		this.domain = generation == 0 ? domain : domain + ":g" + generation;
+		this.domain = domainWithGeneration(domain);
 		this.scopeKey = scopeKey;
 		this.anchorLocalTick = localTick;
 		this.anchorRaidTick = raidTick;
 		this.stopped = stopped;
 		this.active = true;
+	}
+
+	/**
+	 * Isolated epochs end in {@code :gN} but keep the uncertainty segment before the
+	 * per-client token, so both the uncertainty parser and the epoch identity remain valid.
+	 */
+	private String domainWithGeneration(String base)
+	{
+		return generation == 0 ? base : base + ":" + clientToken + ":g" + generation;
 	}
 
 	private static String domain(int source, String scopeKey)
