@@ -977,6 +977,12 @@ public class BetterPartyDefencePlugin extends Plugin
 		boolean match = localScope != null
 			&& localScope.getType() == senderScope.getScopeType()
 			&& localScope.getId() == senderScope.getScopeId();
+		if (!match && senderScope.getScopeType() == BpdDefenceSync.SCOPE_INSTANCE)
+		{
+			WorldView worldView = client.getTopLevelWorldView();
+			match = worldView != null && worldView.isInstance()
+				&& instanceFingerprint(worldView) == senderScope.getScopeId();
+		}
 		if (!match)
 		{
 			log.debug("Ignoring BPD party spec from member={} due to encounter mismatch sender={}:{} local={}",
@@ -1025,14 +1031,20 @@ public class BetterPartyDefencePlugin extends Plugin
 	/** Apply snapshots only after accepted local/standard observations have settled. */
 	private void reconcileQueuedSnapshots()
 	{
-		if (defenceTracker.hasUnprocessedSpecs()) { return; }
-		for (BpdDefenceSync snapshot = pendingSnapshots.pollFirst(); snapshot != null;
-			snapshot = pendingSnapshots.pollFirst())
+		// Visit each queued packet once; blocked targets do not starve unrelated bosses.
+		int count = pendingSnapshots.size();
+		for (int i = 0; i < count; i++)
 		{
-			if (partyService.getMemberById(snapshot.getMemberId()) != null)
+			BpdDefenceSync snapshot = pendingSnapshots.pollFirst();
+			if (partyService.getMemberById(snapshot.getMemberId()) == null) { continue; }
+			DefenceTracker.SyncState state = snapshot.toSyncState();
+			if (state == null) { continue; }
+			if (defenceTracker.hasUnprocessedSpecsForBoss(state.getBossType()))
 			{
-				acceptBpdDefenceSync(snapshot);
+				pendingSnapshots.addLast(snapshot);
+				continue;
 			}
+			acceptBpdDefenceSync(snapshot);
 		}
 	}
 
@@ -2026,7 +2038,7 @@ public class BetterPartyDefencePlugin extends Plugin
 	 */
 	private boolean incomingVersionIsAcceptable(BpdDefenceSync event, DefenceTracker.SyncState incoming, NPC localBoss)
 	{
-		if (defenceTracker.hasUnprocessedSpecs()) { return false; }
+		if (defenceTracker.hasUnprocessedSpecsForBoss(incoming.getBossType())) { return false; }
 		DefenceTracker.SyncState before = defenceTracker.syncStateForBoss(incoming.getBossType());
 		// Event recovery is independent of Lamport snapshot order. A delayed lower-version
 		// snapshot can contain a unique spec absent locally; never discard it on version alone.
@@ -2256,21 +2268,17 @@ public class BetterPartyDefencePlugin extends Plugin
 		int expectedRaidScope = raidScopeType(boss);
 		if (expectedRaidScope != -1)
 		{
-			int controller = raidController(expectedRaidScope);
-			if (controller > 0)
+			// A peer may lose its public controller before this client does. Its concrete
+			// instance fallback remains usable while our own controller is still present.
+			if (event.getScopeType() == BpdDefenceSync.SCOPE_INSTANCE)
 			{
-				return event.getScopeType() == expectedRaidScope
-					&& event.getScopeId() == controller;
+				WorldView raidWorldView = client.getTopLevelWorldView();
+				return raidWorldView != null && raidWorldView.isInstance()
+					&& event.getScopeId() == instanceFingerprint(raidWorldView);
 			}
-
-			// Same transport fallback as localSyncScope(): when the public CoX/ToB controller is
-			// unavailable, accept only a snapshot from this exact live instance. This does not
-			// alter raid lifecycle/reset semantics.
-			WorldView raidWorldView = client.getTopLevelWorldView();
-			return event.getScopeType() == BpdDefenceSync.SCOPE_INSTANCE
-				&& raidWorldView != null
-				&& raidWorldView.isInstance()
-				&& event.getScopeId() == instanceFingerprint(raidWorldView);
+			int controller = raidController(expectedRaidScope);
+			return controller > 0 && event.getScopeType() == expectedRaidScope
+				&& event.getScopeId() == controller;
 		}
 
 		WorldView worldView = client.getTopLevelWorldView();

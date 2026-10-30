@@ -555,7 +555,9 @@ public class DefenceTracker
 		long before = bossDef;
 		calculateDefence(drain.getWeapon(), hit, npc);
 		recordSpecHistory(drain);
-		if (EncounterTimeline.complete(specHistory))
+		if (EncounterTimeline.complete(specHistory)
+			|| specHistory.size() > EncounterTimeline.MAX_EVENTS
+				&& specHistory.stream().allMatch(e -> e.getEventId() != null))
 		{
 			replayTimeline(new ArrayList<>(specHistory), npc);
 		}
@@ -1252,6 +1254,24 @@ public class DefenceTracker
 		return !pending.isEmpty() || !queuedDrains.isEmpty();
 	}
 
+	/** Unknown actors remain conservative; a known different target cannot block this boss. */
+	boolean hasUnprocessedSpecsForBoss(BossDefence boss)
+	{
+		for (Drain drain : pending)
+		{
+			NPC npc = npcByIndex(drain.getNpcIndex());
+			if (npc == null || BossDefence.matchingNpc(npc) == null
+				|| BossDefence.matchingNpc(npc) == boss) { return true; }
+		}
+		if (!queuedDrains.isEmpty())
+		{
+			NPC npc = npcByIndex(queuedIndex);
+			return npc == null || BossDefence.matchingNpc(npc) == null
+				|| BossDefence.matchingNpc(npc) == boss;
+		}
+		return false;
+	}
+
 	boolean hasPendingFor(int npcIndex)
 	{
 		return queuedIndex == npcIndex && !queuedDrains.isEmpty()
@@ -1276,8 +1296,7 @@ public class DefenceTracker
 		// Without a shared identified event there is no proof that the two stat epochs agree.
 		boolean shared = target.history.stream().anyMatch(a -> incoming.getHistory().stream()
 			.anyMatch(b -> a.equals(b) || (a.getEventId() == null || b.getEventId() == null)
-				&& java.util.Objects.equals(a.getPlayerName(), b.getPlayerName())
-				&& a.getWeapon() == b.getWeapon() && a.getHit() == b.getHit()));
+				&& EncounterTimeline.samePayload(a, b)));
 		if (!shared) { return false; }
 		if (hasPendingFor(npc.getIndex())) { return false; }
 		SavedState selected = snapshotCurrent();

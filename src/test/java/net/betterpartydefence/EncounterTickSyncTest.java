@@ -357,4 +357,75 @@ public class EncounterTickSyncTest
         assertEquals(tracker.syncState(), restored.toSyncState());
         assertEquals(EncounterTimeline.VERSION, restored.getEventVersion());
     }
+
+    @Test public void replayCapacityReturnsBaselineWithoutApplyingGuessedEvents()
+    {
+        List<SpecHistoryEntry> events = new ArrayList<>();
+        for (int i = 0; i <= EncounterTimeline.MAX_EVENTS; i++)
+        {
+            events.add(new SpecHistoryEntry("Alice", SpecialWeapon.BANDOS_GODSWORD, 1,
+                "capacity-" + i, "clock", i));
+        }
+        Integer result = EncounterTimeline.replay(events, 310, new EncounterTimeline.Replay<Integer>()
+        {
+            public Integer apply(Integer value, SpecHistoryEntry event)
+            { throw new AssertionError("Capacity overflow must not evaluate an invented order"); }
+            public Integer conservative(Integer a, Integer b) { return Math.max(a, b); }
+        });
+        assertEquals(Integer.valueOf(310), result);
+    }
+
+    @Test public void trackerStaysConservativeAfterIdentifiedHistoryExceedsCapacity()
+    {
+        local(100, SpecialWeapon.DRAGON_WARHAMMER, 1);
+        List<SpecHistoryEntry> events = new ArrayList<>();
+        for (int i = 0; i < EncounterTimeline.MAX_EVENTS; i++)
+        {
+            events.add(new SpecHistoryEntry("Alice", SpecialWeapon.BANDOS_GODSWORD, 1,
+                "capacity-" + i, "clock", i));
+        }
+        tracker.applySyncState(state(events), npc);
+        local(500, SpecialWeapon.DRAGON_WARHAMMER, 1);
+        assertEquals(310, tracker.state().getCurrent());
+        assertEquals(257, tracker.specHistory().size());
+        local(501, SpecialWeapon.BANDOS_GODSWORD, 20);
+        assertEquals(310, tracker.state().getCurrent());
+        assertEquals(258, tracker.specHistory().size());
+    }
+
+    @Test public void formattedLegacyEchoCanAcquireIdentityAndRecoverDifferentTickSpec()
+    {
+        local(100, SpecialWeapon.DRAGON_WARHAMMER, 1);
+        SpecHistoryEntry root=tracker.specHistory().get(0);
+        tracker.queue(SpecialWeapon.BANDOS_GODSWORD,1,20,301,"<col=ff0000>BOB</col>");
+        tracker.onGameTick();
+        SpecHistoryEntry remote=new SpecHistoryEntry("bob",SpecialWeapon.BANDOS_GODSWORD,20,
+            "remote",root.getTickAnchor(),5);
+        assertTrue(tracker.mergeEventSyncState(state(Arrays.asList(root,remote)),npc));
+        assertEquals(177,tracker.state().getCurrent());
+        assertEquals(2,tracker.specHistory().size());
+        assertTrue(tracker.specHistory().contains(remote));
+    }
+
+    @Test public void formattedLegacySharedEventStillProvesOverlap()
+    {
+        tracker.queue(SpecialWeapon.DRAGON_WARHAMMER,1,1,301,"<col=ff0000>ALICE</col>");
+        tracker.onGameTick();
+        SpecHistoryEntry root=new SpecHistoryEntry("alice",SpecialWeapon.DRAGON_WARHAMMER,1,
+            "root","root",0);
+        SpecHistoryEntry remote=new SpecHistoryEntry("Bob",SpecialWeapon.BANDOS_GODSWORD,20,
+            "remote","root",5);
+        assertTrue(tracker.mergeEventSyncState(state(Arrays.asList(root,remote)),npc));
+        assertEquals(177,tracker.state().getCurrent());
+    }
+
+    @Test public void differentPlayersWithOtherwiseSamePayloadDoNotProveOverlap()
+    {
+        tracker.queue(SpecialWeapon.DRAGON_WARHAMMER,1,1,301,"Alice");
+        tracker.onGameTick();
+        SpecHistoryEntry other=new SpecHistoryEntry("Carol",SpecialWeapon.DRAGON_WARHAMMER,1,
+            "other","other",0);
+        assertFalse(tracker.mergeEventSyncState(state(Arrays.asList(other)),npc));
+        assertEquals(1,tracker.specHistory().size());
+    }
 }

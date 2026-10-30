@@ -122,10 +122,16 @@ final class EncounterTimeline
 		return result;
 	}
 
-	private static boolean samePayload(SpecHistoryEntry a, SpecHistoryEntry b)
+	static boolean samePayload(SpecHistoryEntry a, SpecHistoryEntry b)
 	{
-		return Objects.equals(a.getPlayerName(), b.getPlayerName())
+		return Objects.equals(normalizedPlayer(a.getPlayerName()), normalizedPlayer(b.getPlayerName()))
 			&& a.getWeapon() == b.getWeapon() && a.getHit() == b.getHit();
+	}
+
+	private static String normalizedPlayer(String name)
+	{
+		return name == null ? "" : net.runelite.client.util.Text.toJagexName(
+			net.runelite.client.util.Text.removeTags(name)).toLowerCase(java.util.Locale.ROOT);
 	}
 
 	static boolean before(SpecHistoryEntry a, SpecHistoryEntry b)
@@ -147,6 +153,8 @@ final class EncounterTimeline
 	 */
 	static <S> S replay(List<SpecHistoryEntry> events, S baseline, Replay<S> replay)
 	{
+		// Do not construct an unbounded graph or guess an order beyond the supported capacity.
+		if (events.size() > MAX_EVENTS) { return baseline; }
 		Search<S> search = new Search<>(events, replay);
 		search.visit(baseline, new boolean[events.size()], 0);
 		return search.exhausted ? baseline : search.best;

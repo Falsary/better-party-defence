@@ -164,6 +164,7 @@ public class PartySyncRegressionTest
 	{
 		PartyService party=mock(PartyService.class);
 		when(party.isInParty()).thenReturn(true);
+		when(party.getMemberById(0)).thenReturn(mock(PartyMember.class));
 		set("partyService",party);
 		Field inbox=BetterPartyDefencePlugin.class.getDeclaredField("pendingSnapshots");
 		inbox.setAccessible(true);
@@ -176,6 +177,7 @@ public class PartySyncRegressionTest
 		reconcile.invoke(plugin);
 		assertEquals(1,pending.size());
 		tracker.onGameTick();
+		when(party.getMemberById(0)).thenReturn(null);
 		reconcile.invoke(plugin); // Sender no longer present: discard rather than adopt.
 		assertTrue(pending.isEmpty());
 		assertEquals(1,tracker.specHistory().size());
@@ -269,5 +271,80 @@ public class PartySyncRegressionTest
 		plugin.onSpecialCounterUpdate(packet);
 		tracker.onGameTick();
 		assertEquals(3,tracker.specHistory().size());
+	}
+
+	private int fingerprint() throws Exception
+	{
+		Method method=BetterPartyDefencePlugin.class.getDeclaredMethod("instanceFingerprint",WorldView.class);
+		method.setAccessible(true);
+		return (int)method.invoke(null,client.getTopLevelWorldView());
+	}
+
+	private boolean scopeMatches(int type,int id) throws Exception
+	{
+		Method method=BetterPartyDefencePlugin.class.getDeclaredMethod("incomingScopeMatches",
+			BpdDefenceSync.class,BossDefence.class,NPC.class);
+		method.setAccessible(true);
+		return (boolean)method.invoke(plugin,new BpdDefenceSync(301,state(189,a),type,id,0,0,0,100,1),
+			BossDefence.TEKTON,null);
+	}
+
+	@Test public void peerInstanceFallbackAcceptedWhileOurRaidControllerRemains() throws Exception
+	{
+		when(client.getVarpValue(net.runelite.api.gameval.VarPlayerID.RAIDS_PARTY_GROUPHOLDER)).thenReturn(77);
+		when(client.getTopLevelWorldView().isInstance()).thenReturn(true);
+		assertTrue(scopeMatches(BpdDefenceSync.SCOPE_INSTANCE,fingerprint()));
+		assertTrue(scopeMatches(BpdDefenceSync.SCOPE_COX,77));
+	}
+
+	@Test public void fallbackStillRejectsMismatchedInstanceAndController() throws Exception
+	{
+		when(client.getVarpValue(net.runelite.api.gameval.VarPlayerID.RAIDS_PARTY_GROUPHOLDER)).thenReturn(77);
+		when(client.getTopLevelWorldView().isInstance()).thenReturn(true);
+		assertFalse(scopeMatches(BpdDefenceSync.SCOPE_INSTANCE,fingerprint()+1));
+		assertFalse(scopeMatches(BpdDefenceSync.SCOPE_COX,78));
+		when(client.getTopLevelWorldView().isInstance()).thenReturn(false);
+		assertFalse(scopeMatches(BpdDefenceSync.SCOPE_INSTANCE,fingerprint()));
+	}
+
+	@Test public void standardSpecAlsoAcceptsVerifiedInstanceFallback() throws Exception
+	{
+		when(client.getVarpValue(net.runelite.api.gameval.VarPlayerID.RAIDS_PARTY_GROUPHOLDER)).thenReturn(77);
+		when(client.getTopLevelWorldView().isInstance()).thenReturn(true);
+		Method remember=BetterPartyDefencePlugin.class.getDeclaredMethod("rememberSenderEncounterPresence",
+			long.class,int.class,int.class,int.class,long.class);
+		remember.setAccessible(true);
+		Method match=BetterPartyDefencePlugin.class.getDeclaredMethod("standardPartySpecScopeMatches",long.class,int.class);
+		match.setAccessible(true);
+		remember.invoke(plugin,7L,301,BpdDefenceSync.SCOPE_INSTANCE,fingerprint(),System.currentTimeMillis());
+		assertEquals(true,match.invoke(plugin,7L,301));
+		assertEquals(false,match.invoke(plugin,7L,302));
+		remember.invoke(plugin,7L,301,BpdDefenceSync.SCOPE_INSTANCE,fingerprint()+1,System.currentTimeMillis());
+		assertEquals(false,match.invoke(plugin,7L,301));
+	}
+
+	@Test @SuppressWarnings("unchecked") public void pendingHitOnOtherBossDoesNotBlockCatchup() throws Exception
+	{
+		NPC other=mock(NPC.class);
+		when(other.getName()).thenReturn("Corporeal Beast");
+		when(other.getIndex()).thenReturn(82);
+		when(other.getHealthRatio()).thenReturn(1);
+		IndexedObjectSet<? extends NPC> npcs=client.getTopLevelWorldView().npcs();
+		when(npcs.byIndex(82)).thenReturn(other);
+		tracker.applySyncState(state(189,a),npc);
+		tracker.queueLocal(SpecialWeapon.BANDOS_GODSWORD,82,20,301,"Bob");
+		assertTrue(acceptable(state(139,a,b),1));
+		assertTrue(tracker.hasUnprocessedSpecsForBoss(BossDefence.CORPOREAL_BEAST));
+		assertFalse(tracker.hasUnprocessedSpecsForBoss(BossDefence.CHAOS_ELEMENTAL));
+		tracker.applySyncState(state(139,a,b),npc);
+		tracker.onGameTick();
+		assertEquals("Bob",tracker.specHistory().get(0).getPlayerName());
+		assertEquals(2,tracker.syncTargets().size());
+	}
+
+	@Test public void unresolvedActorStillDefersSnapshot() throws Exception
+	{
+		tracker.queueLocal(SpecialWeapon.BANDOS_GODSWORD,99,20,301,"Bob");
+		assertFalse(acceptable(state(189,a),1));
 	}
 }
