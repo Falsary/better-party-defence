@@ -97,6 +97,22 @@ public class RaidTimerPluginTest
 		assertEquals(7L, entry.getEncounterTick());
 	}
 
+	@Test public void toaTimerUsesAStableControllerScopeAcrossRooms()
+	{
+		when(world.isInstance()).thenReturn(true);
+		when(client.getVarpValue(net.runelite.api.gameval.VarPlayerID.TOA_MYCONTROLLER)).thenReturn(88);
+		when(client.getTickCount()).thenReturn(5_000);
+		timerScript(RaidTimerClock.TOA_TIMER_SCRIPT, 0, 0);
+
+		when(world.getBaseX()).thenReturn(4_000);
+		when(client.getTickCount()).thenReturn(5_005);
+		timerScript(RaidTimerClock.TOA_TIMER_SCRIPT, 5, 0);
+		SpecHistoryEntry entry = localSpec(5_007);
+
+		assertEquals("raid-time:v1:toa:c88", entry.getTickAnchor());
+		assertEquals(7L, entry.getEncounterTick());
+	}
+
 	@Test public void toaTimerScriptUsesTheSharedInstanceScope()
 	{
 		when(world.isInstance()).thenReturn(true);

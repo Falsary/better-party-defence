@@ -7,15 +7,16 @@ package net.betterpartydefence;
  * <p>ToA (script 6580) and TFA (script 10036) run a root clientscript with
  * {@code (elapsedTicks, stopped)}. The value is already in 600 ms game ticks; the rounded HUD
  * text is never parsed. CoX exposes {@code RAIDS_TIMER}, which is the same elapsed-tick counter
- * used by its "Time:" overlay, but the client interpolates it locally between server updates,
- * so callers must poll it and accept at most a one-tick sampling phase difference.
+ * used by its "Time:" overlay, but the client interpolates it locally between server updates.
+ * CoX domains therefore carry an explicit uncertainty suffix; the timeline orders CoX events
+ * only when their possible tick intervals do not overlap.
  *
  * <p>Every client maps the shared elapsed value onto its own login counter at the moment it
  * observes a sample. Two clients with different login counters therefore derive the same
  * elapsed tick for the same game tick, and a late joiner only needs the current elapsed value.
  *
- * <p>ToB is deliberately absent. Its HUD publishes room progress, not elapsed time, and the
- * game exposes no other live shared ToB timer. ToB therefore keeps the existing conservative
+ * <p>ToB is deliberately absent. Its HUD publishes room progress, not elapsed time, and no
+ * verified live shared ToB timer was found. ToB therefore keeps the existing conservative
  * ordering instead of inventing a clock contract.
  */
 final class RaidTimerClock
@@ -32,6 +33,13 @@ final class RaidTimerClock
 
 	/** A one/two tick backwards resync is a correction; a larger jump is a different raid. */
 	static final int RESET_BACKWARD_TOLERANCE = 2;
+	/**
+	 * CoX's timer is locally interpolated, so its domain carries an explicit uncertainty
+	 * radius. Two clients can differ by one tick; with +/-1 on each event, intervals overlap
+	 * up to a two-tick difference and must stay unordered.
+	 */
+	static final String COX_UNCERTAINTY_SUFFIX = ":u2";
+	static final int COX_UNCERTAINTY_TICKS = 2;
 	/** The game's raid timers cannot legitimately exceed this (about 33 hours of ticks). */
 	static final int MAX_ELAPSED_TICKS = 200_000;
 	private static final int MAX_DOMAIN_LENGTH = 128;
@@ -169,9 +177,18 @@ final class RaidTimerClock
 			establish(source, nextDomain, scopeKey, raidTick, stopped, localTick);
 			return true;
 		}
+		if (raidTick < expected)
+		{
+			// A small backwards resync must never move the published time of an immutable,
+			// already-accepted event. Keep the monotonic mapping (slightly ahead of the
+			// corrected display) and only honour a stop/final flag.
+			this.stopped = stopped;
+			return true;
+		}
 
-		// Keep the established domain even if scenery changes between TFA rooms. The timer,
-		// not the scene fingerprint, proves this is still the same running raid.
+		// Follow the current scope so a client arriving in the same room derives the same
+		// domain. TFA keeps a stable controller scope, so this does not move across its rooms.
+		this.domain = nextDomain;
 		this.scopeKey = scopeKey;
 		anchorLocalTick = localTick;
 		anchorRaidTick = raidTick;
@@ -258,7 +275,8 @@ final class RaidTimerClock
 
 	private static String domain(int source, String scopeKey)
 	{
-		return "raid-time:v1:" + sourceName(source) + ":" + scopeKey;
+		String uncertainty = source == SOURCE_COX ? COX_UNCERTAINTY_SUFFIX : "";
+		return "raid-time:v1:" + sourceName(source) + ":" + scopeKey + uncertainty;
 	}
 
 	/** Reject arbitrary source ints passed by a future caller. */

@@ -152,7 +152,9 @@ public class RaidTimerClockTest
 
 		assertTrue(clock.sample(RaidTimerClock.SOURCE_TOA, TOA_SCOPE, 99, false, 1_100));
 		assertEquals(domain, clock.domain());
-		assertEquals(104L, clock.tickAt(1_105));
+		// A small backwards resync is ignored so an already-published event time cannot
+		// move; the mapping stays monotonic and slightly ahead of the corrected display.
+		assertEquals(105L, clock.tickAt(1_105));
 	}
 
 	@Test public void displayCallbacksAndNestedScriptsAreNotTimerInputs()

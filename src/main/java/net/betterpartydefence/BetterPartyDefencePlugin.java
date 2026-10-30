@@ -517,8 +517,8 @@ public class BetterPartyDefencePlugin extends Plugin
 		{
 			raidTimerClock.clear();
 		}
-		// ToB intentionally has no branch here: its HUD publishes room progress, not an
-		// elapsed clock, so ToB keeps the conservative local ordering.
+		// ToB intentionally has no branch here: its HUD publishes room progress, not a
+		// verified elapsed clock, so ToB keeps the conservative local ordering.
 	}
 
 	private void resetCoxTimerTracking()
@@ -534,22 +534,22 @@ public class BetterPartyDefencePlugin extends Plugin
 		if (source == RaidTimerClock.SOURCE_TFA)
 		{
 			// TFA moves between five instanced rooms, so its scene fingerprint is not a raid id.
+			// The party controller is the only stable shared identifier; without it, leave the
+			// clock unavailable rather than latch a per-client first-seen scene.
 			int controller = client.getVarpValue(VarPlayerID.TFA_MYCONTROLLER);
+			return controller > 0 ? "c" + controller : null;
+		}
+		if (source == RaidTimerClock.SOURCE_TOA)
+		{
+			// Prefer the party controller: the Tombs scene can change between rooms, and a
+			// per-room fingerprint is not a stable shared raid identity for late joiners.
+			int controller = client.getVarpValue(VarPlayerID.TOA_MYCONTROLLER);
 			if (controller > 0)
 			{
 				return "c" + controller;
 			}
 			return worldView != null && worldView.isInstance()
 				? "i" + instanceFingerprint(worldView) : null;
-		}
-		if (source == RaidTimerClock.SOURCE_TOA)
-		{
-			int controller = client.getVarpValue(VarPlayerID.TOA_MYCONTROLLER);
-			if (worldView != null && worldView.isInstance())
-			{
-				return "i" + instanceFingerprint(worldView);
-			}
-			return controller > 0 ? "c" + controller : null;
 		}
 		return null;
 	}

@@ -137,10 +137,25 @@ final class EncounterTimeline
 			net.runelite.client.util.Text.removeTags(name)).toLowerCase(java.util.Locale.ROOT);
 	}
 
+	/**
+	 * Order only when the two intervals cannot be the same game tick. ToA/TFA domains are
+	 * exact; a CoX domain carries its sampling uncertainty suffix, so ticks that overlap
+	 * within that radius remain unordered and are replayed conservatively.
+	 */
 	static boolean before(SpecHistoryEntry a, SpecHistoryEntry b)
 	{
-		return Objects.equals(a.getTickAnchor(), b.getTickAnchor())
-			&& a.getEncounterTick() < b.getEncounterTick();
+		if (!Objects.equals(a.getTickAnchor(), b.getTickAnchor()))
+		{
+			return false;
+		}
+		long uncertainty = tickUncertainty(a.getTickAnchor());
+		return a.getEncounterTick() + uncertainty < b.getEncounterTick();
+	}
+
+	static long tickUncertainty(String anchor)
+	{
+		return anchor != null && anchor.endsWith(RaidTimerClock.COX_UNCERTAINTY_SUFFIX)
+			? RaidTimerClock.COX_UNCERTAINTY_TICKS : 0L;
 	}
 
 	interface Replay<S>
@@ -228,11 +243,18 @@ final class EncounterTimeline
 					if (triedEffects != null)
 					{
 						String key = effectKey.apply(events.get(i));
-						if (key != null && !triedEffects.add(key))
+						if (key != null)
 						{
-							// An interchangeable event is still available; this branch is a
-							// permutation of one already explored from this exact state.
-							continue;
+							// Equal state effects are not enough: choosing two events can release
+							// different successors. Only collapse events whose static successor
+							// sets match as well; then the remaining graph is isomorphic.
+							key = key + "|" + successors.get(i);
+							if (!triedEffects.add(key))
+							{
+								// This branch is a permutation of one already explored from this
+								// exact state and with the same released successors.
+								continue;
+							}
 						}
 					}
 					used[i] = true;
