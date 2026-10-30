@@ -154,8 +154,8 @@ final class EncounterTimeline
 
 	static long tickUncertainty(String anchor)
 	{
-		return anchor != null && anchor.endsWith(RaidTimerClock.COX_UNCERTAINTY_SUFFIX)
-			? RaidTimerClock.COX_UNCERTAINTY_TICKS : 0L;
+		return anchor != null && anchor.endsWith(RaidTimerClock.TIMER_UNCERTAINTY_SUFFIX)
+			? RaidTimerClock.TIMER_UNCERTAINTY_TICKS : 0L;
 	}
 
 	interface Replay<S>

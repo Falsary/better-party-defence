@@ -1,5 +1,7 @@
 package net.betterpartydefence;
 
+import java.util.Objects;
+
 /**
  * Shared raid elapsed-time clock built only from timing values the game already keeps for its
  * own raid HUDs.
@@ -31,15 +33,15 @@ final class RaidTimerClock
 
 	static final long NO_TICK = Long.MIN_VALUE;
 
-	/** A one/two tick backwards resync is a correction; a larger jump is a different raid. */
+	/** A one/two tick backwards resync is a correction; a larger jump is uncertain. */
 	static final int RESET_BACKWARD_TOLERANCE = 2;
 	/**
-	 * CoX's timer is locally interpolated, so its domain carries an explicit uncertainty
-	 * radius. Two clients can differ by one tick; with +/-1 on each event, intervals overlap
-	 * up to a two-tick difference and must stay unordered.
+	 * Every timer-derived domain carries an explicit uncertainty radius. It bounds the CoX
+	 * local-interpolation phase and a same-scope server correction: a client can be up to two
+	 * ticks ahead of another, so events whose possible intervals overlap stay unordered.
 	 */
-	static final String COX_UNCERTAINTY_SUFFIX = ":u2";
-	static final int COX_UNCERTAINTY_TICKS = 2;
+	static final String TIMER_UNCERTAINTY_SUFFIX = ":u2";
+	static final int TIMER_UNCERTAINTY_TICKS = 2;
 	/** The game's raid timers cannot legitimately exceed this (about 33 hours of ticks). */
 	static final int MAX_ELAPSED_TICKS = 200_000;
 	private static final int MAX_DOMAIN_LENGTH = 128;
@@ -66,6 +68,8 @@ final class RaidTimerClock
 	private int anchorRaidTick;
 	private boolean stopped;
 	private boolean active;
+	/** Bumped when a same-scope backwards jump is too large to trust; isolates the next epoch. */
+	private int generation;
 
 	/**
 	 * Validate a script event without trusting anything but the root script's documented
@@ -159,7 +163,8 @@ final class RaidTimerClock
 			clear();
 		}
 		String nextDomain = domain(source, scopeKey);
-		if (nextDomain.length() > MAX_DOMAIN_LENGTH)
+		int generationLength = generation > 0 ? (":g" + generation).length() : 0;
+		if (nextDomain.length() + generationLength > MAX_DOMAIN_LENGTH)
 		{
 			return false;
 		}
@@ -169,19 +174,38 @@ final class RaidTimerClock
 			return true;
 		}
 
+		boolean scopeChanged = !Objects.equals(scopeKey, this.scopeKey);
+		boolean resumed = this.stopped && !stopped;
 		int expected = anchorRaidTick + (localTick - anchorLocalTick);
-		if (raidTick < expected - RESET_BACKWARD_TOLERANCE)
-		{
-			// A new raid restarts its timer. Re-anchor from this sample and, when the scope
-			// itself changed, publish a new domain instead of reusing the old one.
-			establish(source, nextDomain, scopeKey, raidTick, stopped, localTick);
-			return true;
-		}
 		if (raidTick < expected)
 		{
-			// A small backwards resync must never move the published time of an immutable,
-			// already-accepted event. Keep the monotonic mapping (slightly ahead of the
-			// corrected display) and only honour a stop/final flag.
+			if (scopeChanged)
+			{
+				// A new room/raid identity is its own epoch; reset any correction generation
+				// so a client arriving in the new scope can share this domain.
+				generation = 0;
+				establish(source, nextDomain, scopeKey, raidTick, stopped, localTick);
+				return true;
+			}
+			if (resumed)
+			{
+				// A timer resuming after a stop is a new epoch. Bump the generation so
+				// events from before the stop cannot be ordered against the resumed mapping.
+				generation++;
+				establish(source, nextDomain, scopeKey, raidTick, stopped, localTick);
+				return true;
+			}
+			if (expected - raidTick > RESET_BACKWARD_TOLERANCE)
+			{
+				// Same identity but too large a backwards jump to distinguish a correction
+				// from a new epoch. Invalidate the exact clock rather than publish an unsafe
+				// shared mapping; the next forward sample starts an isolated generation.
+				clear();
+				generation++;
+				return false;
+			}
+			// A small same-scope correction: keep the monotonic mapping. Timer domains carry
+			// an uncertainty radius that bounds the cross-client disagreement this creates.
 			this.stopped = stopped;
 			return true;
 		}
@@ -214,6 +238,7 @@ final class RaidTimerClock
 		anchorRaidTick = 0;
 		stopped = false;
 		active = false;
+		generation = 0;
 	}
 
 	/** Shared elapsed tick for a local game tick, or {@link #NO_TICK} when not extrapolable. */
@@ -265,7 +290,7 @@ final class RaidTimerClock
 		boolean stopped, int localTick)
 	{
 		this.source = source;
-		this.domain = domain;
+		this.domain = generation == 0 ? domain : domain + ":g" + generation;
 		this.scopeKey = scopeKey;
 		this.anchorLocalTick = localTick;
 		this.anchorRaidTick = raidTick;
@@ -275,8 +300,7 @@ final class RaidTimerClock
 
 	private static String domain(int source, String scopeKey)
 	{
-		String uncertainty = source == SOURCE_COX ? COX_UNCERTAINTY_SUFFIX : "";
-		return "raid-time:v1:" + sourceName(source) + ":" + scopeKey + uncertainty;
+		return "raid-time:v1:" + sourceName(source) + ":" + scopeKey + TIMER_UNCERTAINTY_SUFFIX;
 	}
 
 	/** Reject arbitrary source ints passed by a future caller. */

@@ -93,7 +93,7 @@ public class RaidTimerClockTest
 
 		assertTrue(clock.sample(RaidTimerClock.SOURCE_TOA, "i999", 0, false, 2_000));
 		assertEquals(5L, clock.tickAt(2_005));
-		assertEquals("raid-time:v1:toa:i999", clock.domain());
+		assertEquals("raid-time:v1:toa:i999:u2", clock.domain());
 	}
 
 	@Test public void switchingRaidTypeCannotReuseTheOldDomain()
@@ -103,7 +103,7 @@ public class RaidTimerClockTest
 
 		assertTrue(clock.sample(RaidTimerClock.SOURCE_TFA, "c77", 0, false, 1_001));
 		assertTrue(clock.isActiveFor(RaidTimerClock.SOURCE_TFA));
-		assertEquals("raid-time:v1:tfa:c77", clock.domain());
+		assertEquals("raid-time:v1:tfa:c77:u2", clock.domain());
 		assertNotEquals(toaDomain, clock.domain());
 	}
 

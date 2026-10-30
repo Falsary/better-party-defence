@@ -93,7 +93,7 @@ public class RaidTimerPluginTest
 		timerScript(RaidTimerClock.TFA_TIMER_SCRIPT, 0, 0);
 		SpecHistoryEntry entry = localSpec(5_007);
 
-		assertEquals("raid-time:v1:tfa:c77", entry.getTickAnchor());
+		assertEquals("raid-time:v1:tfa:c77:u2", entry.getTickAnchor());
 		assertEquals(7L, entry.getEncounterTick());
 	}
 
@@ -109,7 +109,7 @@ public class RaidTimerPluginTest
 		timerScript(RaidTimerClock.TOA_TIMER_SCRIPT, 5, 0);
 		SpecHistoryEntry entry = localSpec(5_007);
 
-		assertEquals("raid-time:v1:toa:c88", entry.getTickAnchor());
+		assertEquals("raid-time:v1:toa:c88:u2", entry.getTickAnchor());
 		assertEquals(7L, entry.getEncounterTick());
 	}
 
@@ -139,7 +139,7 @@ public class RaidTimerPluginTest
 		timerScript(RaidTimerClock.TFA_TIMER_SCRIPT, 5, 0);
 		SpecHistoryEntry entry = localSpec(5_007);
 
-		assertEquals("raid-time:v1:tfa:c77", entry.getTickAnchor());
+		assertEquals("raid-time:v1:tfa:c77:u2", entry.getTickAnchor());
 		assertEquals(7L, entry.getEncounterTick());
 	}
 
