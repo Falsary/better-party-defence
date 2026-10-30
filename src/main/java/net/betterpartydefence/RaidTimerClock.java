@@ -76,7 +76,7 @@ final class RaidTimerClock
 	 * reach generation 1 for unrelated corrections; without this token their generated
 	 * domains would collide and be compared as one timeline.
 	 */
-	private final String clientToken = UUID.randomUUID().toString().replace("-", "").substring(0, 8);
+	private final String clientToken = UUID.randomUUID().toString().replace("-", "");
 
 	/**
 	 * Validate a script event without trusting anything but the root script's documented
@@ -178,12 +178,8 @@ final class RaidTimerClock
 		}
 		if (!active)
 		{
-			// A different scope after an invalidation is a fresh shared epoch; the same
-			// scope keeps the isolated generation.
-			if (this.scopeKey != null && !Objects.equals(scopeKey, this.scopeKey))
-			{
-				generation = 0;
-			}
+			// Keep any unresolved isolation across the scope change: a new scene is not
+			// evidence that the old mapping is safe to compare with immutable events.
 			establish(source, nextDomain, scopeKey, raidTick, stopped, localTick);
 			return true;
 		}
@@ -191,10 +187,16 @@ final class RaidTimerClock
 		boolean scopeChanged = !Objects.equals(scopeKey, this.scopeKey);
 		if (scopeChanged)
 		{
-			// A new room/raid identity is its own epoch; reset any correction generation
-			// so a client arriving in the new scope can share this domain. This applies
-			// even when the first sample in the new scope is slightly behind.
-			generation = 0;
+			// Follow the new scope but retain the generation/token. Walking between rooms
+			// (or switching from a scene fallback to a controller) does not certify the
+			// pre-correction mapping. Only clear() resets to a shared baseline.
+			int expected = anchorRaidTick + (localTick - anchorLocalTick);
+			if (raidTick < expected - RESET_BACKWARD_TOLERANCE)
+			{
+				// A new scene plus a large backwards mapping is a new epoch even without a
+				// prior correction; the scene alone is not evidence of compatibility.
+				generation++;
+			}
 			establish(source, nextDomain, scopeKey, raidTick, stopped, localTick);
 			return true;
 		}

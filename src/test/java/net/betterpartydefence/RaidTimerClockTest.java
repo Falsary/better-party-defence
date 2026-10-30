@@ -93,7 +93,9 @@ public class RaidTimerClockTest
 
 		assertTrue(clock.sample(RaidTimerClock.SOURCE_TOA, "i999", 0, false, 2_000));
 		assertEquals(5L, clock.tickAt(2_005));
-		assertEquals("raid-time:v1:toa:i999:u2", clock.domain());
+		// A new scope plus a large backwards mapping is a new isolated epoch.
+		assertTrue(clock.domain().startsWith("raid-time:v1:toa:i999:u2"));
+		assertTrue(clock.domain().contains(":g1"));
 	}
 
 	@Test public void switchingRaidTypeCannotReuseTheOldDomain()
