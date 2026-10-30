@@ -333,6 +333,97 @@ public class EncounterTickSyncTest
         assertEquals(0, tracker.specHistory().get(0).getEncounterTick());
     }
 
+    @Test public void timerBoundaryTickUsesRaidElapsedBase()
+    {
+        when(client.getTickCount()).thenReturn(5000);
+        tracker.queueLocal(SpecialWeapon.DRAGON_WARHAMMER, 1, 1, 301, "Alice");
+        tracker.setSharedTickAnchor("raid-time:v1:tfa:c77", 5000, 50);
+        tracker.onGameTick();
+        assertEquals("raid-time:v1:tfa:c77", tracker.specHistory().get(0).getTickAnchor());
+        assertEquals(50L, tracker.specHistory().get(0).getEncounterTick());
+    }
+
+    @Test public void raidTimeAnchorAlignsDifferentLoginCounters()
+    {
+        String anchor = "raid-time:v1:toa:i731";
+        tracker.setSharedTickAnchor(anchor, 5000, 100);
+        local(5007, SpecialWeapon.DRAGON_WARHAMMER, 1);
+
+        DefenceTracker peer = new DefenceTracker(client, mock(BetterPartyDefenceConfig.class));
+        peer.setSharedTickAnchor(anchor, 120, 100);
+        when(client.getTickCount()).thenReturn(126);
+        peer.queueLocal(SpecialWeapon.BANDOS_GODSWORD, 1, 20, 301, "Bob");
+        peer.onGameTick();
+
+        SpecHistoryEntry first = tracker.specHistory().get(0);
+        SpecHistoryEntry second = peer.specHistory().get(0);
+        assertEquals(107L, first.getEncounterTick());
+        assertEquals(106L, second.getEncounterTick());
+        assertEquals(anchor, first.getTickAnchor());
+        assertEquals(anchor, second.getTickAnchor());
+        assertTrue(EncounterTimeline.before(second, first));
+        assertFalse(EncounterTimeline.before(first, second));
+    }
+
+    @Test public void sameRaidElapsedTickIsASameTickNotAnArrivalOrder()
+    {
+        String anchor = "raid-time:v1:toa:i731";
+        tracker.setSharedTickAnchor(anchor, 5000, 100);
+        local(5007, SpecialWeapon.DRAGON_WARHAMMER, 1);
+
+        DefenceTracker peer = new DefenceTracker(client, mock(BetterPartyDefenceConfig.class));
+        peer.setSharedTickAnchor(anchor, 120, 100);
+        when(client.getTickCount()).thenReturn(127);
+        peer.queueLocal(SpecialWeapon.BANDOS_GODSWORD, 1, 20, 301, "Bob");
+        peer.onGameTick();
+
+        SpecHistoryEntry first = tracker.specHistory().get(0);
+        SpecHistoryEntry second = peer.specHistory().get(0);
+        assertEquals(107L, first.getEncounterTick());
+        assertEquals(107L, second.getEncounterTick());
+        assertFalse(EncounterTimeline.before(first, second));
+        assertFalse(EncounterTimeline.before(second, first));
+    }
+
+    @Test public void differentRaidTimeDomainsRemainUnordered()
+    {
+        tracker.setSharedTickAnchor("raid-time:v1:toa:i1", 1000, 0);
+        local(1005, SpecialWeapon.DRAGON_WARHAMMER, 1);
+        SpecHistoryEntry local = tracker.specHistory().get(0);
+        SpecHistoryEntry other = new SpecHistoryEntry("Bob", SpecialWeapon.BANDOS_GODSWORD, 20,
+            "other", "raid-time:v1:toa:i2", 0);
+
+        assertFalse(EncounterTimeline.before(local, other));
+        assertFalse(EncounterTimeline.before(other, local));
+    }
+
+    @Test public void raidTimeClockAloneCannotMergeSeparateBossAttempts()
+    {
+        String anchor = "raid-time:v1:toa:i731";
+        tracker.setSharedTickAnchor(anchor, 5000, 100);
+        local(5007, SpecialWeapon.DRAGON_WARHAMMER, 1);
+        SyncState original = tracker.syncState();
+
+        DefenceTracker peer = new DefenceTracker(client, mock(BetterPartyDefenceConfig.class));
+        peer.setSharedTickAnchor(anchor, 120, 100);
+        when(client.getTickCount()).thenReturn(127);
+        peer.queueLocal(SpecialWeapon.BANDOS_GODSWORD, 1, 20, 301, "Bob");
+        peer.onGameTick();
+
+        assertFalse(tracker.mergeEventSyncState(peer.syncState(), npc));
+        assertEquals(original, tracker.syncState());
+    }
+
+    @Test public void preRaidNegativeTimerTickFallsBackToLocalAnchor()
+    {
+        tracker.setSharedTickAnchor("raid-time:v1:toa:i1", 5000, 0);
+        local(4999, SpecialWeapon.DRAGON_WARHAMMER, 1);
+        SpecHistoryEntry entry = tracker.specHistory().get(0);
+
+        assertEquals(entry.getEventId(), entry.getTickAnchor());
+        assertEquals(0L, entry.getEncounterTick());
+    }
+
     @Test public void recoveryWaitsForPendingLocalSpec()
     {
         local(100, SpecialWeapon.DRAGON_WARHAMMER, 1);

@@ -104,9 +104,11 @@ public class DefenceTracker
 	private boolean drained;
 	private String localTickAnchor;
 	private int localAnchorTick;
-	/** Optional shared raid-boundary clock origin installed by the plugin on the client thread. */
+	/** Optional shared raid clock origin installed by the plugin on the client thread. */
 	private String sharedTickAnchor;
 	private int sharedTickAnchorTick;
+	/** Elapsed tick at the shared origin; 0 for a boundary anchor, raid elapsed for a timer clock. */
+	private long sharedTickAnchorValue;
 
 	/** Specs which contributed to the current tracked encounter, shown in the info-box tooltip. */
 	private final List<SpecHistoryEntry> specHistory = new ArrayList<>();
@@ -214,6 +216,7 @@ public class DefenceTracker
 		int observedTick;
 		String tickAnchor;
 		int tickAnchorTick;
+		long tickAnchorValue;
 	}
 
 	/** Mutable snapshot for one independently tracked target. */
@@ -321,7 +324,7 @@ public class DefenceTracker
 		{
 			return;
 		}
-		Drain drain = new Drain(weapon, npcIndex, hit, world, playerName, null, -1, null, -1);
+		Drain drain = new Drain(weapon, npcIndex, hit, world, playerName, null, -1, null, -1, 0L);
 		if (weapon == SpecialWeapon.ELDER_MAUL)
 		{
 			pending.addFirst(drain);
@@ -338,15 +341,27 @@ public class DefenceTracker
 		if (isSupportedWeapon(weapon))
 		{
 			pending.addLast(new Drain(weapon, npcIndex, hit, world, playerName,
-				java.util.UUID.randomUUID().toString(), client.getTickCount(), sharedTickAnchor, sharedTickAnchorTick));
+				java.util.UUID.randomUUID().toString(), client.getTickCount(), sharedTickAnchor,
+				sharedTickAnchorTick, sharedTickAnchorValue));
 		}
 	}
 
 	/** Set or clear the current shared encounter clock origin. Called before local spec capture. */
 	void setSharedTickAnchor(String anchor, int tick)
 	{
+		setSharedTickAnchor(anchor, tick, 0L);
+	}
+
+	/**
+	 * Install a shared clock origin whose first tick is {@code value}. A timer-based raid clock
+	 * passes the raid's elapsed tick, so two clients with different login counters derive the
+	 * same raid tick for the same event.
+	 */
+	void setSharedTickAnchor(String anchor, int tick, long value)
+	{
 		sharedTickAnchor = anchor;
 		sharedTickAnchorTick = tick;
+		sharedTickAnchorValue = anchor == null ? 0L : value;
 	}
 
 	/** Client thread. */
@@ -809,6 +824,7 @@ public class DefenceTracker
 		}
 		String tickAnchor = drain.getTickAnchor();
 		int tickAnchorTick = drain.getTickAnchorTick();
+		long tickAnchorValue = drain.getTickAnchorValue();
 		// Hitsplats for the boundary tick can arrive just before the first GameTick callback
 		// which notices the raid transition. They still belong to that shared boundary.
 		if (drain.getEventId() != null && tickAnchor == null && sharedTickAnchor != null
@@ -816,12 +832,19 @@ public class DefenceTracker
 		{
 			tickAnchor = sharedTickAnchor;
 			tickAnchorTick = sharedTickAnchorTick;
+			tickAnchorValue = sharedTickAnchorValue;
 		}
 		if (tickAnchor != null)
 		{
-			specHistory.add(new SpecHistoryEntry(playerName, drain.getWeapon(), drain.getHit(),
-				drain.getEventId(), tickAnchor, (long) drain.getObservedTick() - tickAnchorTick));
-			return;
+			long encounterTick = tickAnchorValue + (long) drain.getObservedTick() - tickAnchorTick;
+			// A timer origin can precede the event by a tick (capture happens after the sample
+			// on a boundary). Only a genuinely pre-raid negative is rejected.
+			if (encounterTick >= 0)
+			{
+				specHistory.add(new SpecHistoryEntry(playerName, drain.getWeapon(), drain.getHit(),
+					drain.getEventId(), tickAnchor, encounterTick));
+				return;
+			}
 		}
 		if (localTickAnchor == null || drain.getObservedTick() < localAnchorTick
 			|| specHistory.stream().noneMatch(e -> localTickAnchor.equals(e.getEventId())))

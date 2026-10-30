@@ -38,6 +38,7 @@ import net.runelite.api.Client;
 import net.runelite.api.ChatMessageType;
 import net.runelite.api.GameState;
 import net.runelite.api.NPC;
+import net.runelite.api.ScriptEvent;
 import net.runelite.api.Skill;
 import net.runelite.api.WorldView;
 import net.runelite.api.Varbits;
@@ -50,6 +51,7 @@ import net.runelite.api.events.GameStateChanged;
 import net.runelite.api.events.GameTick;
 import net.runelite.api.events.HitsplatApplied;
 import net.runelite.api.events.NpcSpawned;
+import net.runelite.api.events.ScriptPreFired;
 import net.runelite.api.events.StatChanged;
 import net.runelite.api.events.VarbitChanged;
 import net.runelite.client.callback.ClientThread;
@@ -177,6 +179,13 @@ public class BetterPartyDefencePlugin extends Plugin
 	/** Local tick observed on the actual raid-begun notification, never instance entry. */
 	private boolean sharedRaidClockActive;
 	private int sharedRaidStartTick;
+	/** Raid elapsed-tick clock fed by the game's own ToA/TFA timer scripts and CoX timer varbit. */
+	private final RaidTimerClock raidTimerClock = new RaidTimerClock();
+	/** CoX's timer is locally interpolated; stop trusting it if that display stops advancing. */
+	private static final int COX_TIMER_STALE_TICKS = 4;
+	private int lastCoxTimerValue = Integer.MIN_VALUE;
+	private int lastCoxTimerAdvanceTick = -1;
+	private boolean coxTimerStale;
 	private Integer lastSyncSignature;
 	private long lastSyncBroadcastMillis;
 	/** Logical state version per boss. Prevents stale snapshots from winning when many peers broadcast. */
@@ -254,6 +263,8 @@ public class BetterPartyDefencePlugin extends Plugin
 	{
 		partyEpoch++;
 		sharedRaidClockActive = false;
+		raidTimerClock.clear();
+		resetCoxTimerTracking();
 		defenceTracker.setSharedTickAnchor(null, 0);
 		restoreOverlappingDefenceDisplays();
 
@@ -318,7 +329,8 @@ public class BetterPartyDefencePlugin extends Plugin
 		}
 
 		int tick = client.getTickCount();
-		updateSharedRaidTickAnchor(tick);
+		updateRaidTimerClock(tick);
+		applySharedRaidTickAnchor(tick);
 		recentSpecEvents.entrySet().removeIf(entry -> tick - entry.getValue() > DUPLICATE_WINDOW_TICKS);
 		recentSyncedSpecs.prune(tick);
 		long now = System.currentTimeMillis();
@@ -379,8 +391,199 @@ public class BetterPartyDefencePlugin extends Plugin
 		else if (message.startsWith("Congratulations - your raid is complete!"))
 		{
 			sharedRaidClockActive = false;
+			if (raidTimerClock.isActiveFor(RaidTimerClock.SOURCE_COX))
+			{
+				raidTimerClock.clear();
+			}
 			defenceTracker.setSharedTickAnchor(null, 0);
 		}
+	}
+
+	/**
+	 * ToA and TFA publish their raid timer through a root clientscript:
+	 * {@code (elapsedTicks, stopped)}. Capture the raw elapsed ticks only; the animated display
+	 * callback converts them with clientclock and must never be treated as a fresh sample.
+	 */
+	@Subscribe
+	public void onScriptPreFired(ScriptPreFired event)
+	{
+		// Scripts fire constantly; only the two verified raid-timer roots are interesting.
+		if (event == null || RaidTimerClock.sourceForScript(event.getScriptId()) == -1)
+		{
+			return;
+		}
+		ScriptEvent scriptEvent = event.getScriptEvent();
+		if (scriptEvent == null)
+		{
+			return;
+		}
+		RaidTimerClock.TimerInput input =
+			RaidTimerClock.parseTimerScript(event.getScriptId(), scriptEvent.getArguments());
+		if (input == null)
+		{
+			return;
+		}
+
+		int tick = client.getTickCount();
+		if (input.elapsedTicks < 0)
+		{
+			if (raidTimerClock.isActiveFor(input.source))
+			{
+				raidTimerClock.clear();
+			}
+			applySharedRaidTickAnchor(tick);
+			return;
+		}
+
+		WorldView worldView = client.getTopLevelWorldView();
+		// A raid timer only exists inside the raid instance. This also keeps a lobby/other
+		// instance from latching a clock domain that party members inside the raid cannot share.
+		if (worldView == null || !worldView.isInstance())
+		{
+			return;
+		}
+		String scope = raidTimerScope(input.source, worldView);
+		if (scope == null)
+		{
+			return;
+		}
+		raidTimerClock.sample(input.source, scope, input.elapsedTicks, input.stopped, tick);
+		log.debug("Raid timer {} elapsed={} stopped={} localTick={} domain={}",
+			RaidTimerClock.sourceName(input.source), input.elapsedTicks, input.stopped, tick,
+			raidTimerClock.domain());
+		applySharedRaidTickAnchor(tick);
+	}
+
+	/**
+	 * Keep the timer clock honest about the raid it belongs to. CoX's generator room
+	 * ({@code RAIDS_CLIENT_PROGRESS == 0}) is still the lobby, so a zero there is not a start.
+	 */
+	private void updateRaidTimerClock(int tick)
+	{
+		int coxInRaid = client.getVarbitValue(VarbitID.RAIDS_CLIENT_INDUNGEON);
+		int coxProgress = client.getVarbitValue(VarbitID.RAIDS_CLIENT_PROGRESS);
+		if (coxInRaid == 1 && coxProgress >= 1 && coxProgress < 5)
+		{
+			int elapsed = client.getVarbitValue(VarbitID.RAIDS_TIMER);
+			if (elapsed != lastCoxTimerValue)
+			{
+				lastCoxTimerValue = elapsed;
+				lastCoxTimerAdvanceTick = tick;
+				coxTimerStale = false;
+			}
+			WorldView worldView = client.getTopLevelWorldView();
+			String scope = coxTimerScope(worldView);
+			// The varbit is driven by an interface animation callback. If that display stops,
+			// the value freezes; do not keep extrapolating a frozen clock onto live specs.
+			if (raidTimerClock.isActiveFor(RaidTimerClock.SOURCE_COX)
+				&& lastCoxTimerAdvanceTick >= 0
+				&& tick - lastCoxTimerAdvanceTick > COX_TIMER_STALE_TICKS)
+			{
+				raidTimerClock.clear();
+				coxTimerStale = true;
+			}
+			// Accept the genuine zero at the start only when this client also saw the raid
+			// begin. A late joiner waits for the first non-zero elapsed value instead of
+			// anchoring a stale zero to its own login counter.
+			else if (!coxTimerStale && scope != null && elapsed >= 0
+				&& (elapsed > 0 || sharedRaidClockActive))
+			{
+				raidTimerClock.sample(RaidTimerClock.SOURCE_COX, scope, elapsed, false, tick);
+			}
+		}
+		else if (coxInRaid == 1 && coxProgress >= 5)
+		{
+			if (raidTimerClock.isActiveFor(RaidTimerClock.SOURCE_COX))
+			{
+				raidTimerClock.markStopped();
+			}
+		}
+		else
+		{
+			if (raidTimerClock.isActiveFor(RaidTimerClock.SOURCE_COX))
+			{
+				raidTimerClock.clear();
+			}
+			resetCoxTimerTracking();
+		}
+
+		WorldView worldView = client.getTopLevelWorldView();
+		boolean instance = worldView != null && worldView.isInstance();
+		if (raidTimerClock.isActiveFor(RaidTimerClock.SOURCE_TOA) && !instance)
+		{
+			raidTimerClock.clear();
+		}
+		if (raidTimerClock.isActiveFor(RaidTimerClock.SOURCE_TFA) && !instance)
+		{
+			raidTimerClock.clear();
+		}
+		// ToB intentionally has no branch here: its HUD publishes room progress, not an
+		// elapsed clock, so ToB keeps the conservative local ordering.
+	}
+
+	private void resetCoxTimerTracking()
+	{
+		lastCoxTimerValue = Integer.MIN_VALUE;
+		lastCoxTimerAdvanceTick = -1;
+		coxTimerStale = false;
+	}
+
+	/** A shared scope key every client in this raid can derive independently. */
+	private String raidTimerScope(int source, WorldView worldView)
+	{
+		if (source == RaidTimerClock.SOURCE_TFA)
+		{
+			// TFA moves between five instanced rooms, so its scene fingerprint is not a raid id.
+			int controller = client.getVarpValue(VarPlayerID.TFA_MYCONTROLLER);
+			if (controller > 0)
+			{
+				return "c" + controller;
+			}
+			return worldView != null && worldView.isInstance()
+				? "i" + instanceFingerprint(worldView) : null;
+		}
+		if (source == RaidTimerClock.SOURCE_TOA)
+		{
+			int controller = client.getVarpValue(VarPlayerID.TOA_MYCONTROLLER);
+			if (worldView != null && worldView.isInstance())
+			{
+				return "i" + instanceFingerprint(worldView);
+			}
+			return controller > 0 ? "c" + controller : null;
+		}
+		return null;
+	}
+
+	private String coxTimerScope(WorldView worldView)
+	{
+		if (worldView != null && worldView.isInstance())
+		{
+			return "i" + instanceFingerprint(worldView);
+		}
+		int controller = raidController(BpdDefenceSync.SCOPE_COX);
+		return controller > 0 ? "c" + controller : null;
+	}
+
+	/**
+	 * Prefer the game's elapsed-tick clock. The CoX raid-begun domain stays as a distinct
+	 * fallback for clients where the timer value is unavailable; the two are never mixed.
+	 */
+	private void applySharedRaidTickAnchor(int tick)
+	{
+		if (raidTimerClock.isActive())
+		{
+			if (raidTimerClock.isStopped())
+			{
+				defenceTracker.setSharedTickAnchor(null, 0);
+			}
+			else
+			{
+				defenceTracker.setSharedTickAnchor(raidTimerClock.domain(),
+					raidTimerClock.anchorLocalTick(), raidTimerClock.anchorRaidTick());
+			}
+			return;
+		}
+		updateSharedRaidTickAnchor(tick);
 	}
 
 	/** Refresh scope/exit state without manufacturing a start from presence or party status. */
@@ -489,6 +692,8 @@ public class BetterPartyDefencePlugin extends Plugin
 		{
 			partyEpoch++;
 			sharedRaidClockActive = false;
+			raidTimerClock.clear();
+			resetCoxTimerTracking();
 			defenceTracker.setSharedTickAnchor(null, 0);
 			localSpecDetector.reset();
 			defenceTracker.reset("game state " + state);
