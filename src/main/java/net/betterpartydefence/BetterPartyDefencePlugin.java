@@ -35,6 +35,7 @@ import javax.inject.Singleton;
 import lombok.Value;
 import lombok.extern.slf4j.Slf4j;
 import net.runelite.api.Client;
+import net.runelite.api.ChatMessageType;
 import net.runelite.api.GameState;
 import net.runelite.api.NPC;
 import net.runelite.api.Skill;
@@ -44,6 +45,7 @@ import net.runelite.api.coords.WorldPoint;
 import net.runelite.api.gameval.VarPlayerID;
 import net.runelite.api.gameval.VarbitID;
 import net.runelite.api.events.FakeXpDrop;
+import net.runelite.api.events.ChatMessage;
 import net.runelite.api.events.GameStateChanged;
 import net.runelite.api.events.GameTick;
 import net.runelite.api.events.HitsplatApplied;
@@ -172,9 +174,7 @@ public class BetterPartyDefencePlugin extends Plugin
 	private final List<InfoBox> hiddenSpecialCounterInfoBoxes = new ArrayList<>();
 	private Integer hiddenSpecialCounterNpcIndex;
 	private boolean wasInParty;
-	/** Local tick observed on the shared raid-entry boundary, used as a common relative origin. */
-	private boolean raidClockSignalsInitialized;
-	private boolean wasInSupportedRaidForClock;
+	/** Local tick observed on the actual raid-begun notification, never instance entry. */
 	private boolean sharedRaidClockActive;
 	private int sharedRaidStartTick;
 	private Integer lastSyncSignature;
@@ -253,7 +253,6 @@ public class BetterPartyDefencePlugin extends Plugin
 	protected void shutDown()
 	{
 		partyEpoch++;
-		raidClockSignalsInitialized = false;
 		sharedRaidClockActive = false;
 		defenceTracker.setSharedTickAnchor(null, 0);
 		restoreOverlappingDefenceDisplays();
@@ -363,38 +362,34 @@ public class BetterPartyDefencePlugin extends Plugin
 		hideExistingSpecialCounterInfoBoxes();
 	}
 
-	/**
-	 * Record raid-entry on the local client clock. Party members who see this same server
-	 * boundary derive the same scope anchor and express every later spec as ticks since it.
-	 * A client which starts BPD after entry has no trustworthy start tick and stays unaligned.
-	 */
+	/** CoX's actual start notification is shared; walking into its lobby is not. */
+	@Subscribe
+	public void onChatMessage(ChatMessage event)
+	{
+		if (event == null || event.getType() != ChatMessageType.FRIENDSCHATNOTIFICATION
+			|| client.getVarbitValue(VarbitID.RAIDS_CLIENT_INDUNGEON) != 1) { return; }
+		String message = Text.removeTags(event.getMessage());
+		if (message == null) { return; }
+		if (message.startsWith("The raid has begun!") && !sharedRaidClockActive)
+		{
+			sharedRaidStartTick = client.getTickCount();
+			sharedRaidClockActive = true;
+			updateSharedRaidTickAnchor(sharedRaidStartTick);
+		}
+		else if (message.startsWith("Congratulations - your raid is complete!"))
+		{
+			sharedRaidClockActive = false;
+			defenceTracker.setSharedTickAnchor(null, 0);
+		}
+	}
+
+	/** Refresh scope/exit state without manufacturing a start from presence or party status. */
 	private void updateSharedRaidTickAnchor(int tick)
 	{
-		boolean inCoxRaid = client.getVarbitValue(VarbitID.RAIDS_CLIENT_INDUNGEON) == 1;
-		int tobController = raidController(BpdDefenceSync.SCOPE_TOB);
-		WorldView worldView = client.getTopLevelWorldView();
-		boolean inInstance = worldView != null && worldView.isInstance();
-		boolean inSupportedRaid = inCoxRaid || (inInstance && (tobController > 0
-			|| client.getVarbitValue(VarbitID.TOB_CLIENT_PARTYSTATUS) > 0
-			|| client.getVarbitValue(VarbitID.TOA_CLIENT_PARTYSTATUS) > 0));
-		if (!raidClockSignalsInitialized)
-		{
-			raidClockSignalsInitialized = true;
-		}
-		else if (inSupportedRaid && !wasInSupportedRaidForClock && !sharedRaidClockActive)
-		{
-			sharedRaidStartTick = tick;
-			sharedRaidClockActive = true;
-		}
-
-		if (!inCoxRaid && !inInstance && tobController <= 0
-			&& client.getVarbitValue(VarbitID.TOB_CLIENT_PARTYSTATUS) == 0
-			&& client.getVarbitValue(VarbitID.TOA_CLIENT_PARTYSTATUS) == 0)
+		if (client.getVarbitValue(VarbitID.RAIDS_CLIENT_INDUNGEON) != 1)
 		{
 			sharedRaidClockActive = false;
 		}
-		wasInSupportedRaidForClock = inSupportedRaid;
-
 		if (!sharedRaidClockActive)
 		{
 			defenceTracker.setSharedTickAnchor(null, 0);
@@ -406,11 +401,11 @@ public class BetterPartyDefencePlugin extends Plugin
 			defenceTracker.setSharedTickAnchor(null, 0);
 			return;
 		}
-		// Instance fingerprints stay stable when a raid controller varp clears mid-run,
-		// allowing specs before and after that transport-scope transition to share one clock.
+		WorldView worldView = client.getTopLevelWorldView();
+		// A distinct domain prevents older entry-based peers from claiming the same origin.
 		String anchor = worldView != null && worldView.isInstance()
-			? "raid-start:" + BpdDefenceSync.SCOPE_INSTANCE + ":" + instanceFingerprint(worldView)
-			: "raid-start:" + scope.getType() + ":" + scope.getId();
+			? "raid-begun:v2:cox:" + BpdDefenceSync.SCOPE_INSTANCE + ":" + instanceFingerprint(worldView)
+			: "raid-begun:v2:cox:" + scope.getType() + ":" + scope.getId();
 		defenceTracker.setSharedTickAnchor(anchor, sharedRaidStartTick);
 	}
 
@@ -493,7 +488,6 @@ public class BetterPartyDefencePlugin extends Plugin
 		if (state == GameState.HOPPING || state == GameState.LOGIN_SCREEN || state == GameState.CONNECTION_LOST)
 		{
 			partyEpoch++;
-			raidClockSignalsInitialized = false;
 			sharedRaidClockActive = false;
 			defenceTracker.setSharedTickAnchor(null, 0);
 			localSpecDetector.reset();

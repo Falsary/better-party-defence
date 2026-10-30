@@ -202,7 +202,7 @@ public class PartySyncRegressionTest
 		assertTrue(((java.util.Deque<?>)inbox.get(plugin)).isEmpty());
 	}
 
-	@Test public void observedRaidEntrySetsRelativeTickOrigin() throws Exception
+	@Test public void enteringRaidDoesNotStartSharedClock() throws Exception
 	{
 		Method update=BetterPartyDefencePlugin.class.getDeclaredMethod("updateSharedRaidTickAnchor",int.class);
 		update.setAccessible(true);
@@ -212,8 +212,8 @@ public class PartySyncRegressionTest
 		when(client.getTickCount()).thenReturn(105);
 		tracker.queueLocal(SpecialWeapon.DRAGON_WARHAMMER,81,1,301,"Alice");
 		tracker.onGameTick();
-		assertTrue(tracker.specHistory().get(0).getTickAnchor().startsWith("raid-start:"));
-		assertEquals(4,tracker.specHistory().get(0).getEncounterTick());
+		assertEquals(tracker.specHistory().get(0).getEventId(),tracker.specHistory().get(0).getTickAnchor());
+		assertEquals(0,tracker.specHistory().get(0).getEncounterTick());
 	}
 
 	@Test public void startingInsideRaidDoesNotInventAStartTick() throws Exception
@@ -346,5 +346,95 @@ public class PartySyncRegressionTest
 	{
 		tracker.queueLocal(SpecialWeapon.BANDOS_GODSWORD,99,20,301,"Bob");
 		assertFalse(acceptable(state(189,a),1));
+	}
+
+	private void raidChat(String text, net.runelite.api.ChatMessageType type)
+	{
+		net.runelite.api.events.ChatMessage event=mock(net.runelite.api.events.ChatMessage.class);
+		when(event.getType()).thenReturn(type);
+		when(event.getMessage()).thenReturn(text);
+		plugin.onChatMessage(event);
+	}
+
+	private void localClockSpec(int tick)
+	{
+		when(client.getTickCount()).thenReturn(tick);
+		tracker.queueLocal(SpecialWeapon.DRAGON_WARHAMMER,81,1,301,"Alice");
+		tracker.onGameTick();
+	}
+
+	@Test public void actualRaidBegunNotificationSetsTickZero()
+	{
+		when(client.getVarbitValue(net.runelite.api.gameval.VarbitID.RAIDS_CLIENT_INDUNGEON)).thenReturn(1);
+		when(client.getTickCount()).thenReturn(101);
+		raidChat("<col=ff0000>The raid has begun!</col>",net.runelite.api.ChatMessageType.FRIENDSCHATNOTIFICATION);
+		localClockSpec(105);
+		assertTrue(tracker.specHistory().get(0).getTickAnchor().startsWith("raid-begun:v2:cox:"));
+		assertEquals(4,tracker.specHistory().get(0).getEncounterTick());
+	}
+
+	@Test public void duplicateStartNotificationDoesNotMoveTickZero()
+	{
+		when(client.getVarbitValue(net.runelite.api.gameval.VarbitID.RAIDS_CLIENT_INDUNGEON)).thenReturn(1);
+		when(client.getTickCount()).thenReturn(101);
+		raidChat("The raid has begun!",net.runelite.api.ChatMessageType.FRIENDSCHATNOTIFICATION);
+		when(client.getTickCount()).thenReturn(103);
+		raidChat("The raid has begun!",net.runelite.api.ChatMessageType.FRIENDSCHATNOTIFICATION);
+		localClockSpec(105);
+		assertEquals(4,tracker.specHistory().get(0).getEncounterTick());
+	}
+
+	@Test public void publicChatCannotCreateRaidClock()
+	{
+		when(client.getVarbitValue(net.runelite.api.gameval.VarbitID.RAIDS_CLIENT_INDUNGEON)).thenReturn(1);
+		raidChat("The raid has begun!",net.runelite.api.ChatMessageType.PUBLICCHAT);
+		localClockSpec(105);
+		assertEquals(tracker.specHistory().get(0).getEventId(),tracker.specHistory().get(0).getTickAnchor());
+	}
+
+	@Test public void notificationOutsideRaidCannotCreateRaidClock()
+	{
+		raidChat("The raid has begun!",net.runelite.api.ChatMessageType.FRIENDSCHATNOTIFICATION);
+		localClockSpec(105);
+		assertEquals(tracker.specHistory().get(0).getEventId(),tracker.specHistory().get(0).getTickAnchor());
+	}
+
+	@Test public void raidCompletionClearsClock()
+	{
+		when(client.getVarbitValue(net.runelite.api.gameval.VarbitID.RAIDS_CLIENT_INDUNGEON)).thenReturn(1);
+		when(client.getTickCount()).thenReturn(101);
+		raidChat("The raid has begun!",net.runelite.api.ChatMessageType.FRIENDSCHATNOTIFICATION);
+		raidChat("Congratulations - your raid is complete!",net.runelite.api.ChatMessageType.FRIENDSCHATNOTIFICATION);
+		localClockSpec(105);
+		assertEquals(tracker.specHistory().get(0).getEventId(),tracker.specHistory().get(0).getTickAnchor());
+	}
+
+	@Test public void leavingRaidClearsClockBeforeNextRaidEntry() throws Exception
+	{
+		when(client.getVarbitValue(net.runelite.api.gameval.VarbitID.RAIDS_CLIENT_INDUNGEON)).thenReturn(1);
+		when(client.getTickCount()).thenReturn(101);
+		raidChat("The raid has begun!",net.runelite.api.ChatMessageType.FRIENDSCHATNOTIFICATION);
+		Method update=BetterPartyDefencePlugin.class.getDeclaredMethod("updateSharedRaidTickAnchor",int.class);
+		update.setAccessible(true);
+		when(client.getVarbitValue(net.runelite.api.gameval.VarbitID.RAIDS_CLIENT_INDUNGEON)).thenReturn(0);
+		update.invoke(plugin,102);
+		when(client.getVarbitValue(net.runelite.api.gameval.VarbitID.RAIDS_CLIENT_INDUNGEON)).thenReturn(1);
+		update.invoke(plugin,103);
+		localClockSpec(105);
+		assertEquals(tracker.specHistory().get(0).getEventId(),tracker.specHistory().get(0).getTickAnchor());
+	}
+
+	@Test public void tobAndToaPartyPresenceDoNotManufactureStart() throws Exception
+	{
+		when(client.getTopLevelWorldView().isInstance()).thenReturn(true);
+		Method update=BetterPartyDefencePlugin.class.getDeclaredMethod("updateSharedRaidTickAnchor",int.class);
+		update.setAccessible(true);
+		update.invoke(plugin,100);
+		when(client.getVarbitValue(net.runelite.api.gameval.VarbitID.TOB_CLIENT_PARTYSTATUS)).thenReturn(1);
+		when(client.getVarbitValue(net.runelite.api.gameval.VarbitID.TOA_CLIENT_PARTYSTATUS)).thenReturn(1);
+		when(client.getVarpValue(net.runelite.api.gameval.VarPlayerID.TOB_MYCONTROLLER)).thenReturn(77);
+		update.invoke(plugin,101);
+		localClockSpec(105);
+		assertEquals(tracker.specHistory().get(0).getEventId(),tracker.specHistory().get(0).getTickAnchor());
 	}
 }
