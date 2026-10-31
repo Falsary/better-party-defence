@@ -170,7 +170,6 @@ Some bosses and encounters are not currently supported by the Defence tracker.
 
 Notable examples include:
 
-- The Fractured Archive: The Blade (Ocellus Phase 2)
 - Duke Sucellus
 - The Leviathan
 - The Whisperer

@@ -266,6 +266,8 @@ public class BetterPartyDefencePlugin extends Plugin
 		raidTimerClock.clear();
 		resetCoxTimerTracking();
 		defenceTracker.setSharedTickAnchor(null, 0);
+		// Disabling BPD must return every overlapping box it hid, including boxes owned by
+		// Party Defence Tracker rather than RuneLite's Special Attack Counter.
 		restoreOverlappingDefenceDisplays();
 
 		if (defenceOverlay != null)
@@ -848,6 +850,12 @@ public class BetterPartyDefencePlugin extends Plugin
 				updateDefenceInfoBox();
 			}
 			return;
+		}
+
+		if ("defenceHpBar".equals(event.getKey()) && !config.defenceHpBar())
+		{
+			// The main BPD display was turned off; stop suppressing another plugin's box.
+			restoreOverlappingDefenceDisplays();
 		}
 
 		if (("previousTargetDisplay".equals(event.getKey()) || "defenceHpBar".equals(event.getKey()))
@@ -2744,6 +2752,16 @@ public class BetterPartyDefencePlugin extends Plugin
 	 */
 	private void hideExistingSpecialCounterInfoBoxes()
 	{
+		if (!config.defenceHpBar())
+		{
+			// BPD's own display is off; it must not keep another plugin's box suppressed.
+			if (!hiddenSpecialCounterInfoBoxes.isEmpty())
+			{
+				restoreOverlappingDefenceDisplays();
+			}
+			return;
+		}
+
 		DefenceTracker.DefenceState state = defenceTracker.state();
 		Integer currentNpcIndex = state == null ? null : state.getNpcIndex();
 
@@ -2783,20 +2801,16 @@ public class BetterPartyDefencePlugin extends Plugin
 			|| className.equals("com.partydefencetracker.DefenceInfoBox");
 	}
 
+	/**
+	 * Re-add every box this plugin hid. Called only when BPD is being disabled or its
+	 * tracker is turned off; at that point there is no BPD display left to justify keeping
+	 * another plugin's box hidden, regardless of the current target or its owner.
+	 */
 	private void restoreOverlappingDefenceDisplays()
 	{
-		DefenceTracker.DefenceState state = defenceTracker.state();
-		Integer currentNpcIndex = state == null ? null : state.getNpcIndex();
-		boolean sameLiveEncounter = state != null
-			&& Objects.equals(hiddenSpecialCounterNpcIndex, currentNpcIndex)
-			&& isSpecialCounterActive();
-
-		if (sameLiveEncounter)
+		for (InfoBox infoBox : hiddenSpecialCounterInfoBoxes)
 		{
-			for (InfoBox infoBox : hiddenSpecialCounterInfoBoxes)
-			{
-				infoBoxManager.addInfoBox(infoBox);
-			}
+			infoBoxManager.addInfoBox(infoBox);
 		}
 
 		hiddenSpecialCounterInfoBoxes.clear();
