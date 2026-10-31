@@ -1,6 +1,9 @@
 ![Better Party Def Banner](images/banner.png)
+> [!WARNING]
+> **Infobox visibility change:** Better Party Defence no longer hides overlapping infoboxes from RuneLite's Special Attack Counter or Party Defence Tracker. RuneLite does not permit one plugin to remove another plugin's infoboxes.
+> If you want to keep the clean look with only BPD's infoboxes, you'll need to manually disable the infoboxes in the other plugins.
 
-# Better Party Defence
+## Better Party Defence
 
 Better Party Defence tracks the estimated live Defence of supported bosses and NPCs after defence-draining special attacks.
 
