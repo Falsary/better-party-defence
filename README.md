@@ -198,7 +198,7 @@ I’m the creator of Better Party Defence on RuneLite, I made this plugin for my
 
 And yes, I vibe code. I’m not going to pretend otherwise. But there’s a lot more to it than simply asking AI to write something and calling it a day.
 
-Behind my projects are countless hours of research, planning, problem-solving, testing, debugging, and refining ideas. I put a lot of thought into how things should work, why they should work that way, and how to make them better. AI helps me bring those ideas to life, but the vision, decisions, and attention to detail are very much my own. There is many many hours behind this.
+Behind my projects are countless hours of research, planning, problem-solving, testing, debugging, and refining ideas. I put a lot of thought into how things should work, why they should work that way, and how to make them better. AI helps me bring those ideas to life, but the vision, decisions, and attention to detail are very much my own. There are many, many hours behind this.
 
 I believe good software is about more than how the code gets written. It’s about identifying real problems, finding thoughtful solutions, and creating something people genuinely enjoy using.
 
