@@ -72,7 +72,6 @@ import net.runelite.client.plugins.specialcounter.SpecialCounterPlugin;
 import net.runelite.client.plugins.specialcounter.SpecialCounterUpdate;
 import net.runelite.client.plugins.specialcounter.SpecialWeapon;
 import net.runelite.client.ui.overlay.OverlayManager;
-import net.runelite.client.ui.overlay.infobox.InfoBox;
 import net.runelite.client.ui.overlay.infobox.InfoBoxManager;
 import net.runelite.client.util.Text;
 
@@ -173,8 +172,6 @@ public class BetterPartyDefencePlugin extends Plugin
 		new SnapshotEchoGuard<>(SYNC_HISTORY_DUPLICATE_WINDOW_TICKS);
 	private final java.util.ArrayDeque<BpdDefenceSync> pendingSnapshots = new java.util.ArrayDeque<>();
 	private volatile long partyEpoch;
-	private final List<InfoBox> hiddenSpecialCounterInfoBoxes = new ArrayList<>();
-	private Integer hiddenSpecialCounterNpcIndex;
 	private boolean wasInParty;
 	/** Local tick observed on the actual raid-begun notification, never instance entry. */
 	private boolean sharedRaidClockActive;
@@ -229,7 +226,6 @@ public class BetterPartyDefencePlugin extends Plugin
 	protected void startUp()
 	{
 		migrateLegacyHealthBarDisplayMode();
-		hideExistingSpecialCounterInfoBoxes();
 
 		// Register the core SpecialCounterUpdate message ourselves so remote party drains can
 		// still be decoded even when this client's Special Attack Counter UI is disabled.
@@ -266,10 +262,6 @@ public class BetterPartyDefencePlugin extends Plugin
 		raidTimerClock.clear();
 		resetCoxTimerTracking();
 		defenceTracker.setSharedTickAnchor(null, 0);
-		// Disabling BPD must return every overlapping box it hid, including boxes owned by
-		// Party Defence Tracker rather than RuneLite's Special Attack Counter.
-		restoreOverlappingDefenceDisplays();
-
 		if (defenceOverlay != null)
 		{
 			overlayManager.remove(defenceOverlay);
@@ -370,10 +362,6 @@ public class BetterPartyDefencePlugin extends Plugin
 		}
 		updateDefenceInfoBox();
 
-		// RuneLite's EventBus requires GameTick subscribers to be named exactly onGameTick.
-		// Run the visual suppression at the end of our low-priority tick so Special Attack
-		// Counter can continue its normal detection/broadcast work first.
-		hideExistingSpecialCounterInfoBoxes();
 	}
 
 	/** CoX's actual start notification is shared; walking into its lobby is not. */
@@ -700,8 +688,6 @@ public class BetterPartyDefencePlugin extends Plugin
 			localSpecDetector.reset();
 			defenceTracker.reset("game state " + state);
 			removeInfoBox();
-			hiddenSpecialCounterInfoBoxes.clear();
-			hiddenSpecialCounterNpcIndex = null;
 			recentSpecEvents.clear();
 			pendingSnapshots.clear();
 			recentSyncedSpecs.clear();
@@ -739,15 +725,11 @@ public class BetterPartyDefencePlugin extends Plugin
 		if (event.isLoaded())
 		{
 			log.debug("Special Attack Counter enabled: it will own the standard party spec broadcast");
-			hideExistingSpecialCounterInfoBoxes();
 		}
 		else
 		{
 			// Its shutdown unregisters SpecialCounterUpdate. Re-register so BPD can continue
-			// decoding messages sent by other party members. Any boxes captured from the old
-			// Special Counter session are no longer valid after that plugin shuts down.
-			hiddenSpecialCounterInfoBoxes.clear();
-			hiddenSpecialCounterNpcIndex = null;
+			// decoding messages sent by other party members.
 			wsClient.registerMessage(SpecialCounterUpdate.class);
 			log.debug("Special Attack Counter disabled: Better Party Defence will broadcast supported local drains itself");
 		}
@@ -850,12 +832,6 @@ public class BetterPartyDefencePlugin extends Plugin
 				updateDefenceInfoBox();
 			}
 			return;
-		}
-
-		if ("defenceHpBar".equals(event.getKey()) && !config.defenceHpBar())
-		{
-			// The main BPD display was turned off; stop suppressing another plugin's box.
-			restoreOverlappingDefenceDisplays();
 		}
 
 		if (("previousTargetDisplay".equals(event.getKey()) || "defenceHpBar".equals(event.getKey()))
@@ -2746,78 +2722,6 @@ public class BetterPartyDefencePlugin extends Plugin
 	}
 
 	/**
-	 * Hide RuneLite Special Attack Counter infoboxes plus Party Defence Tracker's DefenceInfoBox only. The core plugin
-	 * remains enabled, so its spec detection, party SpecialCounterUpdate messages and thresholds
-	 * continue to work. BPD never disables the other plugin or rewrites its settings.
-	 */
-	private void hideExistingSpecialCounterInfoBoxes()
-	{
-		if (!config.defenceHpBar())
-		{
-			// BPD's own display is off; it must not keep another plugin's box suppressed.
-			if (!hiddenSpecialCounterInfoBoxes.isEmpty())
-			{
-				restoreOverlappingDefenceDisplays();
-			}
-			return;
-		}
-
-		DefenceTracker.DefenceState state = defenceTracker.state();
-		Integer currentNpcIndex = state == null ? null : state.getNpcIndex();
-
-		if (!Objects.equals(hiddenSpecialCounterNpcIndex, currentNpcIndex)
-			&& !hiddenSpecialCounterInfoBoxes.isEmpty())
-		{
-			// The tracked encounter changed while the boxes were hidden. Do not keep stale
-			// Special Counter boxes around for a later restore.
-			hiddenSpecialCounterInfoBoxes.clear();
-		}
-		hiddenSpecialCounterNpcIndex = currentNpcIndex;
-
-		for (InfoBox infoBox : new ArrayList<>(infoBoxManager.getInfoBoxes()))
-		{
-			// InfoBox#getPlugin() is package-private in RuneLite, so Plugin Hub plugins
-			// cannot use it to determine ownership. Special Attack Counter's infobox
-			// implementations live in its own package, which is safe to inspect via
-			// the public runtime class.
-			if (isSpecialCounterInfoBox(infoBox)
-				&& !hiddenSpecialCounterInfoBoxes.contains(infoBox))
-			{
-				hiddenSpecialCounterInfoBoxes.add(infoBox);
-				infoBoxManager.removeInfoBox(infoBox);
-			}
-		}
-	}
-
-	private static boolean isSpecialCounterInfoBox(InfoBox infoBox)
-	{
-		if (infoBox == null)
-		{
-			return false;
-		}
-
-		String className = infoBox.getClass().getName();
-		return className.startsWith("net.runelite.client.plugins.specialcounter.")
-			|| className.equals("com.partydefencetracker.DefenceInfoBox");
-	}
-
-	/**
-	 * Re-add every box this plugin hid. Called only when BPD is being disabled or its
-	 * tracker is turned off; at that point there is no BPD display left to justify keeping
-	 * another plugin's box hidden, regardless of the current target or its owner.
-	 */
-	private void restoreOverlappingDefenceDisplays()
-	{
-		for (InfoBox infoBox : hiddenSpecialCounterInfoBoxes)
-		{
-			infoBoxManager.addInfoBox(infoBox);
-		}
-
-		hiddenSpecialCounterInfoBoxes.clear();
-		hiddenSpecialCounterNpcIndex = null;
-	}
-
-	/**
 	 * The display-polish build briefly exposed health-bar pinning as a display mode.
 	 * Preserve that saved placement now that the tracker is always attached to the NPC.
 	 */
@@ -3089,3 +2993,4 @@ public class BetterPartyDefencePlugin extends Plugin
 		int hit;
 	}
 }
+
