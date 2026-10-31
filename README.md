@@ -188,6 +188,26 @@ Support may be expanded where reliable Defence-drain tracking is applicable.
  These work well enough to ship on by default, although may still have untested edge cases. 
  In current use they are working as intended, but additional real-world testing may uncover situations that still need refinement.
 
+ 
+## About the Developper
+ Hey, I’m Heisty! 
+
+I’m a cybersecurity enthusiast, independent developer, and Old School RuneScape player who enjoys building tools and problem solving to improve the quality of the things we already enjoy.
+
+I’m the creator of Better Party Defence on RuneLite, I made this plugin for myself and some friends in hopes of improving our osrs experience. We had some problems with existing plugins and I decided to tackle the problem myself, with the experience we have had.
+
+And yes, I vibe code. I’m not going to pretend otherwise. But there’s a lot more to it than simply asking AI to write something and calling it a day.
+
+Behind my projects are countless hours of research, planning, problem-solving, testing, debugging, and refining ideas. I put a lot of thought into how things should work, why they should work that way, and how to make them better. AI helps me bring those ideas to life, but the vision, decisions, and attention to detail are very much my own. There is many many hours behind this.
+
+I believe good software is about more than how the code gets written. It’s about identifying real problems, finding thoughtful solutions, and creating something people genuinely enjoy using.
+
+I build because I’m curious, I love solving problems, and there’s something incredibly satisfying about turning an idea into something useful.
+
+If you’ve enjoyed this as much as we have, and feel like supporting me, a coffee is always appreciated, but never expected! ☕❤️
+
+ [![Buy Me a Coffee](https://img.buymeacoffee.com/button-api/?text=Buy%20me%20a%20coffee&slug=heisty&button_colour=FFDD00&font_colour=000000&font_family=Cookie)](https://buymeacoffee.com/heisty)
+
 
 
  
