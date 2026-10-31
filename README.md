@@ -1,4 +1,4 @@
-﻿![Better Party Def Banner](images/banner.png)
+![Better Party Def Banner](images/banner.png)
 
 # Better Party Defence
 
@@ -188,7 +188,7 @@ Support may be expanded where reliable Defence-drain tracking is applicable.
  In current use they are working as intended, but additional real-world testing may uncover situations that still need refinement.
 
  
-## About the Developper
+## About the Developer
  Hey, I’m Heisty! 
 
 I’m a cybersecurity enthusiast, independent developer, and Old School RuneScape player who enjoys building tools and problem solving to improve the quality of the things we already enjoy.
