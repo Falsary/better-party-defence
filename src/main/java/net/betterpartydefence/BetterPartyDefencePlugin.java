@@ -923,8 +923,13 @@ public class BetterPartyDefencePlugin extends Plugin
 			return;
 		}
 
+		final long receivedInPartyEpoch = partyEpoch;
 		clientThread.invoke(() ->
 		{
+			if (receivedInPartyEpoch != partyEpoch)
+			{
+				return;
+			}
 			knownBpdPartyMembers.add(event.getMemberId());
 			if (config.syncWithOtherPartyDefenceUsers())
 			{
@@ -960,8 +965,13 @@ public class BetterPartyDefencePlugin extends Plugin
 			return;
 		}
 
+		final long receivedInPartyEpoch = partyEpoch;
 		clientThread.invoke(() ->
 		{
+			if (receivedInPartyEpoch != partyEpoch)
+			{
+				return;
+			}
 			knownBpdPartyMembers.add(event.getMemberId());
 			if (!config.syncWithOtherPartyDefenceUsers()
 				|| event.getWorld() != client.getWorld())
@@ -1038,8 +1048,13 @@ public class BetterPartyDefencePlugin extends Plugin
 			return;
 		}
 
+		final long receivedInPartyEpoch = partyEpoch;
 		clientThread.invoke(() ->
 		{
+			if (receivedInPartyEpoch != partyEpoch)
+			{
+				return;
+			}
 			knownBpdPartyMembers.add(event.getMemberId());
 			if (!config.syncWithOtherPartyDefenceUsers() || !partyService.isInParty()
 				|| partyService.getMemberById(event.getMemberId()) == null
@@ -1110,8 +1125,15 @@ public class BetterPartyDefencePlugin extends Plugin
 		{
 			return;
 		}
+		SenderEncounterPresence existing = senderEncounterPresence.get(memberId);
+		if (existing != null && sentAtMillis < existing.getSentAtMillis())
+		{
+			log.debug("Ignoring out-of-order encounter heartbeat from member={} sent={} current={}",
+				memberId, sentAtMillis, existing.getSentAtMillis());
+			return;
+		}
 		senderEncounterPresence.put(memberId, new SenderEncounterPresence(
-			world, scopeType, scopeId, System.currentTimeMillis()));
+			world, scopeType, scopeId, System.currentTimeMillis(), sentAtMillis));
 	}
 
 	/**
@@ -2970,6 +2992,7 @@ public class BetterPartyDefencePlugin extends Plugin
 		int scopeType;
 		int scopeId;
 		long receivedAtMillis;
+		long sentAtMillis;
 	}
 
 	@Value
