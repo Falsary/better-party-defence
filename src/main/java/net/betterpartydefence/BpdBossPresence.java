@@ -21,6 +21,8 @@ public class BpdBossPresence extends PartyMemberMessage
 	private int bossPlane;
 	private int healthPercent;
 	private long sentAtMillis;
+	/** Sender's PartyService session. Zero means a legacy sender with no party id. */
+	private long partyId;
 
 	/** Required for party-message deserialisation. */
 	public BpdBossPresence()
@@ -74,4 +76,6 @@ public class BpdBossPresence extends PartyMemberMessage
 	public int getBossPlane() { return bossPlane; }
 	public int getHealthPercent() { return healthPercent; }
 	public long getSentAtMillis() { return sentAtMillis; }
+	public long getPartyId() { return partyId; }
+	public BpdBossPresence withPartyId(long partyId) { this.partyId = partyId; return this; }
 }

@@ -32,6 +32,8 @@ public class BpdDefenceSync extends PartyMemberMessage
 	private int bossPlane;
 	private int healthPercent;
 	private long sentAtMillis;
+	/** Sender's PartyService session. Zero means a legacy sender with no party id. */
+	private long partyId;
 	/** Logical snapshot version. Zero denotes a legacy sender with no version field. */
 	private long stateVersion;
 	/** Received from event-rewrite peers; uncertain totals cannot be authoritative. */
@@ -224,6 +226,8 @@ public class BpdDefenceSync extends PartyMemberMessage
 	public int getBossPlane() { return bossPlane; }
 	public int getHealthPercent() { return healthPercent; }
 	public long getSentAtMillis() { return sentAtMillis; }
+	public long getPartyId() { return partyId; }
+	public BpdDefenceSync withPartyId(long partyId) { this.partyId = partyId; return this; }
 	public long getStateVersion() { return stateVersion; }
 	public long getCurrent() { return current; }
 	public long getMin() { return min; }

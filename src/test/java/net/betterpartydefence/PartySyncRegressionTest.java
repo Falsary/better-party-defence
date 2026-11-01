@@ -495,4 +495,115 @@ public class PartySyncRegressionTest
 		assertEquals("presence callback from the previous party must not populate the new session",
 			true, match.invoke(plugin, 7L, 301));
 	}
+
+	@Test public void oldPartyPresenceCannotPopulateNewPartyScope() throws Exception
+	{
+		PartyService party = mock(PartyService.class);
+		PartyMember sender = mock(PartyMember.class);
+		when(party.isInParty()).thenReturn(true);
+		when(party.getMemberById(7L)).thenReturn(sender);
+		when(party.getPartyId()).thenReturn(2L);
+		when(sender.getDisplayName()).thenReturn("Alice");
+
+		ClientThread thread = mock(ClientThread.class);
+		doAnswer(i -> { ((Runnable)i.getArgument(0)).run(); return null; })
+			.when(thread).invoke(any(Runnable.class));
+		set("partyService", party);
+		set("clientThread", thread);
+		when(client.getTopLevelWorldView().isInstance()).thenReturn(true);
+
+		BpdEncounterPresence old = new BpdEncounterPresence(301,
+			BpdDefenceSync.SCOPE_INSTANCE, fingerprint() + 1).withPartyId(1L);
+		old.setMemberId(7L);
+		plugin.onBpdEncounterPresence(old);
+
+		Method match = BetterPartyDefencePlugin.class.getDeclaredMethod("standardPartySpecScopeMatches",
+			long.class, int.class);
+		match.setAccessible(true);
+		assertEquals("old-party presence must be rejected by current party identity",
+			true, match.invoke(plugin, 7L, 301));
+	}
+
+	@Test public void currentPartyPresenceIsAccepted() throws Exception
+	{
+		PartyService party = mock(PartyService.class);
+		PartyMember sender = mock(PartyMember.class);
+		when(party.isInParty()).thenReturn(true);
+		when(party.getMemberById(7L)).thenReturn(sender);
+		when(party.getPartyId()).thenReturn(2L);
+		when(sender.getDisplayName()).thenReturn("Alice");
+
+		ClientThread thread = mock(ClientThread.class);
+		doAnswer(i -> { ((Runnable)i.getArgument(0)).run(); return null; })
+			.when(thread).invoke(any(Runnable.class));
+		set("partyService", party);
+		set("clientThread", thread);
+		when(client.getTopLevelWorldView().isInstance()).thenReturn(true);
+
+		BpdEncounterPresence current = new BpdEncounterPresence(301,
+			BpdDefenceSync.SCOPE_INSTANCE, fingerprint()).withPartyId(2L);
+		current.setMemberId(7L);
+		plugin.onBpdEncounterPresence(current);
+
+		Field presence = BetterPartyDefencePlugin.class.getDeclaredField("senderEncounterPresence");
+		presence.setAccessible(true);
+		java.util.Map<?, ?> map = (java.util.Map<?, ?>)presence.get(plugin);
+		assertTrue("current-party heartbeat must be stored", map.containsKey(7L));
+	}
+
+	@Test public void oldPartySnapshotCannotEnterPendingQueue() throws Exception
+	{
+		PartyService party = mock(PartyService.class);
+		PartyMember sender = mock(PartyMember.class);
+		when(party.isInParty()).thenReturn(true);
+		when(party.getMemberById(7L)).thenReturn(sender);
+		when(party.getPartyId()).thenReturn(2L);
+
+		ClientThread thread = mock(ClientThread.class);
+		doAnswer(i -> { ((Runnable)i.getArgument(0)).run(); return null; })
+			.when(thread).invoke(any(Runnable.class));
+		set("partyService", party);
+		set("clientThread", thread);
+		when(client.getTopLevelWorldView().isInstance()).thenReturn(true);
+
+		BpdDefenceSync old = new BpdDefenceSync(301, state(189, a),
+			BpdDefenceSync.SCOPE_INSTANCE, fingerprint(), 0, 0, 0, 100, 1).withPartyId(1L);
+		old.setMemberId(7L);
+		plugin.onBpdDefenceSync(old);
+
+		Field inbox = BetterPartyDefencePlugin.class.getDeclaredField("pendingSnapshots");
+		inbox.setAccessible(true);
+		assertTrue("old-party snapshot must be rejected before it reaches the queue",
+			((java.util.Deque<?>)inbox.get(plugin)).isEmpty());
+	}
+
+	@Test public void briefPartyRejoinPreservesEncounterState() throws Exception
+	{
+		tracker.applySyncState(state(189, a), npc);
+		plugin.onPartyChanged(new PartyChanged(null, null));
+
+		assertEquals(189, tracker.state().getCurrent());
+		assertEquals(1, tracker.specHistory().size());
+	}
+
+	@Test public void partyChangeClearsOldLogicalVersions() throws Exception
+	{
+		Field currentParty = BetterPartyDefencePlugin.class.getDeclaredField("currentPartyId");
+		currentParty.setAccessible(true);
+		currentParty.set(plugin, 1L);
+
+		Field versionsField = BetterPartyDefencePlugin.class.getDeclaredField("syncStateVersions");
+		versionsField.setAccessible(true);
+		java.util.Map<BossDefence, Object> versions =
+			(java.util.Map<BossDefence, Object>)versionsField.get(plugin);
+
+		Class<?> versionClass = Class.forName("net.betterpartydefence.BetterPartyDefencePlugin$VersionedSyncState");
+		java.lang.reflect.Constructor<?> ctor = versionClass.getDeclaredConstructor(long.class, int.class);
+		ctor.setAccessible(true);
+		versions.put(BossDefence.CHAOS_ELEMENTAL, ctor.newInstance(999L, 123));
+
+		plugin.onPartyChanged(new PartyChanged(null, null));
+
+		assertTrue("party change must not retain old logical versions", versions.isEmpty());
+	}
 }

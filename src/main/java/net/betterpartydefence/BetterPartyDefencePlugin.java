@@ -172,6 +172,7 @@ public class BetterPartyDefencePlugin extends Plugin
 		new SnapshotEchoGuard<>(SYNC_HISTORY_DUPLICATE_WINDOW_TICKS);
 	private final java.util.ArrayDeque<BpdDefenceSync> pendingSnapshots = new java.util.ArrayDeque<>();
 	private volatile long partyEpoch;
+	private Long currentPartyId;
 	private boolean wasInParty;
 	/** Local tick observed on the actual raid-begun notification, never instance entry. */
 	private boolean sharedRaidClockActive;
@@ -646,6 +647,16 @@ public class BetterPartyDefencePlugin extends Plugin
 	public void onPartyChanged(PartyChanged event)
 	{
 		partyEpoch++;
+		Long changedPartyId = event.getPartyId();
+		boolean partySessionChanged = !Objects.equals(currentPartyId, changedPartyId);
+		currentPartyId = changedPartyId;
+		if (partySessionChanged)
+		{
+			// Logical version numbers and open-world "already synced" memory belong to one
+			// party transport session. A new party must not inherit either one.
+			syncStateVersions.clear();
+			previouslySyncedBosses.clear();
+		}
 		recentSpecEvents.clear();
 		pendingSnapshots.clear();
 		recentSyncedSpecs.clear();
@@ -908,7 +919,8 @@ public class BetterPartyDefencePlugin extends Plugin
 	public void onBpdEncounterPresence(BpdEncounterPresence event)
 	{
 		if (!partyService.isInParty()
-			|| event == null || event.getProtocolVersion() != BpdEncounterPresence.PROTOCOL_VERSION)
+			|| event == null || event.getProtocolVersion() != BpdEncounterPresence.PROTOCOL_VERSION
+			|| !partyMessageBelongsToCurrentParty(event.getPartyId()))
 		{
 			return;
 		}
@@ -950,7 +962,8 @@ public class BetterPartyDefencePlugin extends Plugin
 	public void onBpdBossPresence(BpdBossPresence event)
 	{
 		if (!partyService.isInParty()
-			|| event == null || event.getProtocolVersion() != BpdBossPresence.PROTOCOL_VERSION)
+			|| event == null || event.getProtocolVersion() != BpdBossPresence.PROTOCOL_VERSION
+			|| !partyMessageBelongsToCurrentParty(event.getPartyId()))
 		{
 			return;
 		}
@@ -1020,7 +1033,7 @@ public class BetterPartyDefencePlugin extends Plugin
 			partyService.send(new BpdDefenceSync(
 				client.getWorld(), sync, event.getScopeType(), event.getScopeId(),
 				event.getBossX(), event.getBossY(), event.getBossPlane(), event.getHealthPercent(),
-				stateVersion));
+				stateVersion).withPartyId(partyService.getPartyId()));
 			markPartyEncounterPresent(boss);
 			log.debug("Answered BPD boss-presence request member={} boss={} scope={}:{} def={}/{}",
 				event.getMemberId(), boss, event.getScopeType(), event.getScopeId(),
@@ -1033,7 +1046,8 @@ public class BetterPartyDefencePlugin extends Plugin
 	public void onBpdEncounterReset(BpdEncounterReset event)
 	{
 		if (!partyService.isInParty()
-			|| event == null || event.getProtocolVersion() != BpdEncounterReset.PROTOCOL_VERSION)
+			|| event == null || event.getProtocolVersion() != BpdEncounterReset.PROTOCOL_VERSION
+			|| !partyMessageBelongsToCurrentParty(event.getPartyId()))
 		{
 			return;
 		}
@@ -1105,9 +1119,26 @@ public class BetterPartyDefencePlugin extends Plugin
 			return;
 		}
 
-		partyService.send(new BpdEncounterPresence(client.getWorld(), scope.getType(), scope.getId()));
+		partyService.send(new BpdEncounterPresence(client.getWorld(), scope.getType(), scope.getId())
+			.withPartyId(partyService.getPartyId()));
 		lastPresenceScope = scope;
 		lastPresenceBroadcastMillis = now;
+	}
+
+	private boolean partyMessageBelongsToCurrentParty(long eventPartyId)
+	{
+		if (eventPartyId == 0L)
+		{
+			// Legacy sender: no party identity available, keep existing scope/epoch checks.
+			return true;
+		}
+		if (!partyService.isInParty())
+		{
+			return false;
+		}
+		long currentPartyId = partyService.getPartyId();
+		// A transient zero means PartyService has not finished assigning the session yet.
+		return currentPartyId == 0L || eventPartyId == currentPartyId;
 	}
 
 	private void rememberSenderEncounterPresence(long memberId, int world, int scopeType, int scopeId, long sentAtMillis)
@@ -1201,7 +1232,8 @@ public class BetterPartyDefencePlugin extends Plugin
 	public void onBpdDefenceSync(BpdDefenceSync event)
 	{
 		if (!partyService.isInParty()
-			|| event == null || event.getProtocolVersion() != BpdDefenceSync.PROTOCOL_VERSION)
+			|| event == null || event.getProtocolVersion() != BpdDefenceSync.PROTOCOL_VERSION
+			|| !partyMessageBelongsToCurrentParty(event.getPartyId()))
 		{
 			return;
 		}
@@ -1420,7 +1452,8 @@ public class BetterPartyDefencePlugin extends Plugin
 
 		if (scope != null && config.syncWithOtherPartyDefenceUsers() && partyService.isInParty())
 		{
-			partyService.send(new BpdEncounterReset(client.getWorld(), boss, scope.getType(), scope.getId()));
+			partyService.send(new BpdEncounterReset(client.getWorld(), boss, scope.getType(), scope.getId())
+				.withPartyId(partyService.getPartyId()));
 			log.debug("Broadcast BPD encounter reset boss={} scope={}:{} reason={}",
 				boss, scope.getType(), scope.getId(), reason);
 		}
@@ -1615,7 +1648,8 @@ public class BetterPartyDefencePlugin extends Plugin
 
 		partyService.send(new BpdBossPresence(
 			client.getWorld(), boss, scope.getType(), scope.getId(),
-			point.getX(), point.getY(), point.getPlane(), healthPercent(npc)));
+			point.getX(), point.getY(), point.getPlane(), healthPercent(npc))
+			.withPartyId(partyService.getPartyId()));
 		lastBossPresenceBroadcastMillis.put(boss, now);
 		markPartyEncounterPresent(boss);
 		log.debug("Broadcast BPD boss presence boss={} scope={}:{} actor={}",
@@ -1707,7 +1741,8 @@ public class BetterPartyDefencePlugin extends Plugin
 
 			long stateVersion = observeLocalStateVersion(sync);
 			partyService.send(new BpdDefenceSync(
-				client.getWorld(), sync, scope.getType(), scope.getId(), x, y, plane, hp, stateVersion));
+				client.getWorld(), sync, scope.getType(), scope.getId(), x, y, plane, hp, stateVersion)
+				.withPartyId(partyService.getPartyId()));
 			markPartyEncounterPresent(sync.getBossType());
 			sentAny = true;
 			log.debug("Broadcast BPD sync boss={} scope={}:{} def={}/{}",
