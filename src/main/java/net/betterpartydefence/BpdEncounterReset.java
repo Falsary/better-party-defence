@@ -17,6 +17,8 @@ public class BpdEncounterReset extends PartyMemberMessage
 	private int scopeType;
 	private int scopeId;
 	private long sentAtMillis;
+	/** Sender's PartyService session. Zero means a legacy sender with no party id. */
+	private long partyId;
 
 	/** Required for party-message deserialisation. */
 	public BpdEncounterReset()
@@ -55,4 +57,6 @@ public class BpdEncounterReset extends PartyMemberMessage
 	public int getScopeType() { return scopeType; }
 	public int getScopeId() { return scopeId; }
 	public long getSentAtMillis() { return sentAtMillis; }
+	public long getPartyId() { return partyId; }
+	public BpdEncounterReset withPartyId(long partyId) { this.partyId = partyId; return this; }
 }
