@@ -53,6 +53,16 @@ final class InitialSyncDisplayGate
 		}
 	}
 
+	/** Remove every pending grace period for an encounter that is no longer current. */
+	void clearForBoss(BossDefence boss)
+	{
+		if (boss == null)
+		{
+			return;
+		}
+		gates.entrySet().removeIf(entry -> entry.getValue().boss == boss);
+	}
+
 	/** A local or synced drain must never be hidden behind the presentation grace period. */
 	boolean isWaiting(DefenceTracker.DefenceState state, int tick)
 	{

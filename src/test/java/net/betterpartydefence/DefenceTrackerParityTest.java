@@ -13,7 +13,9 @@ import java.util.List;
 import net.runelite.api.Client;
 import net.runelite.api.IndexedObjectSet;
 import net.runelite.api.NPC;
+import net.runelite.api.Player;
 import net.runelite.api.WorldView;
+import net.runelite.api.coords.WorldPoint;
 import net.runelite.api.gameval.NpcID;
 import net.runelite.api.gameval.VarbitID;
 import net.runelite.client.plugins.specialcounter.SpecialWeapon;
@@ -58,10 +60,16 @@ public class DefenceTrackerParityTest
 
 	private NPC fakeNpc(String name, int index, int id)
 	{
+		return fakeNpc(name, index, id, null);
+	}
+
+	private NPC fakeNpc(String name, int index, int id, WorldPoint location)
+	{
 		NPC npc = mock(NPC.class);
 		when(npc.getName()).thenReturn(name);
 		when(npc.getIndex()).thenReturn(index);
 		when(npc.getId()).thenReturn(id);
+		when(npc.getWorldLocation()).thenReturn(location);
 		when(npc.isDead()).thenReturn(false);
 		when(npc.getHealthRatio()).thenReturn(1);
 		when(npcs.byIndex(index)).thenReturn(npc);
@@ -73,6 +81,15 @@ public class DefenceTrackerParityTest
 	{
 		sceneNpcs.removeIf(npc -> npc.getIndex() == index);
 		when(npcs.byIndex(index)).thenReturn(null);
+	}
+
+	private void restoreNpc(NPC npc)
+	{
+		when(npcs.byIndex(npc.getIndex())).thenReturn(npc);
+		if (!sceneNpcs.contains(npc))
+		{
+			sceneNpcs.add(npc);
+		}
 	}
 
 	private DefenceTracker makeTracker()
@@ -366,11 +383,13 @@ public class DefenceTrackerParityTest
 	public void heldDrainReplaysWhenNpcAppearsOnLaterTick()
 	{
 		DefenceTracker tracker = makeTracker();
-		tracker.queue(SpecialWeapon.DRAGON_WARHAMMER, 12, 1, WORLD);
+		NPC npc = fakeNpc("Chaos Elemental", 12, 5001, new WorldPoint(3100, 3100, 0));
+		tracker.queue(SpecialWeapon.DRAGON_WARHAMMER, 12, 1, WORLD, "Alice", npc);
+		removeNpc(12);
 		tracker.onGameTick();
 		assertNull(tracker.state());
 
-		fakeNpc("Chaos Elemental", 12);
+		restoreNpc(npc);
 		tracker.onGameTick();
 		assertEquals(189, tracker.state().getCurrent());
 	}
@@ -447,6 +466,141 @@ public class DefenceTrackerParityTest
 	}
 
 	@Test
+	public void kephriPhaseActorReplacementAtSameIndexKeepsEncounter()
+	{
+		fakeNpc("Kephri", 24, NpcID.TOA_KEPHRI_BOSS_SHIELDED);
+		DefenceTracker tracker = makeTracker();
+		tracker.queue(SpecialWeapon.DRAGON_WARHAMMER, 24, 1, WORLD);
+		tracker.onGameTick();
+		assertEquals(60, tracker.state().getCurrent());
+
+		removeNpc(24);
+		fakeNpc("Kephri", 24, NpcID.TOA_KEPHRI_BOSS_WEAK);
+		tracker.onGameTick();
+
+		assertEquals(24, tracker.state().getNpcIndex());
+		assertEquals(60, tracker.state().getCurrent());
+	}
+
+	@Test
+	public void immediateSameIndexRespawnDoesNotInheritState()
+	{
+		NPC original = fakeNpc("Chaos Elemental", 107, -1, new WorldPoint(3020, 3020, 0));
+		DefenceTracker tracker = makeTracker();
+		tracker.queueLocal(SpecialWeapon.DRAGON_WARHAMMER, 107, 1, WORLD, "Alice", original);
+		tracker.onGameTick();
+		assertEquals(189, tracker.state().getCurrent());
+
+		when(original.isDead()).thenReturn(true);
+		removeNpc(107);
+		fakeNpc("Chaos Elemental", 107, -1, new WorldPoint(3020, 3020, 0));
+		tracker.onGameTick();
+
+		assertNull(tracker.state());
+		assertTrue(tracker.states().isEmpty());
+	}
+
+	@Test
+	public void interactingWithAnotherShamanDoesNotRebindMissingTarget()
+	{
+		when(client.getTickCount()).thenReturn(100);
+		NPC first = fakeNpc("Lizardman shaman", 110, -1, new WorldPoint(3000, 3000, 0));
+		DefenceTracker tracker = makeTracker();
+		tracker.queueLocal(SpecialWeapon.DRAGON_WARHAMMER, 110, 1, WORLD, "Alice", first);
+		tracker.onGameTick();
+		assertEquals(98, tracker.state().getCurrent());
+
+		removeNpc(110);
+		NPC second = fakeNpc("Lizardman shaman", 111, -1, new WorldPoint(3020, 3020, 0));
+		Player player = mock(Player.class);
+		when(client.getLocalPlayer()).thenReturn(player);
+		when(player.getInteracting()).thenReturn(second);
+		when(client.getTickCount()).thenReturn(101);
+		tracker.onGameTick();
+
+		assertEquals(110, tracker.state().getNpcIndex());
+		assertEquals(98, tracker.state().getCurrent());
+		assertTrue(tracker.states().stream().noneMatch(state -> state.getNpcIndex() == 111));
+	}
+
+	@Test
+	public void newSpecOnAnotherShamanDoesNotRestoreMissingTarget()
+	{
+		when(client.getTickCount()).thenReturn(100);
+		NPC first = fakeNpc("Lizardman shaman", 112, -1, new WorldPoint(3030, 3030, 0));
+		DefenceTracker tracker = makeTracker();
+		tracker.queueLocal(SpecialWeapon.DRAGON_WARHAMMER, 112, 1, WORLD, "Alice", first);
+		tracker.onGameTick();
+		assertEquals(98, tracker.state().getCurrent());
+
+		removeNpc(112);
+		NPC second = fakeNpc("Lizardman shaman", 113, -1, new WorldPoint(3050, 3050, 0));
+		tracker.queueLocal(SpecialWeapon.DRAGON_WARHAMMER, 113, 1, WORLD, "Bob", second);
+		when(client.getTickCount()).thenReturn(101);
+		tracker.onGameTick();
+
+		assertEquals(2, tracker.states().size());
+		assertEquals(98, tracker.states().stream()
+			.filter(state -> state.getNpcIndex() == 112).findFirst().orElseThrow(AssertionError::new).getCurrent());
+		assertEquals(98, tracker.states().stream()
+			.filter(state -> state.getNpcIndex() == 113).findFirst().orElseThrow(AssertionError::new).getCurrent());
+	}
+
+	@Test
+	public void unidentifiedLegacyObservationDoesNotUseAnotherNpcIndex()
+	{
+		when(client.getTickCount()).thenReturn(100);
+		DefenceTracker tracker = makeTracker();
+		tracker.queue(SpecialWeapon.DRAGON_WARHAMMER, 120, 1, WORLD, "Alice");
+		tracker.onGameTick();
+		assertTrue(tracker.hasUnprocessedSpecs());
+
+		fakeNpc("Lizardman shaman", 126, -1, new WorldPoint(3070, 3070, 0));
+		when(client.getTickCount()).thenReturn(101);
+		tracker.onGameTick();
+
+		assertNull(tracker.state());
+		assertTrue(tracker.hasUnprocessedSpecs());
+	}
+
+	@Test
+	public void outOfRenderLegacyObservationRecoversWhenIndexedBossBecomesUnique()
+	{
+		when(client.getTickCount()).thenReturn(100);
+		DefenceTracker tracker = makeTracker();
+		tracker.queue(SpecialWeapon.DRAGON_WARHAMMER, 121, 1, WORLD, "Alice");
+		tracker.onGameTick();
+		assertNull(tracker.state());
+		assertTrue(tracker.hasUnprocessedSpecs());
+
+		fakeNpc("Lizardman shaman", 121, -1, new WorldPoint(3071, 3071, 0));
+		when(client.getTickCount()).thenReturn(101);
+		tracker.onGameTick();
+
+		assertEquals(121, tracker.state().getNpcIndex());
+		assertEquals(98, tracker.state().getCurrent());
+		assertFalse(tracker.hasUnprocessedSpecs());
+	}
+
+	@Test
+	public void outOfRenderLegacyObservationStaysAmbiguousWithTwoCandidates()
+	{
+		when(client.getTickCount()).thenReturn(100);
+		DefenceTracker tracker = makeTracker();
+		tracker.queue(SpecialWeapon.DRAGON_WARHAMMER, 124, 1, WORLD, "Alice");
+		tracker.onGameTick();
+		assertTrue(tracker.hasUnprocessedSpecs());
+
+		fakeNpc("Lizardman shaman", 124, -1, new WorldPoint(3073, 3073, 0));
+		fakeNpc("Lizardman shaman", 125, -1, new WorldPoint(3074, 3074, 0));
+		when(client.getTickCount()).thenReturn(101);
+		tracker.onGameTick();
+
+		assertNull(tracker.state());
+		assertTrue(tracker.hasUnprocessedSpecs());
+	}
+
+	@Test
 	public void sotetsegTrackerSurvivesMazeButRestoresDefence()
 	{
 		when(client.getVarbitValue(VarbitID.TOB_CLIENT_WAVEPROGRESS_TYPE)).thenReturn(1);
@@ -514,7 +668,8 @@ public class DefenceTrackerParityTest
 	@Test
 	public void leavingRenderDistancePreservesDefenceAndHistory()
 	{
-		fakeNpc("Chaos Elemental", 40);
+		WorldPoint location = new WorldPoint(3110, 3110, 0);
+		fakeNpc("Chaos Elemental", 40, 5002, location);
 		DefenceTracker tracker = makeTracker();
 		tracker.queue(SpecialWeapon.DRAGON_WARHAMMER, 40, 1, WORLD, "Heisty");
 		tracker.onGameTick();
@@ -526,7 +681,7 @@ public class DefenceTrackerParityTest
 		assertEquals(189, tracker.state().getCurrent());
 		assertEquals(1, tracker.specHistory().size());
 
-		fakeNpc("Chaos Elemental", 41);
+		fakeNpc("Chaos Elemental", 41, 5002, location);
 		tracker.onGameTick();
 		assertEquals(41, tracker.state().getNpcIndex());
 		assertEquals(189, tracker.state().getCurrent());
@@ -604,6 +759,239 @@ public class DefenceTrackerParityTest
 		receiver.onGameTick();
 		assertEquals(2,receiver.syncTargets().size());
 		assertEquals("Bob",receiver.specHistory().get(0).getPlayerName());
+	}
+
+	@Test
+	public void exactLocalObservationsKeepTwoSameTypeTargetsSeparate()
+	{
+		NPC first = fakeNpc("Chaos Elemental", 90);
+		NPC second = fakeNpc("Chaos Elemental", 91);
+		DefenceTracker tracker = makeTracker();
+
+		tracker.queueLocal(SpecialWeapon.DRAGON_WARHAMMER, 90, 1, WORLD, "Alice", first);
+		tracker.onGameTick();
+		tracker.queueLocal(SpecialWeapon.DRAGON_WARHAMMER, 91, 1, WORLD, "Bob", second);
+		tracker.onGameTick();
+
+		assertEquals(2, tracker.states().size());
+		assertEquals(189, tracker.states().stream()
+			.filter(state -> state.getNpcIndex() == 90).findFirst().orElseThrow(AssertionError::new).getCurrent());
+		assertEquals(189, tracker.states().stream()
+			.filter(state -> state.getNpcIndex() == 91).findFirst().orElseThrow(AssertionError::new).getCurrent());
+		assertFalse(tracker.hasUnprocessedSpecs());
+	}
+
+	@Test
+	public void unresolvedTargetsRetainIndependentHeldQueues()
+	{
+		NPC first = fakeNpc("Lizardman shaman", 92, 5003, new WorldPoint(3120, 3120, 0));
+		NPC second = fakeNpc("Corporeal Beast", 93, 5004, new WorldPoint(3130, 3130, 0));
+		DefenceTracker tracker = makeTracker();
+		tracker.queue(SpecialWeapon.DRAGON_WARHAMMER, 92, 1, WORLD, "Alice", first);
+		tracker.queue(SpecialWeapon.DRAGON_WARHAMMER, 93, 1, WORLD, "Bob", second);
+		removeNpc(92);
+		removeNpc(93);
+		tracker.onGameTick();
+
+		restoreNpc(first);
+		tracker.onGameTick();
+		assertEquals(92, tracker.state().getNpcIndex());
+		assertTrue(tracker.hasUnprocessedSpecs());
+
+		restoreNpc(second);
+		tracker.onGameTick();
+		assertEquals(2, tracker.states().size());
+		assertFalse(tracker.hasUnprocessedSpecs());
+	}
+
+	@Test
+	public void ambiguousSameTypeTargetsAreNeverGuessed()
+	{
+		fakeNpc("Chaos Elemental", 94);
+		fakeNpc("Chaos Elemental", 95);
+		DefenceTracker tracker = makeTracker();
+		tracker.queue(SpecialWeapon.DRAGON_WARHAMMER, 94, 1, WORLD, "Alice");
+		tracker.onGameTick();
+
+		assertNull(tracker.state());
+		assertTrue(tracker.hasUnprocessedSpecs());
+
+		// Once two equally plausible actors existed, a later disappearance is not proof that
+		// the remaining actor received the observation.
+		removeNpc(95);
+		tracker.onGameTick();
+		assertNull(tracker.state());
+		assertTrue(tracker.hasUnprocessedSpecs());
+	}
+
+	@Test
+	public void respawnedNpcDoesNotInheritStateFromReusedIndex()
+	{
+		when(client.getTickCount()).thenReturn(100);
+		WorldPoint spawn = new WorldPoint(3000, 3000, 0);
+		NPC original = fakeNpc("Chaos Elemental", 96, -1, spawn);
+		DefenceTracker tracker = makeTracker();
+		tracker.queueLocal(SpecialWeapon.DRAGON_WARHAMMER, 96, 1, WORLD, "Alice", original);
+		tracker.onGameTick();
+		assertEquals(189, tracker.state().getCurrent());
+
+		when(original.isDead()).thenReturn(true);
+		removeNpc(96);
+		when(client.getTickCount()).thenReturn(101);
+		tracker.onGameTick();
+		assertNull(tracker.state());
+		assertTrue(tracker.states().isEmpty());
+
+		fakeNpc("Chaos Elemental", 96, -1, spawn);
+		when(client.getTickCount()).thenReturn(102);
+		tracker.onGameTick();
+		assertNull(tracker.state());
+		assertTrue(tracker.states().isEmpty());
+	}
+
+	@Test
+	public void respawnedNpcWithDifferentIndexDoesNotInheritDrainedState()
+	{
+		when(client.getTickCount()).thenReturn(100);
+		NPC original = fakeNpc("Chaos Elemental", 105, -1, new WorldPoint(3010, 3010, 0));
+		DefenceTracker tracker = makeTracker();
+		tracker.queueLocal(SpecialWeapon.DRAGON_WARHAMMER, 105, 1, WORLD, "Alice", original);
+		tracker.onGameTick();
+		assertEquals(189, tracker.state().getCurrent());
+
+		when(original.isDead()).thenReturn(true);
+		removeNpc(105);
+		fakeNpc("Chaos Elemental", 106, -1, new WorldPoint(3040, 3040, 0));
+		when(client.getTickCount()).thenReturn(101);
+		tracker.onGameTick();
+
+		assertNull(tracker.state());
+		assertTrue(tracker.states().isEmpty());
+	}
+
+	@Test
+	public void heldExactObservationCannotAttachToReusedIndex()
+	{
+		when(client.getTickCount()).thenReturn(100);
+		WorldPoint spawn = new WorldPoint(3004, 3004, 0);
+		NPC original = fakeNpc("Chaos Elemental", 97, -1, spawn);
+		DefenceTracker tracker = makeTracker();
+		tracker.queueLocal(SpecialWeapon.DRAGON_WARHAMMER, 97, 1, WORLD, "Alice", original);
+		removeNpc(97);
+		tracker.onGameTick();
+		assertNull(tracker.state());
+		assertTrue(tracker.hasUnprocessedSpecs());
+
+		fakeNpc("Chaos Elemental", 97, -1, spawn);
+		when(client.getTickCount()).thenReturn(101);
+		tracker.onGameTick();
+		assertNull(tracker.state());
+		assertFalse(tracker.hasUnprocessedSpecs());
+	}
+
+	@Test
+	public void encounterResetInvalidatesHeldObservations()
+	{
+		when(client.getTickCount()).thenReturn(100);
+		DefenceTracker tracker = makeTracker();
+		tracker.queue(SpecialWeapon.DRAGON_WARHAMMER, 98, 1, WORLD, "Alice");
+		tracker.onGameTick();
+		assertTrue(tracker.hasUnprocessedSpecs());
+
+		tracker.reset("encounter ended");
+		fakeNpc("Chaos Elemental", 98);
+		when(client.getTickCount()).thenReturn(101);
+		tracker.onGameTick();
+		assertNull(tracker.state());
+		assertFalse(tracker.hasUnprocessedSpecs());
+	}
+
+	@Test
+	public void bossClearInvalidatesPendingObservationForSameTarget()
+	{
+		NPC target = fakeNpc("Chaos Elemental", 102);
+		DefenceTracker tracker = makeTracker();
+
+		tracker.queueLocal(SpecialWeapon.DRAGON_WARHAMMER, 102, 1, WORLD, "Alice", target);
+		tracker.clearBossState(BossDefence.CHAOS_ELEMENTAL, "encounter reset");
+		tracker.onGameTick();
+
+		assertNull(tracker.state());
+		assertFalse(tracker.hasUnprocessedSpecs());
+	}
+
+	@Test
+	public void bossClearInvalidatesPendingLegacyObservationForSameIndex()
+	{
+		fakeNpc("Chaos Elemental", 103);
+		DefenceTracker tracker = makeTracker();
+
+		tracker.queue(SpecialWeapon.DRAGON_WARHAMMER, 103, 1, WORLD, "Alice");
+		tracker.onGameTick();
+		assertTrue(tracker.state() != null);
+
+		tracker.queue(SpecialWeapon.DRAGON_WARHAMMER, 103, 1, WORLD, "Bob");
+		tracker.clearBossState(BossDefence.CHAOS_ELEMENTAL, "encounter reset");
+		tracker.onGameTick();
+
+		assertNull(tracker.state());
+		assertFalse(tracker.hasUnprocessedSpecs());
+	}
+
+	@Test
+	public void heldObservationExpiresAfterBoundedTtl()
+	{
+		when(client.getTickCount()).thenReturn(100);
+		DefenceTracker tracker = makeTracker();
+		tracker.queue(SpecialWeapon.DRAGON_WARHAMMER, 104, 1, WORLD, "Alice");
+		tracker.onGameTick();
+		assertTrue(tracker.hasUnprocessedSpecs());
+
+		when(client.getTickCount()).thenReturn(301);
+		tracker.onGameTick();
+
+		assertNull(tracker.state());
+		assertFalse(tracker.hasUnprocessedSpecs());
+	}
+
+	@Test
+	public void outOfRenderPartyObservationRecoversWhenTheSingleTargetAppears()
+	{
+		when(client.getTickCount()).thenReturn(100);
+		DefenceTracker tracker = makeTracker();
+		tracker.queue(SpecialWeapon.DRAGON_WARHAMMER, 100, 1, WORLD, "Alice");
+		tracker.onGameTick();
+
+		for (int tick = 101; tick <= 110; tick++)
+		{
+			when(client.getTickCount()).thenReturn(tick);
+			tracker.onGameTick();
+		}
+		assertTrue(tracker.hasUnprocessedSpecs());
+		assertNull(tracker.state());
+
+		fakeNpc("Chaos Elemental", 100);
+		when(client.getTickCount()).thenReturn(111);
+		tracker.onGameTick();
+		assertEquals(100, tracker.state().getNpcIndex());
+		assertEquals(189, tracker.state().getCurrent());
+		assertFalse(tracker.hasUnprocessedSpecs());
+
+		when(client.getTickCount()).thenReturn(301);
+		tracker.onGameTick();
+		assertFalse(tracker.hasUnprocessedSpecs());
+	}
+
+	@Test
+	public void singleUniqueTargetStillAppliesToLegacyObservation()
+	{
+		fakeNpc("Chaos Elemental", 101);
+		DefenceTracker tracker = makeTracker();
+		tracker.queue(SpecialWeapon.DRAGON_WARHAMMER, 101, 1, WORLD, "Alice");
+		tracker.onGameTick();
+
+		assertEquals(101, tracker.state().getNpcIndex());
+		assertEquals(189, tracker.state().getCurrent());
 	}
 
 }

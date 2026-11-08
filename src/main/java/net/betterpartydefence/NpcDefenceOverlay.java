@@ -46,22 +46,19 @@ public class NpcDefenceOverlay extends Overlay
 		}
 
 		graphics.setFont(fontManager.font());
-		DefenceState current = tracker.state();
 		List<DefenceState> states = tracker.states();
+		DefenceState previous = config.previousTargetDisplay()
+			? previousTargetState.previousState(states) : null;
 
-		if (!config.previousTargetDisplay())
-		{
-			renderLegacyAttached(graphics, states);
-			return null;
-		}
+		// Every independently tracked target owns its own overhead. The previous-target option
+		// only ensures that target is drawn last; it must never hide other valid party evidence.
+		int previousIndex = previous == null ? -1 : previous.getNpcIndex();
+		renderTrackedTargets(graphics, states, previousIndex);
 
-		renderMainTarget(graphics, current);
-
-		DefenceState previous = previousTargetState.previousState();
-		if (previous != null && !initialSyncDisplayGate.isWaiting(previous, client.getTickCount()))
+		if (previous != null)
 		{
 			NPC npc = liveNpc(previous.getNpcIndex());
-			if (npc != null)
+			if (npc != null && isDisplayable(previous))
 			{
 				renderAtNpc(graphics, previous, npc,
 					config.defenceHpBarPosition(), config.defenceHpBarYOffset());
@@ -70,13 +67,13 @@ public class NpcDefenceOverlay extends Overlay
 		return null;
 	}
 
-	/** Exact pre-feature attached rendering path, used whenever the experiment is disabled. */
-	private void renderLegacyAttached(Graphics2D graphics, List<DefenceState> states)
+	private void renderTrackedTargets(Graphics2D graphics, List<DefenceState> states,
+		int alreadyScheduledIndex)
 	{
 		DefenceOverlayPosition position = config.defenceHpBarPosition();
 		for (DefenceState state : states)
 		{
-			if (!isDisplayable(state))
+			if (state == null || state.getNpcIndex() == alreadyScheduledIndex || !isDisplayable(state))
 			{
 				continue;
 			}
@@ -85,20 +82,6 @@ public class NpcDefenceOverlay extends Overlay
 			{
 				renderAtNpc(graphics, state, npc, position, config.defenceHpBarYOffset());
 			}
-		}
-	}
-
-	private void renderMainTarget(Graphics2D graphics, DefenceState current)
-	{
-		if (!isDisplayable(current))
-		{
-			return;
-		}
-		NPC npc = liveNpc(current.getNpcIndex());
-		if (npc != null)
-		{
-			renderAtNpc(graphics, current, npc,
-				config.defenceHpBarPosition(), config.defenceHpBarYOffset());
 		}
 	}
 

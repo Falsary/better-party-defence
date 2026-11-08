@@ -7,6 +7,7 @@ import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.ConcurrentLinkedDeque;
 import javax.inject.Inject;
@@ -19,6 +20,7 @@ import net.runelite.api.Client;
 import net.runelite.api.NPC;
 import net.runelite.api.Player;
 import net.runelite.api.WorldView;
+import net.runelite.api.coords.WorldPoint;
 import net.runelite.api.gameval.VarbitID;
 import net.runelite.client.plugins.specialcounter.SpecialWeapon;
 import net.runelite.client.util.Text;
@@ -80,6 +82,10 @@ public class DefenceTracker
 	private BossDefence bossType;
 	/** Last concrete NPC id bound to the encounter; used to detect phase transitions. */
 	private int bossNpcId = -1;
+	/** Last observed tile of the bound actor; distinguishes a live target from a reused index. */
+	private WorldPoint targetLocation;
+	/** Current local actor object. This is a runtime binding, never a cross-client identity. */
+	private NPC boundActor;
 	/** Kephri keeps drains through shield cycles, but resets them on the final enrage phase. */
 	private boolean kephriFinalResetApplied;
 	/** Sotetseg's encounter varbit: 1=combat, 2=maze, 0=encounter ended. */
@@ -124,10 +130,13 @@ public class DefenceTracker
 	 * — and dropping it would leave every client on a different defence. Held against the index
 	 * that is waiting to be identified, and replayed the moment it is.
 	 */
-	private static final int HELD_DRAIN_TTL_TICKS = 3;
-	private int queuedIndex = -1;
-	private int queuedAtTick = -1;
-	private final List<Drain> queuedDrains = new ArrayList<>();
+	private static final int HELD_DRAIN_TTL_TICKS = 200;
+	private static final int MAX_HELD_DRAINS = 256;
+	private static final int MAX_HELD_DRAINS_PER_TARGET = 64;
+	private static final int PENDING_TARGET_DISTANCE = 2;
+	private static final int REMEMBERED_TARGET_DISTANCE = 8;
+	/** Each queue belongs to one unresolved target; an observation never overwrites another queue. */
+	private final List<HeldDrainQueue> heldDrains = new ArrayList<>();
 	/** Tracks the CoX in-raid varbit so cleanup only fires on a real 1 -> 0 raid exit. */
 	private boolean wasInCoxRaid;
 
@@ -217,6 +226,123 @@ public class DefenceTracker
 		String tickAnchor;
 		int tickAnchorTick;
 		long tickAnchorValue;
+		/** Target observed when this drain was accepted; null when no actor was visible. */
+		DrainTarget target;
+		int receivedTick;
+	}
+
+	/** Local, non-authoritative target evidence attached to one observation. */
+	@Value
+	private static class DrainTarget
+	{
+		BossDefence bossType;
+		int npcId;
+		WorldPoint location;
+		/** Runtime-only identity used to reject a different actor reusing the same scene index. */
+		NPC actor;
+
+		static DrainTarget from(NPC npc)
+		{
+			if (npc == null)
+			{
+				return null;
+			}
+			BossDefence boss = BossDefence.matchingNpc(npc);
+			return boss == null ? null : new DrainTarget(boss, npc.getId(), npc.getWorldLocation(), npc);
+		}
+
+		boolean matches(NPC npc)
+		{
+			if (actor != null)
+			{
+				return npc == actor && BossDefence.isLiveNpc(npc);
+			}
+			if (npc == null || bossType == null || BossDefence.matchingNpc(npc) != bossType
+				|| npcId != npc.getId())
+			{
+				return false;
+			}
+			WorldPoint point = npc.getWorldLocation();
+			if (location == null)
+			{
+				return true;
+			}
+			return point != null
+				&& point.getPlane() == location.getPlane()
+				&& Math.abs(point.getX() - location.getX()) <= PENDING_TARGET_DISTANCE
+				&& Math.abs(point.getY() - location.getY()) <= PENDING_TARGET_DISTANCE;
+		}
+	}
+
+	/** One unresolved actor and every observation waiting for it, in arrival order. */
+	private static class HeldDrainQueue
+	{
+		final PendingTarget target;
+		final List<Drain> drains = new ArrayList<>();
+		/**
+		 * Once more than one equally plausible NPC exists, a later disappearance cannot prove
+		 * which actor received this observation. Such evidence is retained but never guessed.
+		 */
+		boolean ambiguous;
+
+		HeldDrainQueue(PendingTarget target)
+		{
+			this.target = target;
+		}
+	}
+
+	/**
+	 * Local target evidence for a deferred observation. {@code exact} means the detector supplied
+	 * the concrete actor. Legacy party messages only supplied a sender-side scene index, so their
+	 * identity remains a local hint until the live scene contains one unique candidate.
+	 */
+	private static class PendingTarget
+	{
+		final int npcIndex;
+		BossDefence bossType;
+		int npcId;
+		WorldPoint location;
+		final NPC indexedActor;
+		final boolean exact;
+
+		PendingTarget(
+			int npcIndex, BossDefence bossType, int npcId, WorldPoint location,
+			NPC indexedActor, boolean exact)
+		{
+			this.npcIndex = npcIndex;
+			this.bossType = bossType;
+			this.npcId = npcId;
+			this.location = location;
+			this.indexedActor = indexedActor;
+			this.exact = exact;
+		}
+
+		static PendingTarget from(Drain drain, NPC indexedActor)
+		{
+			DrainTarget target = drain.getTarget();
+			if (target != null)
+			{
+				return new PendingTarget(drain.getNpcIndex(), target.getBossType(), target.getNpcId(),
+					target.getLocation(), target.getActor(), true);
+			}
+
+			BossDefence boss = BossDefence.matchingNpc(indexedActor);
+			if (boss != null)
+			{
+				return new PendingTarget(drain.getNpcIndex(), boss, indexedActor.getId(),
+					indexedActor.getWorldLocation(), indexedActor, false);
+			}
+			return new PendingTarget(drain.getNpcIndex(), null, -1, null, null, false);
+		}
+
+		boolean sameTarget(PendingTarget other)
+		{
+			return other != null && exact == other.exact && npcIndex == other.npcIndex
+				&& (indexedActor != null || other.indexedActor != null
+					? indexedActor == other.indexedActor
+					: bossType == other.bossType && npcId == other.npcId
+						&& Objects.equals(location, other.location));
+		}
 	}
 
 	/** Mutable snapshot for one independently tracked target. */
@@ -226,6 +352,9 @@ public class DefenceTracker
 		String bossName;
 		BossDefence bossType;
 		int bossNpcId;
+		WorldPoint targetLocation;
+		/** Runtime-only actor reference; null for unattached snapshot state. */
+		NPC boundActor;
 		boolean kephriFinalResetApplied;
 		int sotetsegEncounterState;
 		long bossDef;
@@ -320,11 +449,23 @@ public class DefenceTracker
 
 	public void queue(SpecialWeapon weapon, int npcIndex, int hit, int world, String playerName)
 	{
+		queue(weapon, npcIndex, hit, world, playerName, null);
+	}
+
+	/**
+	 * Queue a party observation together with the actor visible when it was received. The actor
+	 * evidence lets a later tick reject an observation if the local index has been reused.
+	 */
+	public void queue(
+		SpecialWeapon weapon, int npcIndex, int hit, int world, String playerName, NPC target)
+	{
 		if (!isSupportedWeapon(weapon))
 		{
 			return;
 		}
-		Drain drain = new Drain(weapon, npcIndex, hit, world, playerName, null, -1, null, -1, 0L);
+		int tick = client.getTickCount();
+		Drain drain = new Drain(weapon, npcIndex, hit, world, playerName, null, -1, null, -1, 0L,
+			DrainTarget.from(target), tick);
 		if (weapon == SpecialWeapon.ELDER_MAUL)
 		{
 			pending.addFirst(drain);
@@ -338,11 +479,18 @@ public class DefenceTracker
 	/** Only the originating detector allocates IDs. Standard party observations remain legacy. */
 	public void queueLocal(SpecialWeapon weapon, int npcIndex, int hit, int world, String playerName)
 	{
+		queueLocal(weapon, npcIndex, hit, world, playerName, null);
+	}
+
+	public void queueLocal(
+		SpecialWeapon weapon, int npcIndex, int hit, int world, String playerName, NPC target)
+	{
 		if (isSupportedWeapon(weapon))
 		{
+			int tick = client.getTickCount();
 			pending.addLast(new Drain(weapon, npcIndex, hit, world, playerName,
-				java.util.UUID.randomUUID().toString(), client.getTickCount(), sharedTickAnchor,
-				sharedTickAnchorTick, sharedTickAnchorValue));
+				java.util.UUID.randomUUID().toString(), tick, sharedTickAnchor,
+				sharedTickAnchorTick, sharedTickAnchorValue, DrainTarget.from(target), tick));
 		}
 	}
 
@@ -372,36 +520,7 @@ public class DefenceTracker
 			process(drain);
 		}
 
-		if (queuedIndex != -1)
-		{
-			NPC queuedNpc = npcByIndex(queuedIndex);
-			if (queuedNpc != null && queuedNpc.getName() != null
-				&& BossDefence.matchingNpc(queuedNpc) != null)
-			{
-				if (bossIndex != queuedIndex)
-				{
-					BossDefence queuedBoss = BossDefence.matchingNpc(queuedNpc);
-					saveCurrent();
-					if (!restore(queuedIndex, queuedBoss) && !restoreForBoss(queuedBoss, queuedNpc))
-					{
-						if (shouldRebindSameEncounter(queuedBoss))
-						{
-							rebindBoss(queuedNpc);
-						}
-						else
-						{
-							setBoss(queuedNpc.getName(), queuedIndex);
-						}
-					}
-				}
-				replayHeld(queuedIndex);
-			}
-			else if (queuedAtTick >= 0 && client.getTickCount() - queuedAtTick > HELD_DRAIN_TTL_TICKS)
-			{
-				log.debug("Dropping held drains for npc {} after {} ticks", queuedIndex, HELD_DRAIN_TTL_TICKS);
-				clearHeld();
-			}
-		}
+		replayHeldDrains();
 
 		boolean inCoxRaid = client.getVarbitValue(VarbitID.RAIDS_CLIENT_INDUNGEON) == 1;
 		if (bossType != null && bossType.has(BossDefence.Flag.COX_SCALED)
@@ -433,19 +552,47 @@ public class DefenceTracker
 			NPC npc = npcByIndex(bossIndex);
 			if (npc == null)
 			{
-				// NPCs are removed from the client's scene when they leave render distance. That is
-				// not an encounter reset. Preserve the drained values/history and try to rebind to
-				// the same logical boss if its actor is currently visible under another index.
-				NPC replacement = findNpcForBoss(bossType);
-				if (replacement != null)
+				if (boundActor != null && boundActor.isDead()
+					&& !isPhasePersistentBoss(bossType))
 				{
-					rebindBoss(replacement);
-					npc = replacement;
+					// A dead actor that has left the scene is a terminal target, not the usual
+					// temporary render-distance disappearance. Do not let a later actor reuse
+					// this logical target's drained state.
+					if (bossType != null)
+					{
+						endedBosses.add(bossType);
+					}
+					removeCurrent("bound NPC died while out of render");
+					npc = null;
 				}
+				else
+				{
+					// NPCs are removed from the client's scene when they leave render distance. That is
+					// not an encounter reset. Preserve the drained values/history and try to rebind to
+					// the same logical boss if its actor is currently visible under another index.
+					NPC replacement = findNpcForBoss(bossType);
+					if (replacement != null)
+					{
+						rebindBoss(replacement);
+						npc = replacement;
+					}
+				}
+			}
+			else if (boundActor != null && npc != boundActor
+				&& !isPhaseActorTransition(npc)
+				&& (boundActor.isDead() || !NpcTargetResolver.matches(
+					npc, bossType, bossNpcId, targetLocation, REMEMBERED_TARGET_DISTANCE)))
+			{
+				// A scene index is only a local binding. If the actor at that index changed and
+				// the previous actor is dead or belongs elsewhere, its saved state must not be
+				// inherited by the new actor.
+				removeCurrent("npc index now refers to a different actor");
+				npc = null;
 			}
 
 			if (npc != null)
 			{
+				observeBoundActor(npc);
 				handlePhaseNpc(npc);
 				if (bossIndex != -1 && (npc.isDead() || npc.getHealthRatio() == 0))
 				{
@@ -523,23 +670,66 @@ public class DefenceTracker
 			return;
 		}
 
-		int index = drain.getNpcIndex();
-		NPC npc = npcByIndex(index);
-		if (npc == null || npc.getName() == null)
+		NPC target = resolveTargetForDrain(drain);
+		if (target == null)
 		{
-			log.debug("{} hit {} held: npc {} not in our scene yet", drain.getWeapon(), drain.getHit(), index);
+			log.debug("{} hit {} held: no unique local target for npc {}",
+				drain.getWeapon(), drain.getHit(), drain.getNpcIndex());
 			hold(drain);
 			return;
 		}
-		String name = npc.getName();
-		BossDefence incomingBoss = BossDefence.matchingNpc(npc);
-		if (incomingBoss == null && bossIndex != index)
+		processResolvedDrain(drain, target);
+	}
+
+	/**
+	 * A local detector supplies the exact actor. A legacy party message only supplies the sender's
+	 * scene index, which is used as a hint: the event is accepted only when the local scene has one
+	 * unambiguous live actor for that boss.
+	 */
+	private NPC resolveTargetForDrain(Drain drain)
+	{
+		NPC indexed = npcByIndex(drain.getNpcIndex());
+		if (drain.getTarget() != null)
 		{
-			log.debug("{} hit {} dropped: '{}' (npc {}) is not a tracked monster",
-				drain.getWeapon(), drain.getHit(), name, index);
+			return drain.getTarget().matches(indexed) ? indexed : null;
+		}
+		if (indexed == null || !BossDefence.isLiveNpc(indexed))
+		{
+			return null;
+		}
+		BossDefence boss = BossDefence.matchingNpc(indexed);
+		if (boss == null)
+		{
+			return null;
+		}
+		NPC unique = NpcTargetResolver.uniqueLiveNpc(client.getTopLevelWorldView(), boss);
+		if (unique != null)
+		{
+			return unique;
+		}
+		// The indexed actor is still one observable candidate if this client's scene iterator
+		// does not expose it. It is safe only when no competing live actor exists.
+		return NpcTargetResolver.liveCandidates(client.getTopLevelWorldView(), boss).isEmpty()
+			? indexed : null;
+	}
+
+	private void processResolvedDrain(Drain drain, NPC npc)
+	{
+		if (npc == null || !BossDefence.isLiveNpc(npc))
+		{
+			hold(drain);
 			return;
 		}
-		if (bossIndex != index)
+
+		BossDefence incomingBoss = BossDefence.matchingNpc(npc);
+		if (incomingBoss == null)
+		{
+			log.debug("{} hit {} dropped: {} is not a tracked monster",
+				drain.getWeapon(), drain.getHit(), npc.getName());
+			return;
+		}
+		int index = npc.getIndex();
+		if (bossIndex != index || bossType != incomingBoss)
 		{
 			saveCurrent();
 			if (!restore(index, incomingBoss) && !restoreForBoss(incomingBoss, npc))
@@ -550,22 +740,20 @@ public class DefenceTracker
 				}
 				else
 				{
-					setBoss(name, index);
+					setBoss(npc.getName(), index);
 				}
 			}
-			replayHeld(index);
 		}
 		handlePhaseNpc(npc);
 		if (bossIndex != -1)
 		{
-			apply(drain);
+			apply(drain, npc);
 		}
 	}
 
-	private void apply(Drain drain)
+	private void apply(Drain drain, NPC npc)
 	{
-		NPC npc = npcByIndex(drain.getNpcIndex());
-		int hit = npc == null ? drain.getHit() : drain.getWeapon().computeHit(drain.getHit(), npc);
+		int hit = drain.getWeapon().computeHit(drain.getHit(), npc);
 		drained = true;
 		long before = bossDef;
 		calculateDefence(drain.getWeapon(), hit, npc);
@@ -580,39 +768,190 @@ public class DefenceTracker
 			drain.getWeapon(), hit, bossName, before, bossDef, bossStartDef, minDef);
 	}
 
-	/** Keep a drain whose monster we can't see yet. Only one index is ever worth waiting on. */
+	/** Keep one drain per unresolved actor; another actor's evidence is never overwritten. */
 	private void hold(Drain drain)
 	{
-		if (queuedIndex != drain.getNpcIndex())
+		NPC indexed = npcByIndex(drain.getNpcIndex());
+		PendingTarget target = PendingTarget.from(drain, indexed);
+		HeldDrainQueue queue = null;
+		for (HeldDrainQueue candidate : heldDrains)
 		{
-			clearHeld();
-			queuedIndex = drain.getNpcIndex();
-			queuedAtTick = client.getTickCount();
+			if (candidate.target.sameTarget(target))
+			{
+				queue = candidate;
+				break;
+			}
 		}
-		queuedDrains.add(drain);
+		if (queue == null)
+		{
+			queue = new HeldDrainQueue(target);
+			heldDrains.add(queue);
+		}
+		queue.drains.add(drain);
+
+		if (!target.exact && target.bossType != null
+			&& NpcTargetResolver.liveCandidates(client.getTopLevelWorldView(), target.bossType).size() > 1)
+		{
+			queue.ambiguous = true;
+		}
+		while (queue.drains.size() > MAX_HELD_DRAINS_PER_TARGET)
+		{
+			queue.drains.remove(0);
+		}
+		trimHeldDrainsToCapacity();
 	}
 
 	/**
-	 * Apply everything held for a monster that has just been identified. Order is preserved from
-	 * {@link #queue}, so an elder maul still lands before the specs it was queued ahead of.
+	 * Retry every unresolved target independently. Each queue preserves the order in which it was
+	 * received, so an elder maul still lands before the specs queued behind it.
 	 */
-	private void replayHeld(int index)
+	private void replayHeldDrains()
 	{
-		if (queuedIndex == index)
+		int tick = client.getTickCount();
+		List<HeldDrainQueue> attempt = new ArrayList<>(heldDrains);
+		for (HeldDrainQueue queue : attempt)
 		{
-			for (Drain held : queuedDrains)
+			if (!heldDrains.contains(queue))
 			{
-				apply(held);
+				continue;
+			}
+			int beforeExpiry = queue.drains.size();
+			queue.drains.removeIf(drain -> tick - drain.getReceivedTick() > HELD_DRAIN_TTL_TICKS);
+			if (queue.drains.isEmpty())
+			{
+				if (beforeExpiry > 0)
+				{
+					log.debug("Dropping {} held drains for npc {} after {} ticks",
+						beforeExpiry, queue.target.npcIndex, HELD_DRAIN_TTL_TICKS);
+				}
+				heldDrains.remove(queue);
+				continue;
+			}
+
+			NPC indexed = npcByIndex(queue.target.npcIndex);
+			if (queue.target.indexedActor != null && indexed != null
+				&& indexed != queue.target.indexedActor)
+			{
+				log.debug("Dropping held drains for reused npc index {}", queue.target.npcIndex);
+				heldDrains.remove(queue);
+				continue;
+			}
+			if (queue.target.indexedActor != null && queue.target.indexedActor.isDead())
+			{
+				heldDrains.remove(queue);
+				continue;
+			}
+
+			NPC target = resolveHeldTarget(queue, indexed);
+			if (target == null)
+			{
+				continue;
+			}
+			heldDrains.remove(queue);
+			for (Drain held : queue.drains)
+			{
+				processResolvedDrain(held, target);
 			}
 		}
-		clearHeld();
 	}
 
-	private void clearHeld()
+	private NPC resolveHeldTarget(HeldDrainQueue queue, NPC indexed)
 	{
-		queuedIndex = -1;
-		queuedAtTick = -1;
-		queuedDrains.clear();
+		PendingTarget pending = queue.target;
+		if (pending.exact)
+		{
+			return pending.indexedActor != null && indexed == pending.indexedActor
+				&& BossDefence.isLiveNpc(indexed) ? indexed : null;
+		}
+		// A legacy message carries no actor object, only the sender's scene index. That index is
+		// not authoritative across clients, so recovery is limited to the NPC which later appears
+		// at that same local index and to one unambiguous live actor for its boss classification.
+		BossDefence boss = pending.bossType;
+		if (boss == null && BossDefence.isLiveNpc(indexed))
+		{
+			boss = BossDefence.matchingNpc(indexed);
+		}
+		if (boss == null)
+		{
+			return null;
+		}
+
+		List<NPC> candidates = NpcTargetResolver.liveCandidates(client.getTopLevelWorldView(), boss);
+		if (candidates.size() > 1)
+		{
+			queue.ambiguous = true;
+		}
+		if (queue.ambiguous)
+		{
+			return null;
+		}
+		if (candidates.size() == 1)
+		{
+			NPC candidate = candidates.get(0);
+			if (pending.indexedActor == null && candidate.getIndex() != pending.npcIndex)
+			{
+				return null;
+			}
+			return candidate;
+		}
+		return candidates.isEmpty() && BossDefence.isLiveNpc(indexed)
+			&& BossDefence.matchingNpc(indexed) == boss ? indexed : null;
+	}
+
+	private void trimHeldDrainsToCapacity()
+	{
+		int total = heldDrainCount();
+		while (total > MAX_HELD_DRAINS)
+		{
+			HeldDrainQueue oldest = null;
+			for (HeldDrainQueue queue : heldDrains)
+			{
+				if (!queue.drains.isEmpty() && (oldest == null
+					|| queue.drains.get(0).getReceivedTick() < oldest.drains.get(0).getReceivedTick()))
+				{
+					oldest = queue;
+				}
+			}
+			if (oldest == null)
+			{
+				break;
+			}
+			oldest.drains.remove(0);
+			if (oldest.drains.isEmpty())
+			{
+				heldDrains.remove(oldest);
+			}
+			total--;
+		}
+	}
+
+	private int heldDrainCount()
+	{
+		int count = 0;
+		for (HeldDrainQueue queue : heldDrains)
+		{
+			count += queue.drains.size();
+		}
+		return count;
+	}
+
+	/** Drop deferred evidence that can no longer belong to a specific local target. */
+	private void clearDeferredForTarget(int npcIndex, NPC actor)
+	{
+		boolean hasIndex = npcIndex >= 0;
+		heldDrains.removeIf(queue -> (hasIndex && queue.target.npcIndex == npcIndex)
+			|| (actor != null && queue.target.indexedActor == actor));
+		pending.removeIf(drain -> (hasIndex && drain.getNpcIndex() == npcIndex)
+			|| (actor != null && drain.getTarget() != null
+				&& drain.getTarget().getActor() == actor));
+	}
+
+	/** A confirmed boss reset invalidates deferred evidence already identified as that boss. */
+	private void clearDeferredForBoss(BossDefence boss)
+	{
+		heldDrains.removeIf(queue -> queue.target.bossType == boss);
+		pending.removeIf(drain -> drain.getTarget() != null
+			&& drain.getTarget().getBossType() == boss);
 	}
 
 	private void setBoss(String name, int index)
@@ -623,8 +962,8 @@ public class DefenceTracker
 		bossName = name;
 		bossIndex = index;
 		bossType = boss;
-		NPC npc = npcByIndex(index);
-		bossNpcId = npc == null ? -1 : npc.getId();
+		bossNpcId = bossNpc == null ? -1 : bossNpc.getId();
+		observeBoundActor(bossNpc);
 		kephriFinalResetApplied = boss == BossDefence.KEPHRI && isKephriFinalPhaseId(bossNpcId);
 		sotetsegEncounterState = boss == BossDefence.SOTETSEG
 			? client.getVarbitValue(VarbitID.TOB_CLIENT_WAVEPROGRESS_TYPE) : -1;
@@ -699,6 +1038,7 @@ public class DefenceTracker
 		bossIndex = npc.getIndex();
 		bossName = npc.getName();
 		bossNpcId = npc.getId();
+		observeBoundActor(npc);
 		log.debug("Rebound {} encounter npc {}:{} -> {}:{} without clearing defence",
 			bossType, oldIndex, oldId, bossIndex, bossNpcId);
 		handlePhaseNpc(npc);
@@ -718,6 +1058,7 @@ public class DefenceTracker
 		}
 
 		bossNpcId = npc.getId();
+		observeBoundActor(npc);
 		BossMechanics mechanics = BossMechanics.forBoss(bossType);
 		if (mechanics.endsEncounterOnActorEntry(bossNpcId))
 		{
@@ -728,6 +1069,8 @@ public class DefenceTracker
 			&& mechanics.resetsStatsOnActorEntry(bossNpcId) && !kephriFinalResetApplied)
 		{
 			specHistory.clear();
+			clearDeferredForBoss(bossType);
+			clearDeferredForTarget(bossIndex, boundActor);
 			initializeStats(bossType);
 			kephriFinalResetApplied = true;
 			log.debug("Kephri entered final phase; Defence restored to {}", bossDef);
@@ -751,6 +1094,8 @@ public class DefenceTracker
 		if (state == 2 && sotetsegEncounterState != 2)
 		{
 			specHistory.clear();
+			clearDeferredForBoss(bossType);
+			clearDeferredForTarget(bossIndex, boundActor);
 			initializeStats(bossType);
 			log.debug("Sotetseg maze started; Defence restored to {} without clearing encounter", bossDef);
 		}
@@ -765,12 +1110,25 @@ public class DefenceTracker
 	private boolean shouldRebindSameEncounter(BossDefence incomingBoss)
 	{
 		return bossType != null && incomingBoss != null && incomingBoss == bossType
-			&& (bossIndex == -1 || isPhasePersistentBoss(incomingBoss) || npcByIndex(bossIndex) == null);
+			&& isPhasePersistentBoss(incomingBoss);
 	}
 
 	private static boolean isPhasePersistentBoss(BossDefence boss)
 	{
 		return BossMechanics.forBoss(boss).isPhasePersistent();
+	}
+
+	/**
+	 * Phase-persistent encounters can replace the NPC actor at the same scene index while the
+	 * encounter continues. A different phase actor id is positive evidence for that transition;
+	 * a reused index with the same id remains subject to normal stale-actor rejection.
+	 */
+	private boolean isPhaseActorTransition(NPC replacement)
+	{
+		return boundActor != null && replacement != null && bossType != null
+			&& isPhasePersistentBoss(bossType)
+			&& BossDefence.matchingNpc(replacement) == bossType
+			&& replacement.getId() != bossNpcId;
 	}
 
 	private static boolean isKephriFinalPhaseId(int npcId)
@@ -786,24 +1144,23 @@ public class DefenceTracker
 			return null;
 		}
 		WorldView worldView = client.getTopLevelWorldView();
-		if (worldView == null || worldView.npcs() == null)
+		NPC remembered = NpcTargetResolver.uniqueLiveNpcFor(
+			worldView, boss, bossNpcId, targetLocation, REMEMBERED_TARGET_DISTANCE);
+		if (remembered != null)
+		{
+			return remembered;
+		}
+		// Once a standard target has a concrete actor, another unique NPC of the same boss type
+		// is not proof that it is the missing target. Multi-spawn encounters (for example CoX
+		// shamans) must preserve the old state rather than transfer it to a different actor.
+		// Phase-persistent encounters are the exception because their actor replacement is part
+		// of the same encounter lifecycle. An unbound snapshot state has no actor to preserve and
+		// can still bind to its unique local representative.
+		if (boundActor != null && !isPhasePersistentBoss(boss))
 		{
 			return null;
 		}
-		Iterator<? extends NPC> iterator = worldView.npcs().iterator();
-		if (iterator == null)
-		{
-			return null;
-		}
-		while (iterator.hasNext())
-		{
-			NPC npc = iterator.next();
-			if (npc != null && npc.getName() != null && BossDefence.matchingNpc(npc) == boss)
-			{
-				return npc;
-			}
-		}
-		return null;
+		return NpcTargetResolver.uniqueLiveNpc(worldView, boss);
 	}
 
 	private void recordSpecHistory(Drain drain)
@@ -1049,7 +1406,13 @@ public class DefenceTracker
 	private NPC npcByIndex(int index)
 	{
 		WorldView worldView = client.getTopLevelWorldView();
-		return worldView == null ? null : worldView.npcs().byIndex(index);
+		return worldView == null || worldView.npcs() == null ? null : worldView.npcs().byIndex(index);
+	}
+
+	private void observeBoundActor(NPC npc)
+	{
+		boundActor = npc;
+		targetLocation = npc == null ? null : npc.getWorldLocation();
 	}
 
 	private DefenceState toDefenceState(SavedState saved)
@@ -1229,12 +1592,9 @@ public class DefenceTracker
 
 		// Do not merge over a pending local spec: wait for its ordinary tick processing,
 		// rather than risk replaying the same attack from two transports.
-		for (Drain queued : pending)
+		if (hasPendingFor(localNpc.getIndex()))
 		{
-			if (queued != null && queued.getNpcIndex() == localNpc.getIndex())
-			{
-				return false;
-			}
+			return false;
 		}
 		// Operate on the bound target's existing state without applySyncState(), which
 		// clears pending hits and changes the user's active display selection.
@@ -1274,7 +1634,7 @@ public class DefenceTracker
 
 	boolean hasUnprocessedSpecs()
 	{
-		return !pending.isEmpty() || !queuedDrains.isEmpty();
+		return !pending.isEmpty() || !heldDrains.isEmpty();
 	}
 
 	/** Unknown actors remain conservative; a known different target cannot block this boss. */
@@ -1282,23 +1642,29 @@ public class DefenceTracker
 	{
 		for (Drain drain : pending)
 		{
-			NPC npc = npcByIndex(drain.getNpcIndex());
-			if (npc == null || BossDefence.matchingNpc(npc) == null
-				|| BossDefence.matchingNpc(npc) == boss) { return true; }
+			BossDefence drainBoss = drainBossType(drain);
+			if (drainBoss == null || drainBoss == boss) { return true; }
 		}
-		if (!queuedDrains.isEmpty())
+		for (HeldDrainQueue queue : heldDrains)
 		{
-			NPC npc = npcByIndex(queuedIndex);
-			return npc == null || BossDefence.matchingNpc(npc) == null
-				|| BossDefence.matchingNpc(npc) == boss;
+			if (queue.target.bossType == null || queue.target.bossType == boss) { return true; }
 		}
 		return false;
 	}
 
 	boolean hasPendingFor(int npcIndex)
 	{
-		return queuedIndex == npcIndex && !queuedDrains.isEmpty()
-			|| pending.stream().anyMatch(drain -> drain.getNpcIndex() == npcIndex);
+		return pending.stream().anyMatch(drain -> drain.getNpcIndex() == npcIndex)
+			|| heldDrains.stream().anyMatch(queue -> queue.target.npcIndex == npcIndex);
+	}
+
+	private BossDefence drainBossType(Drain drain)
+	{
+		if (drain.getTarget() != null)
+		{
+			return drain.getTarget().getBossType();
+		}
+		return BossDefence.matchingNpc(npcByIndex(drain.getNpcIndex()));
 	}
 
 	/** Recover identified events before snapshot version comparisons: lower versions can have missing IDs. */
@@ -1419,10 +1785,10 @@ public class DefenceTracker
 		}
 		for (SavedState saved : tracked.values())
 		{
-			if (saved.bossType == boss)
+			if (saved != null && saved.bossType == boss)
 			{
 				NPC npc = npcByIndex(saved.npcIndex);
-				if (BossDefence.isLiveNpc(npc))
+				if (BossDefence.isLiveNpc(npc) && (saved.boundActor == null || saved.boundActor == npc))
 				{
 					return true;
 				}
@@ -1494,6 +1860,7 @@ public class DefenceTracker
 		bossName = sync.getBossName() == null ? bossType.getNpcName() : sync.getBossName();
 		bossIndex = localNpc == null ? -1 : localNpc.getIndex();
 		bossNpcId = localNpc == null ? -1 : localNpc.getId();
+		observeBoundActor(localNpc);
 		bossDef = sync.getCurrent();
 		minDef = sync.getMin();
 		bossStartDef = sync.getBase();
@@ -1534,7 +1901,8 @@ public class DefenceTracker
 
 	public boolean hasBoundNpc()
 	{
-		return bossIndex >= 0 && npcByIndex(bossIndex) != null;
+		NPC npc = bossIndex < 0 ? null : npcByIndex(bossIndex);
+		return BossDefence.isLiveNpc(npc) && (boundActor == null || boundActor == npc);
 	}
 
 	private SavedState snapshotCurrent()
@@ -1548,6 +1916,8 @@ public class DefenceTracker
 		s.bossName = bossName;
 		s.bossType = bossType;
 		s.bossNpcId = bossNpcId;
+		s.targetLocation = targetLocation;
+		s.boundActor = boundActor;
 		s.kephriFinalResetApplied = kephriFinalResetApplied;
 		s.sotetsegEncounterState = sotetsegEncounterState;
 		s.bossDef = bossDef;
@@ -1594,7 +1964,25 @@ public class DefenceTracker
 		{
 			return false;
 		}
+		NPC current = npcByIndex(index);
+		if (s.boundActor != null)
+		{
+			if (s.boundActor.isDead())
+			{
+				return false;
+			}
+			if (current != null && current != s.boundActor
+				&& !NpcTargetResolver.matches(
+					current, expectedBoss, s.bossNpcId, s.targetLocation, REMEMBERED_TARGET_DISTANCE))
+			{
+				return false;
+			}
+		}
 		loadSavedState(s);
+		if (current != null)
+		{
+			observeBoundActor(current);
+		}
 		return true;
 	}
 
@@ -1613,6 +2001,7 @@ public class DefenceTracker
 			bossIndex = npc.getIndex();
 			bossNpcId = npc.getId();
 			bossName = npc.getName();
+			observeBoundActor(npc);
 			saveCurrent();
 			return true;
 		}
@@ -1624,7 +2013,17 @@ public class DefenceTracker
 		for (Map.Entry<Integer, SavedState> entry : tracked.entrySet())
 		{
 			SavedState saved = entry.getValue();
-			if (saved.bossType == boss && npcByIndex(saved.npcIndex) == null)
+			NPC oldActor = npcByIndex(saved.npcIndex);
+			boolean terminalDeath = saved.boundActor != null && saved.boundActor.isDead()
+				&& !isPhasePersistentBoss(saved.bossType);
+			boolean oldActorGone = oldActor == null
+				|| oldActor == saved.boundActor && !BossDefence.isLiveNpc(oldActor);
+			boolean rememberedActorMatch = NpcTargetResolver.matches(
+				npc, saved.bossType, saved.bossNpcId, saved.targetLocation, REMEMBERED_TARGET_DISTANCE);
+			boolean phaseActorTransition = isPhasePersistentBoss(saved.bossType)
+				&& npc.getId() != saved.bossNpcId;
+			if (saved.bossType == boss && oldActorGone && !terminalDeath
+				&& (rememberedActorMatch || phaseActorTransition))
 			{
 				if (candidate != null)
 				{
@@ -1643,6 +2042,7 @@ public class DefenceTracker
 		bossIndex = npc.getIndex();
 		bossNpcId = npc.getId();
 		bossName = npc.getName();
+		observeBoundActor(npc);
 		saveCurrent();
 		return true;
 	}
@@ -1653,6 +2053,8 @@ public class DefenceTracker
 		bossName = s.bossName;
 		bossType = s.bossType;
 		bossNpcId = s.bossNpcId;
+		targetLocation = s.targetLocation;
+		boundActor = s.boundActor;
 		kephriFinalResetApplied = s.kephriFinalResetApplied;
 		sotetsegEncounterState = s.sotetsegEncounterState;
 		bossDef = s.bossDef;
@@ -1685,9 +2087,18 @@ public class DefenceTracker
 				continue;
 			}
 			NPC npc = npcByIndex(entry.getKey());
+			SavedState saved = entry.getValue();
+			if (npc != null && saved != null && saved.boundActor != null && npc != saved.boundActor
+				&& (saved.boundActor.isDead() || !NpcTargetResolver.matches(
+					npc, saved.bossType, saved.bossNpcId, saved.targetLocation, REMEMBERED_TARGET_DISTANCE)))
+			{
+				clearDeferredForTarget(entry.getKey(), saved.boundActor);
+				it.remove();
+				continue;
+			}
 			if (npc != null && (npc.isDead() || npc.getHealthRatio() == 0))
 			{
-				SavedState ended = entry.getValue();
+				SavedState ended = saved;
 				BossMechanics mechanics = BossMechanics.forBoss(ended == null ? null : ended.bossType);
 				if (mechanics.preserveStateAtZeroHp(npc.getId()))
 				{
@@ -1697,6 +2108,7 @@ public class DefenceTracker
 				{
 					endedBosses.add(ended.bossType);
 				}
+				clearDeferredForTarget(entry.getKey(), saved == null ? null : saved.boundActor);
 				it.remove();
 			}
 		}
@@ -1720,6 +2132,8 @@ public class DefenceTracker
 		bossName = "";
 		bossType = null;
 		bossNpcId = -1;
+		targetLocation = null;
+		boundActor = null;
 		kephriFinalResetApplied = false;
 		sotetsegEncounterState = -1;
 		bossDef = -1;
@@ -1742,6 +2156,7 @@ public class DefenceTracker
 	{
 		BossDefence removedBoss = bossType;
 		int removedIndex = bossIndex;
+		NPC removedActor = boundActor;
 		if (removedIndex >= 0)
 		{
 			tracked.remove(removedIndex);
@@ -1750,6 +2165,7 @@ public class DefenceTracker
 		{
 			unboundTracked.remove(removedBoss);
 		}
+		clearDeferredForTarget(removedIndex, removedActor);
 		log.debug("Remove tracked target {}:{}: {}", removedBoss, removedIndex, reason);
 		clearActiveFields();
 
@@ -1821,8 +2237,42 @@ public class DefenceTracker
 		}
 
 		boolean clearingActive = bossType == boss;
-		tracked.entrySet().removeIf(entry -> entry.getValue() != null && entry.getValue().bossType == boss);
+		Set<Integer> clearedIndices = new LinkedHashSet<>();
+		Set<NPC> clearedActors = new LinkedHashSet<>();
+		if (clearingActive)
+		{
+			if (bossIndex >= 0)
+			{
+				clearedIndices.add(bossIndex);
+			}
+			if (boundActor != null)
+			{
+				clearedActors.add(boundActor);
+			}
+		}
+		tracked.entrySet().removeIf(entry -> {
+			SavedState saved = entry.getValue();
+			if (saved == null || saved.bossType != boss)
+			{
+				return false;
+			}
+			clearedIndices.add(entry.getKey());
+			if (saved.boundActor != null)
+			{
+				clearedActors.add(saved.boundActor);
+			}
+			return true;
+		});
 		unboundTracked.remove(boss);
+		clearDeferredForBoss(boss);
+		for (Integer index : clearedIndices)
+		{
+			clearDeferredForTarget(index, null);
+		}
+		for (NPC actor : clearedActors)
+		{
+			clearDeferredForTarget(-1, actor);
+		}
 
 		if (!clearingActive)
 		{
@@ -1863,7 +2313,7 @@ public class DefenceTracker
 	public void reset(String reason)
 	{
 		if (bossType != null || bossIndex != -1 || !tracked.isEmpty() || !unboundTracked.isEmpty()
-			|| !pending.isEmpty() || queuedIndex != -1)
+			|| !pending.isEmpty() || !heldDrains.isEmpty())
 		{
 			log.debug("Reset defence tracker: {}", reason);
 		}
@@ -1872,7 +2322,7 @@ public class DefenceTracker
 		unboundTracked.clear();
 		endedBosses.clear();
 		pending.clear();
-		clearHeld();
+		heldDrains.clear();
 	}
 
 }
