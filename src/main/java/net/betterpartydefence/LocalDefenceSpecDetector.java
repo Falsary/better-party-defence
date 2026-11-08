@@ -161,18 +161,48 @@ class LocalDefenceSpecDetector
 	{
 		if (weapon == null || target == null)
 		{
+			log.debug("Local defence spec hitsplat ignored: detector is not armed (weapon={} target={})",
+				weapon, target == null ? "null" : target.getName());
 			return;
 		}
 
 		Hitsplat splat = event.getHitsplat();
-		if (!splat.isMine() || event.getActor() != target)
+		if (!splat.isMine())
 		{
+			log.debug("Local defence spec hitsplat ignored: not owned by local player mine={} armed={} id={} index={} armedHash={} observed={} id={} index={} observedHash={}",
+				splat.isMine(), target.getName(), target.getId(), target.getIndex(),
+				System.identityHashCode(target),
+				event.getActor() == null ? "null" : event.getActor().getName(),
+				event.getActor() instanceof NPC ? ((NPC) event.getActor()).getId() : -1,
+				event.getActor() instanceof NPC ? ((NPC) event.getActor()).getIndex() : -1,
+				System.identityHashCode(event.getActor()));
 			return;
 		}
+		if (!(event.getActor() instanceof NPC)
+			|| !sameLogicalTarget(target, (NPC) event.getActor()))
+		{
+			log.debug("Local defence spec hitsplat ignored: actor mismatch mine={} armed={} id={} index={} armedHash={} observed={} id={} index={} observedHash={}",
+				splat.isMine(), target.getName(), target.getId(), target.getIndex(),
+				System.identityHashCode(target),
+				event.getActor() == null ? "null" : event.getActor().getName(),
+				event.getActor() instanceof NPC ? ((NPC) event.getActor()).getId() : -1,
+				event.getActor() instanceof NPC ? ((NPC) event.getActor()).getIndex() : -1,
+				System.identityHashCode(event.getActor()));
+			return;
+		}
+		target = (NPC) event.getActor();
 
-		if (client.getTickCount() == hitsplatTick)
+		int tick = client.getTickCount();
+		if (tick == hitsplatTick)
 		{
 			hitsplats.add(splat.getAmount());
+			log.debug("Local defence spec hitsplat accepted: weapon={} amount={} type={} tick={} expected={}",
+				weapon, splat.getAmount(), splat.getHitsplatType(), tick, hitsplatTick);
+		}
+		else
+		{
+			log.debug("Local defence spec hitsplat ignored: tick mismatch tick={} expected={} amount={} type={}",
+				tick, hitsplatTick, splat.getAmount(), splat.getHitsplatType());
 		}
 	}
 
@@ -185,6 +215,8 @@ class LocalDefenceSpecDetector
 		}
 
 		int tick = client.getTickCount();
+		log.debug("Local defence spec tick check: weapon={} tick={} expected={} hitsplats={}",
+			weapon, tick, hitsplatTick, hitsplats.size());
 
 		// Elder Maul is resolved from the HP-change signal by RuneLite's own special-counter logic.
 		if (weapon == SpecialWeapon.ELDER_MAUL)
@@ -194,39 +226,58 @@ class LocalDefenceSpecDetector
 			return;
 		}
 
-		if (tick == hitsplatTick)
+		// A callback can arrive after GameTick while still carrying the expected tick.
+		// Give that buffered result one more tick to resolve under the same rules.
+		if ((tick == hitsplatTick || tick == hitsplatTick + 1) && !hitsplats.isEmpty())
 		{
+			int rawHit;
 			if (weapon == SpecialWeapon.TONALZTICS_OF_RALOS)
 			{
-				if (hitsplats.size() < 2)
-				{
-					return;
-				}
 				// RuneLite's upstream fix (PR #20377, merged 2026-10-20) establishes
 				// hitsplat delivery order: delayed weapon hits first, then thrall,
 				// Vengeance, and finally instant weapon hits. Ralos is delayed and
 				// produces two hitsplats. Never select the LAST two: those can be
 				// thrall damage, including when the thrall is hidden by Entity Hider.
-				int connected = RalosHitResolver.countConfirmedHits(hitsplats);
-				record(weapon, connected, target);
+				rawHit = RalosHitResolver.countConfirmedHits(hitsplats);
 			}
 			else
 			{
-				if (hitsplats.isEmpty())
-				{
-					return;
-				}
 				// Match RuneLite: delayed hits precede thrall/Vengeance; instant hits follow them.
-				int rawHit = SpecHitResolver.resolve(weapon, hitsplats);
-				record(weapon, rawHit, target);
+				rawHit = SpecHitResolver.resolve(weapon, hitsplats);
 			}
-			clearPending();
+			if (rawHit >= 0)
+			{
+				record(weapon, rawHit, target);
+				clearPending();
+				return;
+			}
 		}
-		else if (tick > hitsplatTick)
+		if (tick > hitsplatTick)
 		{
 			log.debug("Local defence spec timed out waiting for hitsplat: {}", weapon);
 			clearPending();
 		}
+	}
+
+	private static boolean sameLogicalTarget(NPC armed, NPC observed)
+	{
+		if (armed == observed)
+		{
+			return true;
+		}
+		if (armed == null || observed == null || armed.isDead())
+		{
+			return false;
+		}
+
+		BossDefence boss = BossDefence.matchingNpc(armed);
+		if (boss == null || BossDefence.matchingNpc(observed) != boss
+			|| observed.getId() != armed.getId())
+		{
+			return false;
+		}
+		return NpcTargetResolver.matches(
+			observed, boss, armed.getId(), armed.getWorldLocation(), 2);
 	}
 
 	private void record(SpecialWeapon used, int rawHit, NPC npc)
@@ -247,7 +298,7 @@ class LocalDefenceSpecDetector
 		// Apply locally immediately; no party or websocket round-trip is required for our own overlay.
 		// Pass the player name with the drain so the info-box hover history is tied to the same
 		// accepted event as the Defence calculation.
-		defenceTracker.queueLocal(used, npcIndex, rawHit, world, playerName);
+		defenceTracker.queueLocal(used, npcIndex, rawHit, world, playerName, npc);
 
 		// Hub Party Panel uses this same PartyService session. If RuneLite's core Special Attack
 		// Counter is active it already sends this exact message, so never duplicate it.

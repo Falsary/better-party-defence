@@ -183,6 +183,43 @@ public class PartySyncRegressionTest
 		assertEquals(1,tracker.specHistory().size());
 	}
 
+	@Test public void outOfRenderObservationDefersSnapshotUntilItsTargetResolves() throws Exception
+	{
+		PartyService party=mock(PartyService.class);
+		when(party.isInParty()).thenReturn(true);
+		when(party.getMemberById(0)).thenReturn(mock(PartyMember.class));
+		set("partyService",party);
+
+		Field inbox=BetterPartyDefencePlugin.class.getDeclaredField("pendingSnapshots");
+		inbox.setAccessible(true);
+		@SuppressWarnings("unchecked") java.util.Deque<BpdDefenceSync> pending =
+			(java.util.Deque<BpdDefenceSync>)inbox.get(plugin);
+		pending.add(new BpdDefenceSync(301,state(189,a),0,0,0,0,0,100,1));
+
+		when(client.getTickCount()).thenReturn(100);
+		tracker.queue(SpecialWeapon.DRAGON_WARHAMMER,99,1,301,"Alice");
+		Method reconcile=BetterPartyDefencePlugin.class.getDeclaredMethod("reconcileQueuedSnapshots");
+		reconcile.setAccessible(true);
+		reconcile.invoke(plugin);
+
+		assertEquals(1,pending.size());
+		assertNull(tracker.state());
+		assertTrue(tracker.hasUnprocessedSpecs());
+
+		when(npc.getIndex()).thenReturn(99);
+		when(client.getTopLevelWorldView().npcs().byIndex(99)).thenReturn(npc);
+		tracker.onGameTick();
+
+		assertEquals(189,tracker.state().getCurrent());
+		assertEquals(1,tracker.specHistory().size());
+		assertFalse(tracker.hasUnprocessedSpecs());
+
+		reconcile.invoke(plugin);
+		assertTrue(pending.isEmpty());
+		assertEquals(189,tracker.state().getCurrent());
+		assertEquals(1,tracker.specHistory().size());
+	}
+
 	@Test public void delayedCallbackFromPreviousPartyEpochIsDiscarded() throws Exception
 	{
 		PartyService party=mock(PartyService.class);
@@ -273,6 +310,29 @@ public class PartySyncRegressionTest
 		assertEquals(3,tracker.specHistory().size());
 	}
 
+	@Test public void duplicateStandardPartyObservationIsAppliedOnce() throws Exception
+	{
+		PartyService party=mock(PartyService.class);
+		PartyMember sender=mock(PartyMember.class);
+		when(party.isInParty()).thenReturn(true);
+		when(party.getMemberById(7)).thenReturn(sender);
+		when(sender.getDisplayName()).thenReturn("Bob");
+		ClientThread thread=mock(ClientThread.class);
+		doAnswer(i -> { ((Runnable)i.getArgument(0)).run(); return null; }).when(thread).invoke(any(Runnable.class));
+		set("partyService",party); set("clientThread",thread);
+
+		net.runelite.client.plugins.specialcounter.SpecialCounterUpdate packet =
+			new net.runelite.client.plugins.specialcounter.SpecialCounterUpdate(
+				81,SpecialWeapon.DRAGON_WARHAMMER,1,301,2);
+		packet.setMemberId(7);
+		plugin.onSpecialCounterUpdate(packet);
+		plugin.onSpecialCounterUpdate(packet);
+		tracker.onGameTick();
+
+		assertEquals(1,tracker.specHistory().size());
+		assertEquals(189,tracker.state().getCurrent());
+	}
+
 	private int fingerprint() throws Exception
 	{
 		Method method=BetterPartyDefencePlugin.class.getDeclaredMethod("instanceFingerprint",WorldView.class);
@@ -314,13 +374,14 @@ public class PartySyncRegressionTest
 		Method remember=BetterPartyDefencePlugin.class.getDeclaredMethod("rememberSenderEncounterPresence",
 			long.class,int.class,int.class,int.class,long.class);
 		remember.setAccessible(true);
-		Method match=BetterPartyDefencePlugin.class.getDeclaredMethod("standardPartySpecScopeMatches",long.class,int.class);
+		Method match=BetterPartyDefencePlugin.class.getDeclaredMethod("standardPartySpecScopeMatches",
+			long.class,int.class,int.class);
 		match.setAccessible(true);
 		remember.invoke(plugin,7L,301,BpdDefenceSync.SCOPE_INSTANCE,fingerprint(),System.currentTimeMillis());
-		assertEquals(true,match.invoke(plugin,7L,301));
-		assertEquals(false,match.invoke(plugin,7L,302));
+		assertEquals(true,match.invoke(plugin,7L,301,-1));
+		assertEquals(false,match.invoke(plugin,7L,302,-1));
 		remember.invoke(plugin,7L,301,BpdDefenceSync.SCOPE_INSTANCE,fingerprint()+1,System.currentTimeMillis());
-		assertEquals(false,match.invoke(plugin,7L,301));
+		assertEquals(false,match.invoke(plugin,7L,301,-1));
 	}
 
 	@Test @SuppressWarnings("unchecked") public void pendingHitOnOtherBossDoesNotBlockCatchup() throws Exception
@@ -446,19 +507,19 @@ public class PartySyncRegressionTest
 			long.class, int.class, int.class, int.class, long.class);
 		remember.setAccessible(true);
 		Method match = BetterPartyDefencePlugin.class.getDeclaredMethod("standardPartySpecScopeMatches",
-			long.class, int.class);
+			long.class, int.class, int.class);
 		match.setAccessible(true);
 
 		int newPartyScope = fingerprint();
 		long now = System.currentTimeMillis();
 
 		remember.invoke(plugin, 7L, 301, BpdDefenceSync.SCOPE_INSTANCE, newPartyScope, now);
-		assertEquals(true, match.invoke(plugin, 7L, 301));
+		assertEquals(true, match.invoke(plugin, 7L, 301, -1));
 
 		remember.invoke(plugin, 7L, 301, BpdDefenceSync.SCOPE_INSTANCE, newPartyScope + 1, now - 1000L);
 
 		assertEquals("stale previous-party heartbeat must not poison the new-party scope",
-			true, match.invoke(plugin, 7L, 301));
+			true, match.invoke(plugin, 7L, 301, -1));
 	}
 
 	@Test public void presenceCallbackFromPreviousPartyIsDiscarded() throws Exception
@@ -490,10 +551,10 @@ public class PartySyncRegressionTest
 		}
 
 		Method match = BetterPartyDefencePlugin.class.getDeclaredMethod("standardPartySpecScopeMatches",
-			long.class, int.class);
+			long.class, int.class, int.class);
 		match.setAccessible(true);
 		assertEquals("presence callback from the previous party must not populate the new session",
-			true, match.invoke(plugin, 7L, 301));
+			true, match.invoke(plugin, 7L, 301, -1));
 	}
 
 	@Test public void oldPartyPresenceCannotPopulateNewPartyScope() throws Exception
@@ -518,10 +579,10 @@ public class PartySyncRegressionTest
 		plugin.onBpdEncounterPresence(old);
 
 		Method match = BetterPartyDefencePlugin.class.getDeclaredMethod("standardPartySpecScopeMatches",
-			long.class, int.class);
+			long.class, int.class, int.class);
 		match.setAccessible(true);
 		assertEquals("old-party presence must be rejected by current party identity",
-			true, match.invoke(plugin, 7L, 301));
+			true, match.invoke(plugin, 7L, 301, -1));
 	}
 
 	@Test public void currentPartyPresenceIsAccepted() throws Exception
@@ -575,6 +636,26 @@ public class PartySyncRegressionTest
 		inbox.setAccessible(true);
 		assertTrue("old-party snapshot must be rejected before it reaches the queue",
 			((java.util.Deque<?>)inbox.get(plugin)).isEmpty());
+	}
+
+	@Test public void nonzeroPartyPacketCannotPassDuringTransientZeroPartyId() throws Exception
+	{
+		PartyService party = mock(PartyService.class);
+		when(party.isInParty()).thenReturn(true);
+		when(party.getPartyId()).thenReturn(0L);
+		set("partyService", party);
+		set("currentPartyId", 2L);
+
+		Method belongs = BetterPartyDefencePlugin.class.getDeclaredMethod(
+			"partyMessageBelongsToCurrentParty", long.class);
+		belongs.setAccessible(true);
+
+		assertFalse("a packet from the previous party must not pass while PartyService is transiently zero",
+			(boolean)belongs.invoke(plugin, 1L));
+		assertTrue("a packet from the current party remains valid during the transient zero",
+			(boolean)belongs.invoke(plugin, 2L));
+		assertTrue("legacy senders without party identity retain compatibility",
+			(boolean)belongs.invoke(plugin, 0L));
 	}
 
 	@Test public void briefPartyRejoinPreservesEncounterState() throws Exception

@@ -103,13 +103,13 @@ final class PreviousTargetDisplayState
 		}
 	}
 
-	DefenceState previousState()
+	DefenceState previousState(List<DefenceState> states)
 	{
 		if (!config.defenceHpBar() || !config.previousTargetDisplay())
 		{
 			return null;
 		}
-		DefenceState previous = stateByIndex(tracker.states(), previousTargetNpcIndex);
+		DefenceState previous = stateByIndex(states, previousTargetNpcIndex);
 		DefenceState current = tracker.state();
 		if (previous == null || !previous.isDrained()
 			|| (current != null && previous.getNpcIndex() == current.getNpcIndex()))

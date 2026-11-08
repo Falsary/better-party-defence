@@ -62,4 +62,15 @@ public class InitialSyncDisplayGateTest
 		gate.clear();
 		assertFalse(gate.isWaiting(state(7, false), 100));
 	}
+
+	@Test
+	public void clearForBossLeavesOtherBossGatesUntouched()
+	{
+		InitialSyncDisplayGate gate = new InitialSyncDisplayGate();
+		gate.arm(7, BossDefence.TEKTON, 100, 4);
+		gate.arm(8, BossDefence.VORKATH, 100, 4);
+		gate.clearForBoss(BossDefence.TEKTON);
+		assertFalse(gate.isWaiting(state(7, false), 101));
+		assertTrue(gate.isWaiting(state(8, false), 101));
+	}
 }

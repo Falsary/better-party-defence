@@ -13,7 +13,7 @@ The plugin works locally on its own and can also combine special attacks from ot
 
 Better Party Defence uses the same RuneLite `PartyService` session used by Hub Party Panel.
 
-It does not create a separate party system, use OSParty networking, or require RuneLite's built-in Party sidebar.
+It does not create a separate party system, or require RuneLite's built-in Party sidebar.
 
 Your own supported special attacks are detected directly by Better Party Defence, so RuneLite's Special Attack Counter does not need to be enabled for local tracking.
 
@@ -29,7 +29,7 @@ Local tracking continues to work normally when you are not in a party.
 
 Better Party Defence can display the current estimated Defence directly on supported NPCs and through an InfoBox for magic, and an infobox for melee.
 
-Display options include attached and detached layouts, configurable fonts and sizing, skill icons, Defence formatting, and it ships by default by hiding conflicting infoboxes.
+Display options include attached and detached layouts, configurable fonts and sizing, skill icons, Defence formatting.
 
 Magic Defence is tracked separately where supported and can use its own InfoBox.
 
