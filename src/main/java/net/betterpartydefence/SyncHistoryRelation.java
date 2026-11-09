@@ -36,7 +36,7 @@ final class SyncHistoryRelation
 		for (int i = 0; i < prefix; i++)
 		{
 			SpecHistoryEntry x = a.get(i), y = b.get(i);
-			if (x == null || y == null || x.getWeapon() != y.getWeapon() || x.getHit() != y.getHit()
+			if (x == null || y == null || x.getWeapon() != y.getWeapon() || x.getSpell() != y.getSpell() || x.getHit() != y.getHit()
 				|| !name(x.getPlayerName()).equals(name(y.getPlayerName()))) { return Result.CONFLICT; }
 		}
 		if (a.size() > b.size()) { return Result.STALE; }

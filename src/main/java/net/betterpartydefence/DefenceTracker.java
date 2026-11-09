@@ -108,6 +108,7 @@ public class DefenceTracker
 	private boolean accursedApplied;
 	/** True once a special attack has actually landed on the tracked monster. */
 	private boolean drained;
+	private EffectState effects;
 	private String localTickAnchor;
 	private int localAnchorTick;
 	/** Optional shared raid clock origin installed by the plugin on the client thread. */
@@ -171,6 +172,7 @@ public class DefenceTracker
 	{
 		String playerName;
 		SpecialWeapon weapon;
+		SpellDrain spell;
 		int hit;
 		String eventId;
 		String tickAnchor;
@@ -179,6 +181,17 @@ public class DefenceTracker
 		public SpecHistoryEntry(String playerName, SpecialWeapon weapon, int hit)
 		{
 			this(playerName, weapon, hit, null, null, -1);
+		}
+
+		public SpecHistoryEntry(String playerName, SpecialWeapon weapon, int hit,
+			String eventId, String tickAnchor, long encounterTick)
+		{
+			this(playerName, weapon, null, hit, eventId, tickAnchor, encounterTick);
+		}
+
+		boolean isSupported()
+		{
+			return spell == null ? isSupportedWeapon(weapon) && hit >= 0 : weapon == null && hit == 1;
 		}
 	}
 
@@ -217,6 +230,7 @@ public class DefenceTracker
 	private static class Drain
 	{
 		SpecialWeapon weapon;
+		SpellDrain spell;
 		int npcIndex;
 		int hit;
 		int world;
@@ -346,6 +360,15 @@ public class DefenceTracker
 	}
 
 	/** Mutable snapshot for one independently tracked target. */
+	static final class EffectState
+	{
+		boolean vulnerabilityLanded;
+		boolean shadowLanded;
+		boolean shadowLandedOnReducedDefence;
+		int kerisExpiry;
+		long kerisHitAtMillis;
+	}
+
 	private static class SavedState
 	{
 		int npcIndex;
@@ -372,6 +395,7 @@ public class DefenceTracker
 		boolean drained;
 		String localTickAnchor;
 		int localAnchorTick;
+		EffectState effects;
 		final List<SpecHistoryEntry> history = new ArrayList<>();
 	}
 
@@ -464,7 +488,7 @@ public class DefenceTracker
 			return;
 		}
 		int tick = client.getTickCount();
-		Drain drain = new Drain(weapon, npcIndex, hit, world, playerName, null, -1, null, -1, 0L,
+		Drain drain = new Drain(weapon, null, npcIndex, hit, world, playerName, null, -1, null, -1, 0L,
 			DrainTarget.from(target), tick);
 		if (weapon == SpecialWeapon.ELDER_MAUL)
 		{
@@ -488,10 +512,19 @@ public class DefenceTracker
 		if (isSupportedWeapon(weapon))
 		{
 			int tick = client.getTickCount();
-			pending.addLast(new Drain(weapon, npcIndex, hit, world, playerName,
+			pending.addLast(new Drain(weapon, null, npcIndex, hit, world, playerName,
 				java.util.UUID.randomUUID().toString(), tick, sharedTickAnchor,
 				sharedTickAnchorTick, sharedTickAnchorValue, DrainTarget.from(target), tick));
 		}
+	}
+
+	void queueSpell(SpellDrain spell, NPC npc, int tick)
+	{
+		Player local = client.getLocalPlayer();
+		pending.addLast(new Drain(null, spell, npc.getIndex(), 1, client.getWorld(),
+			local == null ? null : local.getName(), java.util.UUID.randomUUID().toString(),
+			tick, sharedTickAnchor, sharedTickAnchorTick, sharedTickAnchorValue,
+			DrainTarget.from(npc), tick));
 	}
 
 	/** Set or clear the current shared encounter clock origin. Called before local spec capture. */
@@ -753,10 +786,26 @@ public class DefenceTracker
 
 	private void apply(Drain drain, NPC npc)
 	{
-		int hit = drain.getWeapon().computeHit(drain.getHit(), npc);
+		int hit = drain.getSpell() == null ? drain.getWeapon().computeHit(drain.getHit(), npc) : drain.getHit();
 		drained = true;
 		long before = bossDef;
-		calculateDefence(drain.getWeapon(), hit, npc);
+		if (drain.getSpell() == null)
+		{
+			calculateDefence(drain.getWeapon(), hit, npc);
+		}
+		else
+		{
+			if (drain.getSpell() == SpellDrain.SHADOW_BARRAGE)
+			{
+				EffectState observed = effectState(npc, true);
+				if (observed != null)
+				{
+					observed.shadowLanded = true;
+					observed.shadowLandedOnReducedDefence = before < bossStartDef;
+				}
+			}
+			applySpell(drain.getSpell());
+		}
 		recordSpecHistory(drain);
 		if (EncounterTimeline.complete(specHistory)
 			|| specHistory.size() > EncounterTimeline.MAX_EVENTS
@@ -765,7 +814,8 @@ public class DefenceTracker
 			replayTimeline(new ArrayList<>(specHistory), npc);
 		}
 		log.debug("{} hit {} on {}: def {} -> {} (base {}, floor {})",
-			drain.getWeapon(), hit, bossName, before, bossDef, bossStartDef, minDef);
+			drain.getSpell() == null ? drain.getWeapon() : drain.getSpell(),
+			hit, bossName, before, bossDef, bossStartDef, minDef);
 	}
 
 	/** Keep one drain per unresolved actor; another actor's evidence is never overwritten. */
@@ -976,6 +1026,7 @@ public class DefenceTracker
 	/** Initialise (or restore) the tracked boss's combat stats without discarding its encounter binding. */
 	private void initializeStats(BossDefence boss)
 	{
+		effects = null;
 		localTickAnchor = null;
 		bossDef = boss != null ? boss.getBaseDef() : 0;
 		minDef = boss != null ? boss.getMinDef() : 0;
@@ -1198,7 +1249,7 @@ public class DefenceTracker
 			// on a boundary). Only a genuinely pre-raid negative is rejected.
 			if (encounterTick >= 0)
 			{
-				specHistory.add(new SpecHistoryEntry(playerName, drain.getWeapon(), drain.getHit(),
+				specHistory.add(new SpecHistoryEntry(playerName, drain.getWeapon(), drain.getSpell(), drain.getHit(),
 					drain.getEventId(), tickAnchor, encounterTick));
 				return;
 			}
@@ -1209,7 +1260,7 @@ public class DefenceTracker
 			localTickAnchor = drain.getEventId();
 			localAnchorTick = drain.getObservedTick();
 		}
-		specHistory.add(new SpecHistoryEntry(playerName, drain.getWeapon(), drain.getHit(),
+		specHistory.add(new SpecHistoryEntry(playerName, drain.getWeapon(), drain.getSpell(), drain.getHit(),
 			drain.getEventId(), localTickAnchor, (long) drain.getObservedTick() - localAnchorTick));
 	}
 
@@ -1236,7 +1287,7 @@ public class DefenceTracker
 	{
 		for (SpecHistoryEntry entry : specHistory)
 		{
-			if (entry != null && drainsDefence(entry.getWeapon()))
+			if (entry != null && (entry.getSpell() != null || drainsDefence(entry.getWeapon())))
 			{
 				return true;
 			}
@@ -1254,6 +1305,29 @@ public class DefenceTracker
 			}
 		}
 		return false;
+	}
+
+	private void applyHistoryEvent(SpecHistoryEntry event, NPC npc)
+	{
+		if (event.getSpell() != null)
+		{
+			applySpell(event.getSpell());
+		}
+		else
+		{
+			int hit = npc == null ? event.getHit() : event.getWeapon().computeHit(event.getHit(), npc);
+			calculateDefence(event.getWeapon(), hit, npc);
+		}
+	}
+
+	private void applySpell(SpellDrain spell)
+	{
+		bossDef = spell.reduce(bossDef, bossStartDef, minDef);
+		if (spell == SpellDrain.SHADOW_BARRAGE)
+		{
+			atkLevel = spell.reduce(atkLevel, bossType.getBaseAtk(), 0);
+			strLevel = spell.reduce(strLevel, bossType.getBaseStr(), 0);
+		}
 	}
 
 	private void calculateDefence(SpecialWeapon weapon, int hit, NPC npc)
@@ -1565,6 +1639,14 @@ public class DefenceTracker
 			return false;
 		}
 
+		// First-reduction spells need the event timeline for concurrent histories. Appending
+		// a legacy suffix could silently change whether a spell was the first reduction.
+		if (local.getHistory().stream().anyMatch(entry -> entry.getSpell() != null)
+			|| incoming.getHistory().stream().anyMatch(entry -> entry.getSpell() != null))
+		{
+			return false;
+		}
+
 		// The legacy reconciliation contract compares payloads, not the optional identity fields.
 		List<SpecHistoryEntry> localLegacy = new ArrayList<>();
 		List<SpecHistoryEntry> incomingLegacy = new ArrayList<>();
@@ -1583,8 +1665,7 @@ public class DefenceTracker
 		}
 		for (SpecHistoryEntry event : additions)
 		{
-			if (event.getWeapon() == null || !isSupportedWeapon(event.getWeapon())
-				|| event.getHit() < 0)
+			if (!event.isSupported())
 			{
 				return false;
 			}
@@ -1704,6 +1785,10 @@ public class DefenceTracker
 	 */
 	String effectKey(SpecHistoryEntry event, NPC npc)
 	{
+		if (event != null && event.getSpell() != null)
+		{
+			return event.getSpell().name();
+		}
 		if (event == null || event.getWeapon() == null)
 		{
 			return null;
@@ -1749,8 +1834,7 @@ public class DefenceTracker
 			@Override public SavedState apply(SavedState state, SpecHistoryEntry event)
 			{
 				loadSavedState(state);
-				int hit = npc == null ? event.getHit() : event.getWeapon().computeHit(event.getHit(), npc);
-				calculateDefence(event.getWeapon(), hit, npc);
+				applyHistoryEvent(event, npc);
 				return snapshotCurrent();
 			}
 
@@ -1854,6 +1938,10 @@ public class DefenceTracker
 
 		saveCurrent();
 		SavedState previousTarget = localNpc == null ? null : tracked.get(localNpc.getIndex());
+		SavedState effectTarget = localNpc == null && bossIndex < 0 && bossType == sync.getBossType()
+			? unboundTracked.get(bossType) : previousTarget;
+		effects = effectTarget != null && effectTarget.bossType == sync.getBossType()
+			&& effectTarget.boundActor == localNpc ? effectTarget.effects : null;
 		localTickAnchor = previousTarget == null ? null : previousTarget.localTickAnchor;
 		localAnchorTick = previousTarget == null ? 0 : previousTarget.localAnchorTick;
 		bossType = sync.getBossType();
@@ -1935,6 +2023,7 @@ public class DefenceTracker
 		s.drained = drained;
 		s.localTickAnchor = localTickAnchor;
 		s.localAnchorTick = localAnchorTick;
+		s.effects = effects;
 		s.history.addAll(specHistory);
 		return s;
 	}
@@ -2073,6 +2162,7 @@ public class DefenceTracker
 		localTickAnchor = s.localTickAnchor;
 		localAnchorTick = s.localAnchorTick;
 		specHistory.clear();
+		effects = s.effects;
 		specHistory.addAll(s.history);
 	}
 
@@ -2127,6 +2217,7 @@ public class DefenceTracker
 
 	private void clearActiveFields()
 	{
+		effects = null;
 		localTickAnchor = null;
 		bossIndex = -1;
 		bossName = "";
@@ -2182,21 +2273,101 @@ public class DefenceTracker
 		}
 	}
 
+	/** Display-only effects use the same saved target and rebind rules as its combat stats. */
+	EffectState effectState(NPC npc, boolean remember)
+	{
+		if (!BossDefence.isLiveNpc(npc) || npcByIndex(npc.getIndex()) != npc)
+		{
+			return null;
+		}
+		BossDefence boss = BossDefence.matchingNpc(npc);
+		if (boss == null)
+		{
+			return null;
+		}
+		if (boundActor == npc && bossType == boss)
+		{
+			if (remember && effects == null)
+			{
+				effects = new EffectState();
+				saveCurrent();
+			}
+			return effects;
+		}
+		SavedState saved = tracked.get(npc.getIndex());
+		if (saved != null && saved.boundActor == npc && saved.bossType == boss)
+		{
+			if (remember && saved.effects == null)
+			{
+				saved.effects = new EffectState();
+			}
+			return saved.effects;
+		}
+		if (!remember)
+		{
+			return null;
+		}
+
+		SavedState selected = snapshotCurrent();
+		saveCurrent();
+		if (!restore(npc.getIndex(), boss) && !restoreForBoss(boss, npc))
+		{
+			setBoss(npc.getName(), npc.getIndex());
+		}
+		if (effects == null)
+		{
+			effects = new EffectState();
+		}
+		EffectState result = effects;
+		saveCurrent();
+		if (selected == null)
+		{
+			clearActiveFields();
+		}
+		else if (selected.npcIndex != bossIndex || selected.bossType != bossType)
+		{
+			loadSavedState(selected);
+		}
+		return result;
+	}
+
+	boolean hasLandedSpell(NPC npc, SpellDrain spell)
+	{
+		if (!BossDefence.isLiveNpc(npc) || npcByIndex(npc.getIndex()) != npc)
+		{
+			return false;
+		}
+		SavedState saved = tracked.get(npc.getIndex());
+		List<SpecHistoryEntry> history = boundActor == npc ? specHistory
+			: saved != null && saved.boundActor == npc ? saved.history : Collections.emptyList();
+		return history.stream().anyMatch(entry -> entry.getSpell() == spell);
+	}
+
+	Set<BossDefence> encounterLifecycleBosses()
+	{
+		return rememberedBosses(true);
+	}
+
 	/** Every logical boss with remembered drained state, bound or temporarily out of scene. */
 	public Set<BossDefence> drainedBosses()
+	{
+		return rememberedBosses(false);
+	}
+
+	private Set<BossDefence> rememberedBosses(boolean includeEffects)
 	{
 		saveCurrent();
 		Set<BossDefence> bosses = new LinkedHashSet<>();
 		for (SavedState saved : tracked.values())
 		{
-			if (saved != null && saved.bossType != null && saved.drained)
+			if (saved != null && saved.bossType != null && (saved.drained || includeEffects && saved.effects != null))
 			{
 				bosses.add(saved.bossType);
 			}
 		}
 		for (SavedState saved : unboundTracked.values())
 		{
-			if (saved != null && saved.bossType != null && saved.drained)
+			if (saved != null && saved.bossType != null && (saved.drained || includeEffects && saved.effects != null))
 			{
 				bosses.add(saved.bossType);
 			}

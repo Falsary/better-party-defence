@@ -309,17 +309,7 @@ public class DefenceInfoBox extends InfoBox
 		{
 			return config.magicDefenceColor();
 		}
-		// Keep the Defence infobox WHITE normally; match the overhead only at
-		// the low-Defence and fully-drained thresholds. Never use drain amount colour.
 		DefenceState state = tracker.state();
-		if (state == null)
-		{
-			return Color.WHITE;
-		}
-		if (DefenceReadout.isFullyDrained(state))
-		{
-			return config.defenceCappedColor();
-		}
-		return DefenceReadout.isLowDefence(state, config) ? config.defenceLowColor() : Color.WHITE;
+		return state == null ? Color.WHITE : DefenceReadout.defenceColor(state, config);
 	}
 }

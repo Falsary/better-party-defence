@@ -51,7 +51,7 @@ final class EncounterTimeline
 			if (event == null || event.getEventId() == null || event.getTickAnchor() == null
 				|| event.getEventId().isEmpty() || event.getEventId().length() > 128
 				|| event.getTickAnchor().isEmpty() || event.getTickAnchor().length() > 128 || event.getEncounterTick() < 0
-				|| !DefenceTracker.isSupportedWeapon(event.getWeapon()) || event.getHit() < 0
+				|| !event.isSupported()
 				|| ids.put(event.getEventId(), event) != null)
 			{
 				return false;
@@ -128,7 +128,7 @@ final class EncounterTimeline
 	static boolean samePayload(SpecHistoryEntry a, SpecHistoryEntry b)
 	{
 		return Objects.equals(normalizedPlayer(a.getPlayerName()), normalizedPlayer(b.getPlayerName()))
-			&& a.getWeapon() == b.getWeapon() && a.getHit() == b.getHit();
+			&& a.getWeapon() == b.getWeapon() && a.getSpell() == b.getSpell() && a.getHit() == b.getHit();
 	}
 
 	private static String normalizedPlayer(String name)
