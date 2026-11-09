@@ -62,6 +62,37 @@ public interface BetterPartyDefenceConfig extends Config
 		closedByDefault = true)
 	String PARTY_AND_PREVIOUS = "partyAndPrevious";
 
+	@ConfigSection(
+		name = "Other infoboxes",
+		description = "Infoboxes for landed boss effects.",
+		position = 7,
+		closedByDefault = true)
+	String OTHER_INFOBOXES = "otherInfoboxes";
+
+	@ConfigItem(
+		keyName = "showRedKeris",
+		name = "Show red keris",
+		description = "Red keris timer infobox on spec",
+		position = 1,
+		section = OTHER_INFOBOXES)
+	default boolean showRedKeris() { return true; }
+
+	@ConfigItem(
+		keyName = "showShadowBarrage",
+		name = "Show shadow barrage",
+		description = "Must have shadow sceptre equipped",
+		position = 2,
+		section = OTHER_INFOBOXES)
+	default boolean showShadowBarrage() { return true; }
+
+	@ConfigItem(
+		keyName = "showVulnerability",
+		name = "Show vulnerability",
+		description = "Shows a vulnerability infobox on successful hit",
+		position = 3,
+		section = OTHER_INFOBOXES)
+	default boolean showVulnerability() { return true; }
+
 	@ConfigItem(
 		keyName = "defenceHpBar",
 		name = "Show defence tracker",

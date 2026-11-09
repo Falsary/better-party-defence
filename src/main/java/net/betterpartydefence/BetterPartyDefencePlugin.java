@@ -46,10 +46,13 @@ import net.runelite.api.coords.WorldPoint;
 import net.runelite.api.gameval.VarPlayerID;
 import net.runelite.api.gameval.VarbitID;
 import net.runelite.api.events.FakeXpDrop;
+import net.runelite.api.events.AnimationChanged;
+import net.runelite.api.events.GraphicChanged;
 import net.runelite.api.events.ChatMessage;
 import net.runelite.api.events.GameStateChanged;
 import net.runelite.api.events.GameTick;
 import net.runelite.api.events.HitsplatApplied;
+import net.runelite.api.events.ProjectileMoved;
 import net.runelite.api.events.NpcSpawned;
 import net.runelite.api.events.ScriptPreFired;
 import net.runelite.api.events.StatChanged;
@@ -143,6 +146,7 @@ public class BetterPartyDefencePlugin extends Plugin
 	private TrackerFontManager trackerFontManager;
 	private DefenceInfoBox defenceBox;
 	private DefenceInfoBox magicDefenceBox;
+	private BossEffectDisplay bossEffectDisplay;
 	/** BPD-owned weapon icons. Only an infobox projection of the current target's accepted history. */
 	private final Map<SpecialWeapon, SpecWeaponInfoBox> specWeaponBoxes = new LinkedHashMap<>();
 	private static final int DUPLICATE_WINDOW_TICKS = 1;
@@ -178,6 +182,7 @@ public class BetterPartyDefencePlugin extends Plugin
 	private boolean sharedRaidClockActive;
 	private int sharedRaidStartTick;
 	/** Raid elapsed-tick clock fed by the game's own ToA/TFA timer scripts and CoX timer varbit. */
+	private final java.util.Deque<BpdKerisTimer> pendingKerisTimers = new java.util.ArrayDeque<>();
 	private final RaidTimerClock raidTimerClock = new RaidTimerClock();
 	/** CoX's timer is locally interpolated; stop trusting it if that display stops advancing. */
 	private static final int COX_TIMER_STALE_TICKS = 4;
@@ -223,6 +228,7 @@ public class BetterPartyDefencePlugin extends Plugin
 	protected void startUp()
 	{
 		migrateLegacyHealthBarDisplayMode();
+		bossEffectDisplay = new BossEffectDisplay(client, clientThread, defenceTracker);
 
 		// Register the core SpecialCounterUpdate message ourselves so remote party drains can
 		// still be decoded even when this client's Special Attack Counter UI is disabled.
@@ -234,6 +240,7 @@ public class BetterPartyDefencePlugin extends Plugin
 		wsClient.registerMessage(BpdEncounterPresence.class);
 		wsClient.registerMessage(BpdBossPresence.class);
 		wsClient.registerMessage(BpdEncounterReset.class);
+		wsClient.registerMessage(BpdKerisTimer.class);
 
 		skillIconSource = new SkillIconSource(client, skillIconManager, config);
 		trackerFontManager = new TrackerFontManager(config);
@@ -254,6 +261,11 @@ public class BetterPartyDefencePlugin extends Plugin
 	@Override
 	protected void shutDown()
 	{
+		if (bossEffectDisplay != null)
+		{
+			bossEffectDisplay.reset(infoBoxManager);
+			bossEffectDisplay = null;
+		}
 		partyEpoch++;
 		sharedRaidClockActive = false;
 		raidTimerClock.clear();
@@ -274,6 +286,7 @@ public class BetterPartyDefencePlugin extends Plugin
 		removeInfoBox();
 		recentSpecEvents.clear();
 		pendingSnapshots.clear();
+		pendingKerisTimers.clear();
 		recentSyncedSpecs.clear();
 		pendingWorldSyncs.clear();
 		retainedRaidScopes.clear();
@@ -293,6 +306,7 @@ public class BetterPartyDefencePlugin extends Plugin
 		lastSyncBroadcastMillis = 0L;
 		syncStateVersions.clear();
 		wsClient.unregisterMessage(BpdEncounterReset.class);
+		wsClient.unregisterMessage(BpdKerisTimer.class);
 		wsClient.unregisterMessage(BpdEncounterPresence.class);
 		wsClient.unregisterMessage(BpdDefenceSync.class);
 		// Do not unregister a message class that the active core Special Attack Counter still needs.
@@ -348,6 +362,11 @@ public class BetterPartyDefencePlugin extends Plugin
 		maybeBroadcastBossPresenceRequests(immediateBossPresenceScan, revalidateExistingBossState);
 		maybeBroadcastDefenceSync();
 		reconcileRaidEncounterLifecycle();
+		if (bossEffectDisplay != null)
+		{
+			bossEffectDisplay.settleKeris(this);
+			reconcileKerisTimers();
+		}
 		if (previousTargetDisplayState != null)
 		{
 			previousTargetDisplayState.update();
@@ -626,12 +645,47 @@ public class BetterPartyDefencePlugin extends Plugin
 	public void onVarbitChanged(VarbitChanged event)
 	{
 		localSpecDetector.onVarbitChanged(event);
+		if (bossEffectDisplay != null && event.getVarpId() == VarPlayerID.SA_ENERGY)
+		{
+			bossEffectDisplay.onSpecialEnergy(event.getValue());
+		}
 	}
 
 	@Subscribe
 	public void onHitsplatApplied(HitsplatApplied event)
 	{
 		localSpecDetector.onHitsplatApplied(event);
+		if (bossEffectDisplay != null)
+		{
+			bossEffectDisplay.onHitsplatApplied(event);
+		}
+	}
+
+	@Subscribe
+	public void onAnimationChanged(AnimationChanged event)
+	{
+		if (bossEffectDisplay != null)
+		{
+			bossEffectDisplay.onLocalAnimation(event.getActor());
+		}
+	}
+
+	@Subscribe
+	public void onProjectileMoved(ProjectileMoved event)
+	{
+		if (bossEffectDisplay != null)
+		{
+			bossEffectDisplay.onProjectileMoved(event.getProjectile());
+		}
+	}
+
+	@Subscribe
+	public void onGraphicChanged(GraphicChanged event)
+	{
+		if (bossEffectDisplay != null)
+		{
+			bossEffectDisplay.onGraphicChanged(event.getActor());
+		}
 	}
 
 	@Subscribe
@@ -649,6 +703,7 @@ public class BetterPartyDefencePlugin extends Plugin
 		}
 		recentSpecEvents.clear();
 		pendingSnapshots.clear();
+		pendingKerisTimers.clear();
 		recentSyncedSpecs.clear();
 		boolean inPartyNow = event.getPartyId() != null;
 		boolean joinedOrRejoinedParty = !wasInParty && inPartyNow;
@@ -686,9 +741,14 @@ public class BetterPartyDefencePlugin extends Plugin
 			defenceTracker.setSharedTickAnchor(null, 0);
 			localSpecDetector.reset();
 			defenceTracker.reset("game state " + state);
+			if (bossEffectDisplay != null)
+			{
+				bossEffectDisplay.reset(infoBoxManager);
+			}
 			removeInfoBox();
 			recentSpecEvents.clear();
 			pendingSnapshots.clear();
+			pendingKerisTimers.clear();
 			recentSyncedSpecs.clear();
 			activeSyncScope = null;
 			pendingWorldSyncs.clear();
@@ -842,6 +902,7 @@ public class BetterPartyDefencePlugin extends Plugin
 			lastSyncSignature = null;
 			lastSyncBroadcastMillis = 0L;
 			pendingSnapshots.clear();
+			pendingKerisTimers.clear();
 			recentSyncedSpecs.clear();
 			if (!config.syncWithOtherPartyDefenceUsers())
 			{
@@ -1008,6 +1069,115 @@ public class BetterPartyDefencePlugin extends Plugin
 				event.getMemberId(), boss, event.getScopeType(), event.getScopeId(),
 				sync.getCurrent(), sync.getBase());
 		});
+	}
+
+	void broadcastKeris(NPC npc, int hitTick, long hitAtMillis)
+	{
+		if (!config.syncWithOtherPartyDefenceUsers() || !partyService.isInParty())
+		{
+			return;
+		}
+
+		BossDefence boss = BossDefence.matchingNpc(npc);
+		SyncScope scope = boss == null ? null : localSyncScope(boss, npc);
+		WorldPoint point = npc.getWorldLocation();
+		if (scope == null || point == null || !peerSyncAllowedAtCurrentEncounter(boss))
+		{
+			return;
+		}
+
+		long raidTick = raidTimerClock.isActiveFor(RaidTimerClock.SOURCE_TOA)
+			? raidTimerClock.tickAt(hitTick) : RaidTimerClock.NO_TICK;
+		String clockScope = raidTick >= 0 ? raidTimerScope(RaidTimerClock.SOURCE_TOA,
+			client.getTopLevelWorldView()) : null;
+		rememberRaidScope(boss, scope);
+		partyService.send(new BpdKerisTimer(partyService.getPartyId(), client.getWorld(), boss,
+			scope.getType(), scope.getId(), npc.getId(), point, hitAtMillis, clockScope, raidTick));
+	}
+
+	@Subscribe
+	public void onBpdKerisTimer(BpdKerisTimer event)
+	{
+		if (event == null || !partyService.isInParty()
+			|| event.getProtocolVersion() != BpdKerisTimer.PROTOCOL_VERSION
+			|| !partyMessageBelongsToCurrentParty(event.getPartyId()))
+		{
+			return;
+		}
+		PartyMember localMember = partyService.getLocalMember();
+		if (localMember != null && localMember.getMemberId() == event.getMemberId())
+		{
+			return;
+		}
+
+		long receivedInPartyEpoch = partyEpoch;
+		clientThread.invoke(() ->
+		{
+			if (receivedInPartyEpoch != partyEpoch || !acceptsKerisTimer(event))
+			{
+				return;
+			}
+			if (pendingKerisTimers.size() >= 32)
+			{
+				pendingKerisTimers.removeFirst();
+			}
+			pendingKerisTimers.addLast(event);
+		});
+	}
+
+	private boolean acceptsKerisTimer(BpdKerisTimer event)
+	{
+		return config.syncWithOtherPartyDefenceUsers() && partyService.isInParty()
+			&& partyMessageBelongsToCurrentParty(event.getPartyId())
+			&& partyService.getMemberById(event.getMemberId()) != null
+			&& event.getWorld() == client.getWorld() && event.getBoss() != null;
+	}
+
+	private void reconcileKerisTimers()
+	{
+		if (pendingKerisTimers.isEmpty())
+		{
+			return;
+		}
+
+		int tick = client.getTickCount();
+		long now = System.currentTimeMillis();
+		WorldView worldView = client.getTopLevelWorldView();
+		long raidTick = raidTimerClock.isActiveFor(RaidTimerClock.SOURCE_TOA)
+			? raidTimerClock.tickAt(tick) : RaidTimerClock.NO_TICK;
+		String clockScope = raidTick >= 0 ? raidTimerScope(RaidTimerClock.SOURCE_TOA, worldView) : null;
+		for (Iterator<BpdKerisTimer> it = pendingKerisTimers.iterator(); it.hasNext();)
+		{
+			BpdKerisTimer timer = it.next();
+			BossDefence boss = timer.getBoss();
+			if (!acceptsKerisTimer(timer))
+			{
+				it.remove();
+				continue;
+			}
+			NPC npc = NpcTargetResolver.uniqueLiveNpcNear(worldView, boss,
+				timer.getBossX(), timer.getBossY(), timer.getBossPlane(), NON_INSTANCE_POSITION_TOLERANCE);
+			SyncScope scope = localSyncScope(boss, npc);
+			int remaining = timer.remainingTicks(now, clockScope, raidTick);
+			Long resetAt = recentEncounterResets.get(new EncounterResetKey(client.getWorld(), boss,
+				timer.getScopeType(), timer.getScopeId()));
+			if (remaining <= 0 || scope == null || scope.getType() != timer.getScopeType()
+				|| scope.getId() != timer.getScopeId() || !peerSyncAllowedAtCurrentEncounter(boss)
+				|| resetAt != null && timer.getHitAtMillis() <= resetAt)
+			{
+				it.remove();
+				continue;
+			}
+			if (npc != null)
+			{
+				it.remove();
+				if (npc.getId() == timer.getNpcId())
+				{
+					rememberRaidScope(boss, scope);
+					bossEffectDisplay.applyKerisTimer(npc, tick + remaining, timer.getHitAtMillis());
+				}
+			}
+		}
 	}
 
 	/** Receive an authoritative encounter reset from another current BPD party member. */
@@ -1537,7 +1707,12 @@ public class BetterPartyDefencePlugin extends Plugin
 		{
 			return;
 		}
+		if (bossEffectDisplay != null)
+		{
+			bossEffectDisplay.clearBoss(boss);
+		}
 		pendingSnapshots.removeIf(snapshot -> boss.name().equals(snapshot.getBossType()));
+		pendingKerisTimers.removeIf(timer -> timer.getBoss() == boss);
 		pendingWorldSyncs.remove(boss);
 		syncStateVersions.remove(boss);
 		retainedRaidScopes.remove(boss);
@@ -1966,7 +2141,7 @@ public class BetterPartyDefencePlugin extends Plugin
 
 	private void reconcileRaidEncounterLifecycle()
 	{
-		for (BossDefence boss : new ArrayList<>(defenceTracker.drainedBosses()))
+		for (BossDefence boss : defenceTracker.encounterLifecycleBosses())
 		{
 			if (!isRaidEncounterBoss(boss))
 			{
@@ -2327,12 +2502,13 @@ public class BetterPartyDefencePlugin extends Plugin
 		int tick = client.getTickCount();
 		for (DefenceTracker.SpecHistoryEntry entry : sync.getHistory())
 		{
+			if (entry.getSpell() != null) { continue; }
 			int match = -1;
 			for (int i = 0; i < previous.size(); i++)
 			{
 				DefenceTracker.SpecHistoryEntry old = previous.get(i);
 				if (entry.equals(old) || (entry.getEventId() == null || old.getEventId() == null)
-					&& entry.getWeapon() == old.getWeapon() && entry.getHit() == old.getHit()
+					&& entry.getWeapon() == old.getWeapon() && entry.getSpell() == old.getSpell() && entry.getHit() == old.getHit()
 					&& normalizePlayerName(entry.getPlayerName()).equals(normalizePlayerName(old.getPlayerName())))
 				{ match = i; break; }
 			}
@@ -2763,6 +2939,11 @@ public class BetterPartyDefencePlugin extends Plugin
 		}
 
 		updateSpecWeaponInfoBoxes(state, live && !awaitingInitialSync);
+		if (bossEffectDisplay != null)
+		{
+			bossEffectDisplay.update(this, infoBoxManager, itemManager, skillIconManager,
+				config.showRedKeris(), config.showShadowBarrage(), config.showVulnerability());
+		}
 	}
 
 	/**
@@ -2862,6 +3043,10 @@ public class BetterPartyDefencePlugin extends Plugin
 
 	private void removeInfoBox()
 	{
+		if (bossEffectDisplay != null)
+		{
+			bossEffectDisplay.hide(infoBoxManager);
+		}
 		clearSpecWeaponInfoBoxes();
 		if (defenceBox != null)
 		{

@@ -125,7 +125,8 @@ public class BpdDefenceSync extends PartyMemberMessage
 			historyTickAnchors.add(entry.getTickAnchor());
 			historyEncounterTicks.add(entry.getEncounterTick());
 			historyPlayers.add(entry.getPlayerName());
-			historyWeapons.add(entry.getWeapon() == null ? "" : entry.getWeapon().name());
+			historyWeapons.add(entry.getSpell() == null ? (entry.getWeapon() == null ? "" : entry.getWeapon().name())
+				: "spell:" + entry.getSpell().name());
 			historyHits.add(entry.getHit());
 		}
 	}
@@ -168,8 +169,9 @@ public class BpdDefenceSync extends PartyMemberMessage
 				{
 					return null;
 				}
-				SpecialWeapon weapon = SpecialWeapon.valueOf(weaponName);
-				if (!DefenceTracker.isSupportedWeapon(weapon)) { return null; }
+				SpellDrain spell = weaponName.startsWith("spell:") ? SpellDrain.valueOf(weaponName.substring(6)) : null;
+				SpecialWeapon weapon = spell == null ? SpecialWeapon.valueOf(weaponName) : null;
+				if (spell == null ? !DefenceTracker.isSupportedWeapon(weapon) : hit != 1) { return null; }
 				String player = historyPlayers.get(i);
 				if (player == null || player.trim().isEmpty())
 				{
@@ -181,11 +183,11 @@ public class BpdDefenceSync extends PartyMemberMessage
 				if (id != null && !id.isEmpty() && id.length() <= 128 && anchor != null
 					&& !anchor.isEmpty() && anchor.length() <= 128 && tick != null && tick >= 0)
 				{
-					history.add(new SpecHistoryEntry(player, weapon, hit, id, anchor, tick));
+					history.add(new SpecHistoryEntry(player, weapon, spell, hit, id, anchor, tick));
 				}
 				else
 				{
-					history.add(new SpecHistoryEntry(player, weapon, hit));
+					history.add(new SpecHistoryEntry(player, weapon, spell, hit, null, null, -1));
 				}
 			}
 			catch (RuntimeException ignored)

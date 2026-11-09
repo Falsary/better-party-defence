@@ -10,7 +10,7 @@ import net.betterpartydefence.DefenceTracker.DefenceState;
 import net.runelite.client.plugins.Plugin;
 import org.junit.Test;
 
-/** The Defence infobox is white until the overhead enters low or fully-drained status. */
+/** The Defence infobox shares the overhead palette and thresholds. */
 public class DefenceInfoBoxColorTest
 {
     private static final Color HIGH = new Color(0xeeeeee);
@@ -44,6 +44,7 @@ public class DefenceInfoBoxColorTest
             new BufferedImage(1, 1, BufferedImage.TYPE_INT_ARGB),
             mock(Plugin.class), tracker, config);
         assertEquals("Defence infobox colour", expected, box.getTextColor());
+        assertEquals("Defence overhead colour", expected, DefenceReadout.defenceColor(state, config));
         // Independently configured drain-amount colour must never drive this text.
         org.junit.Assert.assertNotEquals(DRAIN_AMOUNT, box.getTextColor());
     }
@@ -66,16 +67,7 @@ public class DefenceInfoBoxColorTest
     @Test
     public void defenceAboveLowThresholdUsesNormalColour()
     {
-        check(state(182, 156, 260), config(), Color.WHITE);
-    }
-
-    @Test
-    public void infoboxStaysWhiteEvenWhenOverheadHighColourIsNotWhite()
-    {
-        BetterPartyDefenceConfig c = config();
-        DefenceState s = state(182, 156, 260);
-        assertEquals(HIGH, DefenceReadout.defenceColor(s, c));
-        check(s, c, Color.WHITE);
+        check(state(182, 156, 260), config(), HIGH);
     }
 
     @Test
@@ -85,7 +77,7 @@ public class DefenceInfoBoxColorTest
         when(c.defenceLowThresholdUnit()).thenReturn(DefenceThresholdUnit.PERCENT);
         when(c.defenceLowThreshold()).thenReturn(10);
         // 10% of the 104 drainable Defence levels = 10 (integer arithmetic).
-        check(state(167, 156, 260), c, Color.WHITE);
+        check(state(167, 156, 260), c, HIGH);
         check(state(166, 156, 260), c, LOW);
         check(state(156, 156, 260), c, CAPPED);
     }

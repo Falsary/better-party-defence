@@ -51,6 +51,43 @@ public class EncounterTickSyncTest
             s.isAccursedApplied(), s.isDrained(), events);
     }
 
+    @Test public void shadowBarrageDrainsOnlyBeforeDefenceIsReduced()
+    {
+        when(client.getTickCount()).thenReturn(100);
+        tracker.queueSpell(SpellDrain.SHADOW_BARRAGE, npc, 100);
+        tracker.onGameTick();
+        assertEquals(259, tracker.state().getCurrent());
+        local(101, SpecialWeapon.DRAGON_WARHAMMER, 1);
+        assertEquals(182, tracker.state().getCurrent());
+
+        tracker.reset();
+        local(200, SpecialWeapon.DRAGON_WARHAMMER, 1);
+        when(client.getTickCount()).thenReturn(201);
+        tracker.queueSpell(SpellDrain.SHADOW_BARRAGE, npc, 201);
+        tracker.onGameTick();
+        assertEquals(217, tracker.state().getCurrent());
+        assertTrue(tracker.effectState(npc, false).shadowLandedOnReducedDefence);
+    }
+
+    @Test public void tomeVulnerabilitySurvivesPartySnapshotAndEncounterReset()
+    {
+        when(client.getTickCount()).thenReturn(100);
+        tracker.queueSpell(SpellDrain.VULNERABILITY_TOME, npc, 100);
+        tracker.onGameTick();
+        assertEquals(264, tracker.state().getCurrent());
+
+        SyncState sent = tracker.syncState();
+        SyncState received = new BpdDefenceSync(301, sent, BpdDefenceSync.SCOPE_WORLD,
+            0, 0, 0, 0, 100).toSyncState();
+        assertEquals(sent, received);
+
+        tracker.reset();
+        tracker.applySyncState(received, npc);
+        assertTrue(tracker.hasLandedSpell(npc, SpellDrain.VULNERABILITY_TOME));
+        tracker.reset();
+        assertFalse(tracker.hasLandedSpell(npc, SpellDrain.VULNERABILITY_TOME));
+    }
+
     @Test public void encounterStartsAtObservedSpecNotLoginOrProcessingTick()
     {
         when(client.getTickCount()).thenReturn(5000);
