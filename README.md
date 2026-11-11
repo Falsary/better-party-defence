@@ -23,7 +23,7 @@ Better Party Defence is a RuneLite plugin that estimates the current Defence of 
 | &nbsp; | &nbsp; |
 | **Special Attack Counter** | &nbsp;&nbsp;&nbsp;Keep enabled. Turn off any infoboxes |
 | &nbsp; | &nbsp; |
-| **Party Defence Tracker** | &nbsp;&nbsp;&nbsp;Optional. if Enabled; Turn off any infoboxes |
+| **Party Defence Tracker** | &nbsp;&nbsp;&nbsp;Optional. If Enabled, Turn off any infoboxes |
 
 <br></br>
 
