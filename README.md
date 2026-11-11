@@ -1,77 +1,61 @@
-![Better Party Def Banner](images/banner.png)
-> [!WARNING]
-> **Infobox visibility change:** Better Party Defence no longer hides overlapping infoboxes from RuneLite's Special Attack Counter or Party Defence Tracker. RuneLite does not permit one plugin to remove another plugin's infoboxes.
-> If you want to keep the clean look with only BPD's infoboxes, you'll need to manually disable the infoboxes in the other plugins.
+![Better Party Defence banner](images/banner.png)
 
-## Better Party Defence
 
-Better Party Defence tracks the estimated live Defence of supported bosses and NPCs after defence-draining special attacks.
 
-The plugin works locally on its own and can also combine special attacks from other players in the same Hub Party.
+# Better Party Defence
 
-## Party support
+Better Party Defence is a RuneLite plugin that estimates the current Defence of supported bosses and NPCs. It tracks your own defence-draining attacks and spells in solo play and can share encounter state with other players in the same Hub Party.
 
-Better Party Defence uses the same RuneLite `PartyService` session used by Hub Party Panel.
+**Current version: v1.4.1**
 
-It does not create a separate party system, or require RuneLite's built-in Party sidebar.
+> **Seeing different Defence values?** Check that everyone in your party is running the same version of Better Party Defence. If someone has had RuneLite open since before the update, have them restart their client and check again.
 
-Your own supported special attacks are detected directly by Better Party Defence, so RuneLite's Special Attack Counter does not need to be enabled for local tracking.
+## Suggested settings
 
-For other party members:
-
-* Players using Better Party Defence can share supported defence drains with each other.
-* Players using RuneLite's Special Attack Counter can also contribute through its standard `SpecialCounterUpdate` party messages.
-* Players using Hub Party Panel can contribute special attack information if RuneLite's Special Attack Counter is enabled.
-
-Local tracking continues to work normally when you are not in a party.
+| Plugin | Recommended settings |
+| --- | --- |
+| Better Party Defence | The defaults are recommended. Customize as needed. |
+| Special Attack Counter | The plugin can stay enabled. Disable its infoboxes if you want Better Party Defence to be your only source of infoboxes. |
+| Party Defence Tracker | The plugin can stay enabled. Disable its infoboxes if you want Better Party Defence to be your only source of infoboxes. |
 
 ## Display
 
-Better Party Defence can display the current estimated Defence directly on supported NPCs and through an InfoBox for magic, and an infobox for melee.
+- Show estimated Defence on the NPC, in an infobox, or both. **Show defence tracker** controls the overhead display. The **Defence info box** has its own toggle.
+- Customize the overhead position, font, size, skill icons, and Defence formatting. The Defence infobox uses the same colours and thresholds as the overhead display.
+- Where supported, Magic Defence has its own display and infobox settings. Magic Defence readouts are currently hidden in The Fractured Archive.
+- Separate infoboxes are available for weapon specs, Vulnerability, Shadow Barrage with the Shadow ancient sceptre, and the Red Keris timer in Tombs of Amascut.
 
-Display options include attached and detached layouts, configurable fonts and sizing, skill icons, Defence formatting.
+## Party support and sync
 
-Magic Defence is tracked separately where supported and can use its own InfoBox.
+Better Party Defence uses the same RuneLite party session as Hub Party Panel. You can join through Hub Party Panel and leave RuneLite’s built-in Party sidebar disabled. Better Party Defence detects your own supported special attacks directly, including when you play solo.
 
-## Party sync
+Party members running Better Party Defence can share supported Defence drains and current encounter state. Party members using RuneLite’s Special Attack Counter can also contribute supported special attacks through its standard party messages.
 
-Better Party Defence includes optional party synchronization for players using the plugin together.
-
-Sync allows current Defence state to be shared between supported clients instead of relying only on individual special attack events. This helps with situations such as players entering an encounter late, temporarily losing sight of a target, or returning to a raid after dying.
-
-Raid state is kept separate between different raid instances, even when players are members of the same Hub Party.
-
-Party synchronization can be disabled from the plugin settings without affecting normal local tracking.
-
-## Supported special attacks
-
-* Dragon Warhammer
-* Elder Maul
-* Bandos Godsword
-* Arclight / Darklight
-* Emberlight
-* Barrelchest Anchor
-* Bone Dagger
-* Dorgeshuun Crossbow
-* Accursed Sceptre
-* Tonalztics of Ralos
-* Seercull
-* Eye of Ayak
+Shared encounter state helps when a player joins late, briefly loses sight of a target, or returns after dying. Better Party Defence checks the party and encounter before applying shared updates, keeping separate raid instances isolated.
 
 ## Multi-target encounters
 
-The tracker can retain Defence state for multiple supported targets during the same encounter.
+Better Party Defence keeps separate Defence values and special attack histories for supported targets in the same encounter. For example, you can switch between Olm’s claws and return to each claw’s tracked value.
 
-This is useful for encounters such as Olm where different targets may be drained independently. Switching targets does not discard the previously tracked Defence or special attack history.
+## Supported special attacks
 
+- Dragon Warhammer
+- Elder Maul
+- Bandos Godsword
+- Arclight / Darklight
+- Emberlight
+- Barrelchest Anchor
+- Bone Dagger
+- Dorgeshuun Crossbow
+- Accursed Sceptre
+- Tonalztics of Ralos
+- Seercull
+- Eye of Ayak
 
-## Attribution
-
-Boss stat data and defence-drain calculations were derived from OSParty code supplied with the original project.
-
-Local special attack detection follows RuneLite's Special Attack Counter event model, reduced to the functionality required for defence-draining weapons.
-
-See `ATTRIBUTION.md` and `LICENSE-OSPARTY.txt` for additional information and licensing.
+Better Party Defence also tracks Defence reductions from;
+- Vulnerability, including the Tome of Water bonus
+- Shadow Barrage with the Shadow ancient sceptre when applicable. 
+- A successful Red Keris spec in Tombs of Amascut starts a party-synced damage-effect timer.
 
 ## Supported bosses
 
@@ -89,7 +73,6 @@ Better Party Defence currently supports the following bosses and encounter targe
 - Lizardman Shaman
 - Skeletal Mystic
 - Tekton
-- Tekton (Enraged)
 - Vasa Nistirio
 
 ### Theatre of Blood
@@ -124,9 +107,7 @@ Better Party Defence currently supports the following bosses and encounter targe
 - Xarth
 - Dagon'hai Elder
 - Dagon'hai Monk (both monks tracked independently)
-- Ocellus 
-
-Magic defence tracking has been temporarily disabled within TFA until encounter-specific mechanics are confirmed.
+- Ocellus
 
 ### Other bosses
 
@@ -169,9 +150,7 @@ Magic defence tracking has been temporarily disabled within TFA until encounter-
 
 ## Not currently supported
 
-Some bosses and encounters are not currently supported by the Defence tracker.
-
-Notable examples include:
+Examples of bosses and encounters outside the current tracking list include the following.
 
 - Duke Sucellus
 - The Leviathan
@@ -183,34 +162,74 @@ Notable examples include:
 - Muttadiles
 - Vanguards
 
-Support may be expanded where reliable Defence-drain tracking is applicable.
+## Frequently asked questions
 
-## Experimental features
+### How do I report an issue?
 
- These work well enough to ship on by default, although may still have untested edge cases. 
- In current use they are working as intended, but additional real-world testing may uncover situations that still need refinement.
+Click **Report an issue** on the Plugin Hub page. Include the boss and phase, your plugin version, what you expected, and what the tracker showed. For party sync issues, include the versions your teammates were running and the Defence value each player saw, if available.
 
- 
-## About the Developer
- Hey, I’m Heisty! 
+### Is this vibe coded?
 
-I’m a cybersecurity enthusiast, independent developer, and Old School RuneScape player who enjoys building tools and problem solving to improve the quality of the things we already enjoy.
+Yes, I use AI. If you’re asking because something went wrong in-game, **what did the tracker show, and when in the encounter did it happen?** That gives me a starting point for reproducing it.
 
-I’m the creator of Better Party Defence on RuneLite, I made this plugin for myself and some friends in hopes of improving our osrs experience. We had some problems with existing plugins and I decided to tackle the problem myself, with the experience we have had.
+AI saves me time implementing the logic. I research how the game works, decide how the classes, methods, flags, and RuneLite events fit together, review the code, and monitor those events in developer mode while testing in-game.
 
-And yes, I vibe code. I’m not going to pretend otherwise. But there’s a lot more to it than simply asking AI to write something and calling it a day.
+I want to fix as many edge cases as I can. Calling it “vibe-coded slop” gives me nothing specific to investigate. The project is open source, and I’m happy to work with anyone who wants to report a bug or contribute a fix. AI is already part of many developers’ workflows, including mine.
 
-Behind my projects are countless hours of research, planning, problem-solving, testing, debugging, and refining ideas. I put a lot of thought into how things should work, why they should work that way, and how to make them better. AI helps me bring those ideas to life, but the vision, decisions, and attention to detail are very much my own. There are many, many hours behind this.
+### Is the plugin still being developed?
 
-I believe good software is about more than how the code gets written. It’s about identifying real problems, finding thoughtful solutions, and creating something people genuinely enjoy using.
+Yes. I read every issue on GitHub and use those reports and player feedback to track bugs and decide what to improve next.
 
-I build because I’m curious, I love solving problems, and there’s something incredibly satisfying about turning an idea into something useful.
+### Why did you build a separate Defence tracker?
 
-If you’ve enjoyed this as much as we have, and feel like supporting me, a coffee is always appreciated, but never expected! ☕❤️
+I built Better Party Defence for my friends and I after we ran into consistency issues with our setup. I never expected it to become a community plugin, but here we are. The changes we wanted for party sync and multi-target tracking were extensive enough to build a separate plugin. If your current tracker works well for you, feel free to keep using it. I made this plugin for myself, and I'm glad others get to enjoy it as well.
 
- [![Buy Me a Coffee](https://img.buymeacoffee.com/button-api/?text=Buy%20me%20a%20coffee&slug=heisty&button_colour=FFDD00&font_colour=000000&font_family=Cookie)](https://buymeacoffee.com/heisty)
+### I returned to a boss long after and it still had the same defence information?
+
+If you teleport away before finishing the fight in the open world outside of raids, Better Party Defence can keep the last Defence value it saw. Giant Mole, for example, leaving the area is treated as losing sight of the boss, so the tracker can pick up where it left off when you return.
+
+If the value is stale, in this example you would kill Giant Mole once while it’s visible on your client. The tracker will see the death, clear the saved value, and start fresh on the next kill.
+
+Or simply hop worlds, this will also clear the stale value and start fresh.
+
+
+## Attribution
+
+The original above hp display, boss stat data and Defence-drain calculations were derived and ported from OSParty code supplied with the original project. Local special attack detection follows RuneLite’s Special Attack Counter event model for defence-draining weapons.
+See [ATTRIBUTION.md](ATTRIBUTION.md) and [LICENSE-OSPARTY.txt](LICENSE-OSPARTY.txt) for details.
+
+
+## Original work in Better Party Defence
+
+- Designing Better Party Defence’s event system to record when special attacks land, tie them to the right encounter, and reconcile what different clients observed.
+
+- Sharing Defence values and special attack history across clients in the same party and encounter.
+
+- Tracking multiple targets independently and deciding when to keep or clear each target’s data as players leave render distance, return to a fight, or move between boss phases.
+
+- Resolving same-tick special attacks consistently across clients and distinguishing Ralos hits from thrall damage.
+
+- Building display options for current and previous targets, with matching colours and thresholds for the overhead display and Defence infobox.
+
+- There’s more original work throughout the plugin. The additions listed here took the most time to design, implement, and test.
+
+## If any of these solutions would help your plugin, you’re welcome to reuse my work with attribution under the project’s licence. Open source the world! 💘
+
+
+<h2 align="center">Yours truly, Heisty 🔥</h2>
+
+<p align="center">
+  I can do countless things right, and someone will still find the one thing I got wrong.
+  If they saw something I missed, I have a reason to come back tomorrow and do it better.
+  To all the haters, thank you. You give me another reason to improve every day.
+</p>
 
 
 
- 
-  
+<h3 align="center">Coffee is always appreciated, but never expected! ☕✨</h3>
+<p align="center">
+  <a href="https://buymeacoffee.com/heisty">
+    <img src="https://img.buymeacoffee.com/button-api/?text=Buy%20me%20a%20coffee&amp;slug=heisty&amp;button_colour=FFDD00&amp;font_colour=000000&amp;font_family=Cookie" alt="Buy Me a Coffee">
+  </a>
+</p>
+
