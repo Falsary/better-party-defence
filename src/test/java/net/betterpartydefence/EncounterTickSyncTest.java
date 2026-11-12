@@ -175,7 +175,7 @@ public class EncounterTickSyncTest
     {
         local(100, SpecialWeapon.DRAGON_WARHAMMER, 1);
         BpdDefenceSync wire = new BpdDefenceSync(301, tracker.syncState(), 0, 0, 1, 1, 0, 100, 9);
-        assertEquals(1, wire.getProtocolVersion());
+        assertEquals(BpdDefenceSync.PROTOCOL_VERSION, wire.getProtocolVersion());
         assertEquals(tracker.specHistory(), wire.toSyncState().getHistory());
         Field version = BpdDefenceSync.class.getDeclaredField("eventVersion");
         version.setAccessible(true);

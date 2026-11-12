@@ -278,8 +278,6 @@ public class LocalDefenceSpecDetectorRegressionTest
 				queued.add(invocation.getArgument(0));
 				return null;
 			}).when(clientThread).invokeLater(any(Runnable.class));
-
-			when(config.syncWithOtherPartyDefenceUsers()).thenReturn(true);
 			when(config.defenceAlwaysShow()).thenReturn(false);
 			tracker = new DefenceTracker(client, config);
 			target = addMole();

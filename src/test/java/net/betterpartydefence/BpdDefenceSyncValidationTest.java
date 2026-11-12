@@ -5,6 +5,7 @@ import com.google.gson.JsonObject;
 import java.util.Collections;
 import net.betterpartydefence.DefenceTracker.SpecHistoryEntry;
 import net.betterpartydefence.DefenceTracker.SyncState;
+import net.runelite.api.coords.WorldPoint;
 import net.runelite.client.plugins.specialcounter.SpecialWeapon;
 import org.junit.Test;
 import static org.junit.Assert.*;
@@ -20,7 +21,7 @@ public class BpdDefenceSyncValidationTest
         SyncState state = new SyncState("Chaos Elemental",BossDefence.CHAOS_ELEMENTAL,
             189,0,270,270,270,270,270,70,70,false,false,false,true,
             Collections.singletonList(row));
-        return gson.toJsonTree(new BpdDefenceSync(301,state,0,0,1,1,0,100,1)).getAsJsonObject();
+        return gson.toJsonTree(new BpdDefenceSync(301,state,0,0,3300,3900,2,100,1)).getAsJsonObject();
     }
 
     private SyncState decode(JsonObject json)
@@ -38,54 +39,106 @@ public class BpdDefenceSyncValidationTest
 
     @Test public void legacyPacketWithoutOptionalFieldsRemainsReadable()
     {
-        JsonObject json = packet();
-        for (String key : new String[]{"eventVersion","historyEventIds","historyTickAnchors","historyEncounterTicks","syncUncertain"})
-        { json.remove(key); }
-        SyncState decoded = decode(json);
+        String legacy = "{\"protocolVersion\":1,\"world\":301,\"bossType\":\"CHAOS_ELEMENTAL\","
+            + "\"bossX\":3300,\"bossY\":3900,\"bossPlane\":2,\"partyId\":7,\"drained\":true,"
+            + "\"current\":189,\"min\":0,\"base\":270,\"attackLevel\":265,\"strengthLevel\":260,"
+            + "\"magicLevel\":270,\"magicBaseLevel\":270,\"magicDef\":70,\"magicBaseDef\":70,"
+            + "\"historyPlayers\":[\"Alice\"],\"historyWeapons\":[\"DRAGON_WARHAMMER\"],\"historyHits\":[1]}";
+        BpdDefenceSync message = gson.fromJson(legacy, BpdDefenceSync.class);
+        assertTrue(message.isSupportedProtocol());
+        assertEquals(7L, message.getPartyId());
+        assertEquals(new WorldPoint(3300, 3900, 2), message.getBossLocation());
+        SyncState decoded = message.toSyncState();
         assertNotNull(decoded);
+        assertEquals(265, decoded.getAttackLevel());
+        assertEquals(260, decoded.getStrengthLevel());
         assertNull(decoded.getHistory().get(0).getEventId());
+        assertTrue(gson.toJson(packet()).length() < legacy.length());
+    }
+
+    @Test public void compactSnapshotOmitsDefaultsAndPacksTheBossTile()
+    {
+        JsonObject json = packet();
+        for (String omitted : new String[]{"partyId", "bossX", "bossY", "bossPlane", "at", "st",
+            "n", "u", "dm", "eo", "s", "i"})
+        {
+            assertFalse(omitted, json.has(omitted));
+        }
+        assertTrue(json.get("p").isJsonPrimitive());
+        BpdDefenceSync message = gson.fromJson(json, BpdDefenceSync.class);
+        assertEquals(new WorldPoint(3300, 3900, 2), message.getBossLocation());
+        assertEquals(270, message.toSyncState().getAttackLevel());
+        assertEquals(270, message.toSyncState().getStrengthLevel());
+        assertEquals(100, message.getHealthPercent());
+
+        json.addProperty("p", 1 << 30);
+        assertNull(gson.fromJson(json, BpdDefenceSync.class).getBossLocation());
+    }
+
+    @Test public void changedBossLevelsAndHistorySurviveCompactRoundTrip()
+    {
+        SpecHistoryEntry row = new SpecHistoryEntry("Alice", SpecialWeapon.BANDOS_GODSWORD,
+            null, 50, "event-1", "raid-start:1:7", 4, 123456L);
+        SyncState state = new SyncState("Corporeal Beast", BossDefence.CORPOREAL_BEAST,
+            0, 0, 310, 0, 17, 120, 150, -5, -5, false, false, false, true,
+            Collections.singletonList(row));
+        BpdDefenceSync message = new BpdDefenceSync(301, state, BpdDefenceSync.SCOPE_INSTANCE,
+            42, 3300, 3900, 2, 80, 9);
+        JsonObject json = gson.toJsonTree(message).getAsJsonObject();
+        assertFalse(json.has("h"));
+        assertEquals(-1, gson.fromJson(json, BpdDefenceSync.class).getHealthPercent());
+        assertEquals(state, decode(json));
+    }
+
+    static BpdDefenceSync withLegacyPartyId(BpdDefenceSync message, long partyId)
+    {
+        Gson gson = new Gson();
+        JsonObject json = gson.toJsonTree(message).getAsJsonObject();
+        json.addProperty("v", 1);
+        json.addProperty("partyId", partyId);
+        return gson.fromJson(json, BpdDefenceSync.class);
     }
 
     @Test public void mismatchedArraysCannotSilentlyLoseEvents()
     {
         JsonObject json = packet();
-        json.getAsJsonArray("historyHits").add(50);
+        json.getAsJsonArray("hh").add(50);
         assertNull(decode(json));
     }
 
     @Test public void unknownWeaponRejectsEntireSnapshot()
     {
         JsonObject json = packet();
-        json.getAsJsonArray("historyWeapons").set(0,gson.toJsonTree("UNSUPPORTED"));
+        json.getAsJsonArray("hw").set(0,gson.toJsonTree("UNSUPPORTED"));
         assertNull(decode(json));
     }
 
     @Test public void invalidAbsoluteTotalIsRejected()
     {
-        JsonObject json = packet(); json.addProperty("current",-1);
+        JsonObject json = packet(); json.addProperty("d",-1);
         assertNull(decode(json));
-        json = packet(); json.addProperty("current",271);
+        json = packet(); json.addProperty("d",271);
         assertNull(decode(json));
     }
 
     @Test public void uncertainPeerCannotSupplyAnAuthoritativeTotal()
     {
-        JsonObject json = packet(); json.addProperty("syncUncertain",true);
+        JsonObject json = packet(); json.addProperty("u",true);
         assertNull(decode(json));
     }
 
     @Test public void negativeHitAndMissingHistoryAreRejected()
     {
         JsonObject json = packet();
-        json.getAsJsonArray("historyHits").set(0,gson.toJsonTree(-1));
+        json.getAsJsonArray("hh").set(0,gson.toJsonTree(-1));
         assertNull(decode(json));
-        json = packet(); json.remove("historyPlayers");
+        json = packet(); json.remove("hp");
         assertNull(decode(json));
     }
 
     @Test public void unsupportedEventVersionFallsBackWithoutDroppingTheRow()
     {
-        JsonObject json = packet(); json.addProperty("eventVersion",999);
+        JsonObject json = packet(); json.addProperty("ev",999);
         SyncState decoded = decode(json);
         assertNotNull(decoded);
         assertEquals(1,decoded.getHistory().size());

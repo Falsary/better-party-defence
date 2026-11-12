@@ -2,6 +2,7 @@ package net.betterpartydefence;
 
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.IdentityHashMap;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -13,6 +14,7 @@ import java.util.concurrent.ConcurrentLinkedDeque;
 import javax.inject.Inject;
 import javax.inject.Singleton;
 import lombok.Value;
+import lombok.With;
 import lombok.AllArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import net.runelite.api.Actor;
@@ -119,6 +121,9 @@ public class DefenceTracker
 
 	/** Specs which contributed to the current tracked encounter, shown in the info-box tooltip. */
 	private final List<SpecHistoryEntry> specHistory = new ArrayList<>();
+	private final List<AppliedSpec> localSpecs = new ArrayList<>();
+	private static final int STANDARD_SPEC_CORRELATION_TICKS = 2;
+	private final Map<SpecHistoryEntry, Integer> recentStandardSpecs = new IdentityHashMap<>();
 	/** Logical encounters this client authoritatively observed ending on a dead NPC actor. */
 	private final Set<BossDefence> endedBosses = new LinkedHashSet<>();
 
@@ -177,6 +182,7 @@ public class DefenceTracker
 		String eventId;
 		String tickAnchor;
 		long encounterTick;
+		@With long observedAtMillis;
 
 		public SpecHistoryEntry(String playerName, SpecialWeapon weapon, int hit)
 		{
@@ -187,6 +193,12 @@ public class DefenceTracker
 			String eventId, String tickAnchor, long encounterTick)
 		{
 			this(playerName, weapon, null, hit, eventId, tickAnchor, encounterTick);
+		}
+
+		public SpecHistoryEntry(String playerName, SpecialWeapon weapon, SpellDrain spell, int hit,
+			String eventId, String tickAnchor, long encounterTick)
+		{
+			this(playerName, weapon, spell, hit, eventId, tickAnchor, encounterTick, 0L);
 		}
 
 		boolean isSupported()
@@ -225,6 +237,15 @@ public class DefenceTracker
 		SyncState state;
 	}
 
+	@Value
+	static class AppliedSpec
+	{
+		NPC npc;
+		BossDefence boss;
+		SpecHistoryEntry entry;
+		String previousId;
+	}
+
 	/** One defence-draining special attack landed on an NPC, from any party member. */
 	@Value
 	private static class Drain
@@ -237,12 +258,14 @@ public class DefenceTracker
 		String playerName;
 		String eventId;
 		int observedTick;
+		long observedAtMillis;
 		String tickAnchor;
 		int tickAnchorTick;
 		long tickAnchorValue;
 		/** Target observed when this drain was accepted; null when no actor was visible. */
 		DrainTarget target;
 		int receivedTick;
+		SpecHistoryEntry partyEntry;
 	}
 
 	/** Local, non-authoritative target evidence attached to one observation. */
@@ -488,8 +511,8 @@ public class DefenceTracker
 			return;
 		}
 		int tick = client.getTickCount();
-		Drain drain = new Drain(weapon, null, npcIndex, hit, world, playerName, null, -1, null, -1, 0L,
-			DrainTarget.from(target), tick);
+		Drain drain = new Drain(weapon, null, npcIndex, hit, world, playerName, null, -1, 0L, null, -1, 0L,
+			DrainTarget.from(target), tick, null);
 		if (weapon == SpecialWeapon.ELDER_MAUL)
 		{
 			pending.addFirst(drain);
@@ -509,12 +532,18 @@ public class DefenceTracker
 	public void queueLocal(
 		SpecialWeapon weapon, int npcIndex, int hit, int world, String playerName, NPC target)
 	{
+		queueLocal(weapon, npcIndex, hit, world, playerName, target, System.currentTimeMillis());
+	}
+
+	void queueLocal(SpecialWeapon weapon, int npcIndex, int hit, int world, String playerName,
+		NPC target, long observedAtMillis)
+	{
 		if (isSupportedWeapon(weapon))
 		{
 			int tick = client.getTickCount();
 			pending.addLast(new Drain(weapon, null, npcIndex, hit, world, playerName,
-				java.util.UUID.randomUUID().toString(), tick, sharedTickAnchor,
-				sharedTickAnchorTick, sharedTickAnchorValue, DrainTarget.from(target), tick));
+				java.util.UUID.randomUUID().toString(), tick, observedAtMillis, sharedTickAnchor,
+				sharedTickAnchorTick, sharedTickAnchorValue, DrainTarget.from(target), tick, null));
 		}
 	}
 
@@ -523,8 +552,8 @@ public class DefenceTracker
 		Player local = client.getLocalPlayer();
 		pending.addLast(new Drain(null, spell, npc.getIndex(), 1, client.getWorld(),
 			local == null ? null : local.getName(), java.util.UUID.randomUUID().toString(),
-			tick, sharedTickAnchor, sharedTickAnchorTick, sharedTickAnchorValue,
-			DrainTarget.from(npc), tick));
+			tick, System.currentTimeMillis(), sharedTickAnchor, sharedTickAnchorTick, sharedTickAnchorValue,
+			DrainTarget.from(npc), tick, null));
 	}
 
 	/** Set or clear the current shared encounter clock origin. Called before local spec capture. */
@@ -548,6 +577,9 @@ public class DefenceTracker
 	/** Client thread. */
 	public void onGameTick()
 	{
+		localSpecs.clear();
+		int currentTick = client.getTickCount();
+		recentStandardSpecs.values().removeIf(tick -> currentTick - tick > STANDARD_SPEC_CORRELATION_TICKS);
 		for (Drain drain = pending.poll(); drain != null; drain = pending.poll())
 		{
 			process(drain);
@@ -784,8 +816,100 @@ public class DefenceTracker
 		}
 	}
 
+	List<AppliedSpec> localSpecs()
+	{
+		return localSpecs;
+	}
+
+	void clearStandardSpecCorrelation()
+	{
+		recentStandardSpecs.clear();
+	}
+
+	boolean hasPartySpec(NPC npc, String eventId)
+	{
+		return historyForActor(npc).stream().anyMatch(entry -> eventId.equals(entry.getEventId()));
+	}
+
+	private List<SpecHistoryEntry> historyForActor(NPC npc)
+	{
+		if (boundActor == npc) { return specHistory; }
+		SavedState state = tracked.get(npc.getIndex());
+		return state != null && state.boundActor == npc ? state.history : Collections.emptyList();
+	}
+
+	enum PartySpecResult { ADDED, MATCHED_STANDARD, IGNORED }
+
+	PartySpecResult applyPartySpec(NPC npc, SpecHistoryEntry entry)
+	{
+		int previousCount = historyForActor(npc).size();
+		int tick = client.getTickCount();
+		processResolvedDrain(new Drain(entry.getWeapon(), entry.getSpell(), npc.getIndex(), entry.getHit(),
+			client.getWorld(), entry.getPlayerName(), entry.getEventId(), -1, 0, null, -1, 0,
+			DrainTarget.from(npc), tick, entry), npc);
+		if (!hasPartySpec(npc, entry.getEventId())) { return PartySpecResult.IGNORED; }
+		return historyForActor(npc).size() > previousCount ? PartySpecResult.ADDED : PartySpecResult.MATCHED_STANDARD;
+	}
+
+	static int specCorrelationHit(SpecialWeapon weapon, int hit)
+	{
+		return weapon == SpecialWeapon.TONALZTICS_OF_RALOS ? 0 : hit;
+	}
+
+	private boolean sameStandardSpec(SpecHistoryEntry standard, SpecHistoryEntry origin)
+	{
+		Integer receivedTick = recentStandardSpecs.get(standard);
+		if (receivedTick == null || client.getTickCount() - receivedTick > STANDARD_SPEC_CORRELATION_TICKS)
+		{
+			return false;
+		}
+		if (origin.getWeapon() == SpecialWeapon.TONALZTICS_OF_RALOS && standard.getWeapon() == origin.getWeapon())
+		{
+			standard = new SpecHistoryEntry(standard.getPlayerName(), standard.getWeapon(), origin.getHit());
+		}
+		return EncounterTimeline.samePayload(standard, origin);
+	}
+
 	private void apply(Drain drain, NPC npc)
 	{
+		SpecHistoryEntry partyEntry = drain.getPartyEntry();
+		if (partyEntry != null)
+		{
+			int match = -1;
+			for (int i = 0; i < specHistory.size(); i++)
+			{
+				SpecHistoryEntry prior = specHistory.get(i);
+				if (partyEntry.getEventId().equals(prior.getEventId())) { return; }
+				if (sameStandardSpec(prior, partyEntry))
+				{
+					if (match >= 0) { return; }
+					match = i;
+				}
+			}
+			if (match >= 0)
+			{
+				List<SpecHistoryEntry> corrected = new ArrayList<>(specHistory);
+				recentStandardSpecs.remove(corrected.set(match, partyEntry));
+				if (shouldReplayTimeline(corrected))
+				{
+					replayTimeline(corrected, npc);
+				}
+				else if (specHistory.get(match).getHit() != partyEntry.getHit())
+				{
+					// An unrelated legacy observation has no shared tick. Preserve its existing
+					// position while correcting the Ralos hit count for this matched cast.
+					loadSavedState(timelineBaseline());
+					for (SpecHistoryEntry event : corrected) { applyHistoryEvent(event, npc); }
+					specHistory.addAll(corrected);
+				}
+				else
+				{
+					specHistory.set(match, partyEntry);
+				}
+				return;
+			}
+		}
+
 		int hit = drain.getSpell() == null ? drain.getWeapon().computeHit(drain.getHit(), npc) : drain.getHit();
 		drained = true;
 		long before = bossDef;
@@ -806,10 +930,29 @@ public class DefenceTracker
 			}
 			applySpell(drain.getSpell());
 		}
-		recordSpecHistory(drain);
-		if (EncounterTimeline.complete(specHistory)
-			|| specHistory.size() > EncounterTimeline.MAX_EVENTS
-				&& specHistory.stream().allMatch(e -> e.getEventId() != null))
+		if (partyEntry == null)
+		{
+			recordSpecHistory(drain);
+			SpecHistoryEntry entry = specHistory.get(specHistory.size() - 1);
+			if (entry.getEventId() == null)
+			{
+				recentStandardSpecs.put(entry, drain.getReceivedTick());
+			}
+			else
+			{
+				String previousId = null;
+				for (int i = specHistory.size() - 2; i >= 0 && previousId == null; i--)
+				{
+					previousId = specHistory.get(i).getEventId();
+				}
+				localSpecs.add(new AppliedSpec(npc, bossType, entry, previousId));
+			}
+		}
+		else
+		{
+			specHistory.add(partyEntry);
+		}
+		if (shouldReplayTimeline(specHistory))
 		{
 			replayTimeline(new ArrayList<>(specHistory), npc);
 		}
@@ -1250,7 +1393,7 @@ public class DefenceTracker
 			if (encounterTick >= 0)
 			{
 				specHistory.add(new SpecHistoryEntry(playerName, drain.getWeapon(), drain.getSpell(), drain.getHit(),
-					drain.getEventId(), tickAnchor, encounterTick));
+					drain.getEventId(), tickAnchor, encounterTick, drain.getObservedAtMillis()));
 				return;
 			}
 		}
@@ -1261,7 +1404,8 @@ public class DefenceTracker
 			localAnchorTick = drain.getObservedTick();
 		}
 		specHistory.add(new SpecHistoryEntry(playerName, drain.getWeapon(), drain.getSpell(), drain.getHit(),
-			drain.getEventId(), localTickAnchor, (long) drain.getObservedTick() - localAnchorTick));
+			drain.getEventId(), localTickAnchor, (long) drain.getObservedTick() - localAnchorTick,
+			drain.getObservedAtMillis()));
 	}
 
 	/**
@@ -1765,7 +1909,7 @@ public class DefenceTracker
 		if (merged == null || new java.util.HashSet<>(merged).equals(new java.util.HashSet<>(target.history))) { return false; }
 		// Without a shared identified event there is no proof that the two stat epochs agree.
 		boolean shared = target.history.stream().anyMatch(a -> incoming.getHistory().stream()
-			.anyMatch(b -> a.equals(b) || (a.getEventId() == null || b.getEventId() == null)
+			.anyMatch(b -> EncounterTimeline.compatibleEvent(a, b) || (a.getEventId() == null || b.getEventId() == null)
 				&& EncounterTimeline.samePayload(a, b)));
 		if (!shared) { return false; }
 		if (hasPendingFor(npc.getIndex())) { return false; }
@@ -1817,10 +1961,14 @@ public class DefenceTracker
 		}
 	}
 
-	/** Reuse the existing weapon formulas and the actual encounter's scaled baseline. */
-	private void replayTimeline(List<SpecHistoryEntry> events, NPC npc)
+	private boolean shouldReplayTimeline(List<SpecHistoryEntry> events)
 	{
-		events.sort(EncounterTimeline.DISPLAY_ORDER);
+		return EncounterTimeline.complete(events) || events.size() > EncounterTimeline.MAX_EVENTS
+			&& events.stream().allMatch(e -> e.getEventId() != null);
+	}
+
+	private SavedState timelineBaseline()
+	{
 		SavedState baseline = snapshotCurrent();
 		baseline.bossDef = baseline.bossStartDef;
 		baseline.atkLevel = bossType.getBaseAtk();
@@ -1829,6 +1977,14 @@ public class DefenceTracker
 		baseline.magicDefBonus = baseline.magicStartDefBonus;
 		baseline.accursedApplied = false;
 		baseline.history.clear();
+		return baseline;
+	}
+
+	/** Reuse the existing weapon formulas and the actual encounter's scaled baseline. */
+	private void replayTimeline(List<SpecHistoryEntry> events, NPC npc)
+	{
+		events.sort(EncounterTimeline.DISPLAY_ORDER);
+		SavedState baseline = timelineBaseline();
 		SavedState result = EncounterTimeline.replay(events, baseline, new EncounterTimeline.Replay<SavedState>()
 		{
 			@Override public SavedState apply(SavedState state, SpecHistoryEntry event)
@@ -2483,6 +2639,8 @@ public class DefenceTracker
 
 	public void reset(String reason)
 	{
+		recentStandardSpecs.clear();
+		localSpecs.clear();
 		if (bossType != null || bossIndex != -1 || !tracked.isEmpty() || !unboundTracked.isEmpty()
 			|| !pending.isEmpty() || !heldDrains.isEmpty())
 		{

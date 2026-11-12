@@ -23,7 +23,7 @@ public interface BetterPartyDefenceConfig extends Config
 
 	@ConfigSection(
 		name = "Tracker Position",
-		description = "Placement and Defence values shared by the current and previous target readouts.",
+		description = "Placement and formatting of Defence readouts.",
 		position = 1)
 	String MAIN_TRACKER = "mainTracker";
 
@@ -36,36 +36,29 @@ public interface BetterPartyDefenceConfig extends Config
 
 	@ConfigSection(
 		name = "Text & Icons",
-		description = "Font, skill icons, and text appearance shared by current and previous target readouts.",
+		description = "Font, skill icons, and text appearance for Defence readouts.",
 		position = 3,
 		closedByDefault = true)
 	String TEXT = "text";
 
 	@ConfigSection(
 		name = "Colours",
-		description = "Colours and low-Defence threshold shared by current and previous target readouts.",
+		description = "Colours and low-Defence threshold for Defence readouts.",
 		position = 4,
 		closedByDefault = true)
 	String COLOURS = "colours";
 
 	@ConfigSection(
 		name = "Magic Defence",
-		description = "Magic-defence settings shared by current and previous target readouts.",
+		description = "Magic-defence display settings.",
 		position = 5,
 		closedByDefault = true)
 	String MAGIC = "magic";
 
 	@ConfigSection(
-		name = "Party & Previous Target",
-		description = "Experimental party syncing and previous-target tracking features.",
-		position = 6,
-		closedByDefault = true)
-	String PARTY_AND_PREVIOUS = "partyAndPrevious";
-
-	@ConfigSection(
 		name = "Other infoboxes",
 		description = "Infoboxes for landed boss effects.",
-		position = 7,
+		position = 6,
 		closedByDefault = true)
 	String OTHER_INFOBOXES = "otherInfoboxes";
 
@@ -112,7 +105,7 @@ public interface BetterPartyDefenceConfig extends Config
 	@ConfigItem(
 		keyName = "defenceHpBarPosition",
 		name = "Position on NPC",
-		description = "Where both the current and previous target readouts appear on their NPCs.",
+		description = "Where the Defence readout appears on each NPC.",
 		position = 2,
 		section = MAIN_TRACKER)
 	default DefenceOverlayPosition defenceHpBarPosition() { return DefenceOverlayPosition.ABOVE_HP_BAR; }
@@ -122,7 +115,7 @@ public interface BetterPartyDefenceConfig extends Config
 	@ConfigItem(
 		keyName = "defenceHpBarYOffset",
 		name = "Vertical offset",
-		description = "Move both current and previous target readouts vertically. Positive values move them up; negative values move them down.",
+		description = "Move Defence readouts vertically. Positive values move them up; negative values move them down.",
 		position = 3,
 		section = MAIN_TRACKER)
 	default int defenceHpBarYOffset() { return 0; }
@@ -130,7 +123,7 @@ public interface BetterPartyDefenceConfig extends Config
 	@ConfigItem(
 		keyName = "defenceValueFormat",
 		name = "Defence value format",
-		description = "Choose how Defence is written for both current and previous targets, such as 142, 142/200, 71%, or 142 (71%).",
+		description = "Choose a Defence format, such as 142, 142/200, 71%, or 142 (71%).",
 		position = 4,
 		section = MAIN_TRACKER)
 	default DefenceValueFormat defenceValueFormat() { return DefenceValueFormat.CURRENT; }
@@ -202,7 +195,7 @@ public interface BetterPartyDefenceConfig extends Config
 	@ConfigItem(
 		keyName = "defenceShowIcons",
 		name = "Show skill icons",
-		description = "Draw Defence and Magic skill icons in front of both current and previous target readouts.",
+		description = "Draw Defence and Magic skill icons in front of Defence readouts.",
 		position = 1,
 		section = TEXT)
 	default boolean defenceShowIcons() { return true; }
@@ -218,7 +211,7 @@ public interface BetterPartyDefenceConfig extends Config
 	@ConfigItem(
 		keyName = "defenceFont",
 		name = "Font",
-		description = "Font used by both current and previous target readouts. Choose Add custom font... to select a local font file.",
+		description = "Font used for Defence readouts. Choose Add custom font... to select a local font file.",
 		position = 3,
 		section = TEXT)
 	default TrackerFont defenceFont() { return TrackerFont.RUNESCAPE; }
@@ -227,7 +220,7 @@ public interface BetterPartyDefenceConfig extends Config
 	@ConfigItem(
 		keyName = "defenceFontSizePx",
 		name = "Font size",
-		description = "Font size for both current and previous target readouts, in pixels.",
+		description = "Font size for Defence readouts, in pixels.",
 		position = 4,
 		section = TEXT)
 	default int defenceFontSize() { return 15; }
@@ -235,7 +228,7 @@ public interface BetterPartyDefenceConfig extends Config
 	@ConfigItem(
 		keyName = "defenceBoldText",
 		name = "Bold text",
-		description = "Use bold text for both current and previous target readouts.",
+		description = "Use bold text for Defence readouts.",
 		position = 5,
 		section = TEXT)
 	default boolean defenceBoldText() { return false; }
@@ -252,8 +245,8 @@ public interface BetterPartyDefenceConfig extends Config
 	@ConfigItem(
 		keyName = "defenceTextPlate",
 		name = "Text background",
-		description = "Draw a translucent background behind both current and previous target readouts.",
-		position = 7,
+		description = "Draw a translucent background behind Defence readouts.",
+		position = 6,
 		section = TEXT)
 	default boolean defenceTextPlate() { return false; }
 
@@ -342,21 +335,4 @@ public interface BetterPartyDefenceConfig extends Config
 		position = 4,
 		section = MAGIC)
 	default Color magicDefenceColor() { return new Color(0x22, 0x5E, 0xA8); }
-
-	@ConfigItem(
-		keyName = "syncWithOtherPartyDefenceUsers",
-		name = "Sync with BPD party members",
-		description = "Share tracker state with other Better Party Defence users who are in the same RuneLite party and encounter.",
-		position = 1,
-		section = PARTY_AND_PREVIOUS)
-	default boolean syncWithOtherPartyDefenceUsers() { return true; }
-
-	@ConfigItem(
-		keyName = "previousTargetDisplay",
-		name = "Keep previous target visible",
-		description = "Keep the previously active drained target visible after you switch targets. It uses the same position, values, font, colours, icons, and Magic settings as the current target.",
-		position = 2,
-		section = PARTY_AND_PREVIOUS)
-	default boolean previousTargetDisplay() { return true; }
-
 }

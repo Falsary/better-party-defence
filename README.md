@@ -9,7 +9,7 @@ Better Party Defence is a RuneLite plugin that estimates the current Defence of 
 <br></br>
 
 
-># Current version: **v1.4.2**
+># Current version: **v1.5**
 > **Seeing different Defence values?** Check that everyone in your party is running the same version of Better Party Defence. If someone has had RuneLite open since before the update, have them restart their client and check again.
 
 <br></br>
@@ -244,8 +244,6 @@ See [ATTRIBUTION.md](ATTRIBUTION.md) and [LICENSE-OSPARTY.txt](LICENSE-OSPARTY.t
 - Sharing Defence values and special attack history across clients in the same party and encounter.
 
 - Tracking multiple targets independently and deciding when to keep or clear each target’s data as players leave render distance, return to a fight, or move between boss phases.
-
-- Resolving same-tick special attacks consistently across clients and distinguishing Ralos hits from thrall damage.
 
 - Building display options for current and previous targets, with matching colours and thresholds for the overhead display and Defence infobox.
 
