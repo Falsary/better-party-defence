@@ -9,7 +9,7 @@ Better Party Defence is a RuneLite plugin that estimates the current Defence of 
 <br></br>
 
 
-># Current version: **v1.4.1**
+># Current version: **v1.4.2**
 > **Seeing different Defence values?** Check that everyone in your party is running the same version of Better Party Defence. If someone has had RuneLite open since before the update, have them restart their client and check again.
 
 <br></br>
