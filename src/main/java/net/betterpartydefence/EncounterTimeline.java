@@ -1,6 +1,8 @@
 package net.betterpartydefence;
 
+import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -14,13 +16,15 @@ import net.betterpartydefence.DefenceTracker.SpecHistoryEntry;
 /**
  * Event identity and clock-domain rules for the optional event extension. A tick is relative to
  * an explicit origin event, never to packet arrival or another client's RuneLite login counter.
- * Unknown clock alignment is deliberately unordered. IDs break presentation ties, not game ties.
+ * Origin timestamps can order widely separated hits on different clocks. IDs only break display ties.
  */
 final class EncounterTimeline
 {
 	static final int VERSION = 1;
 	static final int MAX_EVENTS = 256;
 	static final int MAX_REPLAY_STEPS = 100000;
+	/** Allow several game ticks of clock skew and callback delay between clients. */
+	private static final long CROSS_CLOCK_ORDER_GAP_MILLIS = 5_000L;
 	static final Comparator<SpecHistoryEntry> DISPLAY_ORDER = Comparator
 		.comparing(SpecHistoryEntry::getTickAnchor)
 		.thenComparingLong(SpecHistoryEntry::getEncounterTick)
@@ -83,9 +87,10 @@ final class EncounterTimeline
 		for (SpecHistoryEntry event : incoming)
 		{
 			SpecHistoryEntry old = ids.putIfAbsent(event.getEventId(), event);
-			if (old != null && !old.equals(event))
+			if (old != null)
 			{
-				return null;
+				if (!compatibleEvent(old, event)) { return null; }
+				if (old.getObservedAtMillis() == 0L) { ids.put(event.getEventId(), event); }
 			}
 		}
 		List<SpecHistoryEntry> result = new ArrayList<>(ids.values());
@@ -109,8 +114,8 @@ final class EncounterTimeline
 			for (SpecHistoryEntry candidate : candidates)
 			{
 				if (candidate == null || candidate.getEventId() == null || !samePayload(event, candidate)) { continue; }
-				if (match != null && !match.equals(candidate)) { return null; }
-				match = candidate;
+				if (match != null && !compatibleEvent(match, candidate)) { return null; }
+				if (match == null || match.getObservedAtMillis() == 0L) { match = candidate; }
 			}
 			if (match == null || result.contains(match)) { return null; }
 			// Repeated identical legacy rows cannot be assigned to individual source IDs safely.
@@ -123,6 +128,14 @@ final class EncounterTimeline
 			result.add(match);
 		}
 		return result;
+	}
+
+	/** Older peers can relay the same event without its optional timestamp. */
+	static boolean compatibleEvent(SpecHistoryEntry a, SpecHistoryEntry b)
+	{
+		return a.equals(b)
+			|| ((a.getObservedAtMillis() == 0L || b.getObservedAtMillis() == 0L)
+				&& a.withObservedAtMillis(0L).equals(b.withObservedAtMillis(0L)));
 	}
 
 	static boolean samePayload(SpecHistoryEntry a, SpecHistoryEntry b)
@@ -150,6 +163,13 @@ final class EncounterTimeline
 		}
 		long uncertainty = tickUncertainty(a.getTickAnchor());
 		return a.getEncounterTick() + uncertainty < b.getEncounterTick();
+	}
+
+	private static boolean crossClockBefore(SpecHistoryEntry a, SpecHistoryEntry b)
+	{
+		return !Objects.equals(a.getTickAnchor(), b.getTickAnchor())
+			&& a.getObservedAtMillis() > 0L && b.getObservedAtMillis() > a.getObservedAtMillis()
+			&& b.getObservedAtMillis() - a.getObservedAtMillis() > CROSS_CLOCK_ORDER_GAP_MILLIS;
 	}
 
 	static long tickUncertainty(String anchor)
@@ -210,19 +230,56 @@ final class EncounterTimeline
 			this.replay = replay;
 			this.effectKey = effectKey;
 			remainingPredecessors = new int[events.size()];
+			if (buildGraph(true) && hasCycle())
+			{
+				// An adjusted or skewed wall clock can contradict known game-tick order.
+				buildGraph(false);
+			}
+		}
+
+		private boolean buildGraph(boolean useWallClock)
+		{
+			successors.clear();
+			Arrays.fill(remainingPredecessors, 0);
+			boolean usedWallClock = false;
 			for (int i = 0; i < events.size(); i++)
 			{
 				List<Integer> next = new ArrayList<>();
 				for (int j = 0; j < events.size(); j++)
 				{
-					if (before(events.get(i), events.get(j)))
+					SpecHistoryEntry a = events.get(i);
+					SpecHistoryEntry b = events.get(j);
+					boolean estimated = useWallClock && crossClockBefore(a, b);
+					if (estimated || before(a, b))
 					{
+						usedWallClock |= estimated;
 						next.add(j);
 						remainingPredecessors[j]++;
 					}
 				}
 				successors.add(next);
 			}
+			return usedWallClock;
+		}
+
+		private boolean hasCycle()
+		{
+			int[] predecessors = remainingPredecessors.clone();
+			ArrayDeque<Integer> ready = new ArrayDeque<>();
+			for (int i = 0; i < predecessors.length; i++)
+			{
+				if (predecessors[i] == 0) { ready.addLast(i); }
+			}
+			int visited = 0;
+			while (!ready.isEmpty())
+			{
+				visited++;
+				for (int next : successors.get(ready.removeFirst()))
+				{
+					if (--predecessors[next] == 0) { ready.addLast(next); }
+				}
+			}
+			return visited != events.size();
 		}
 
 		private void visit(S state, boolean[] used, int depth)

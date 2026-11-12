@@ -2,7 +2,6 @@ package net.betterpartydefence;
 
 import java.awt.Dimension;
 import java.awt.Graphics2D;
-import java.util.List;
 import net.betterpartydefence.DefenceTracker.DefenceState;
 import net.runelite.api.Client;
 import net.runelite.api.NPC;
@@ -19,19 +18,17 @@ public class NpcDefenceOverlay extends Overlay
 	private final BetterPartyDefenceConfig config;
 	private final TrackerFontManager fontManager;
 	private final DefenceOverlayRenderer renderer;
-	private final PreviousTargetDisplayState previousTargetState;
 	private final InitialSyncDisplayGate initialSyncDisplayGate;
 
 	public NpcDefenceOverlay(Client client, DefenceTracker tracker, BetterPartyDefenceConfig config,
 		SkillIconSource skillIcons, TrackerFontManager fontManager,
-		PreviousTargetDisplayState previousTargetState, InitialSyncDisplayGate initialSyncDisplayGate)
+		InitialSyncDisplayGate initialSyncDisplayGate)
 	{
 		this.client = client;
 		this.tracker = tracker;
 		this.config = config;
 		this.fontManager = fontManager;
 		this.renderer = new DefenceOverlayRenderer(config, skillIcons);
-		this.previousTargetState = previousTargetState;
 		this.initialSyncDisplayGate = initialSyncDisplayGate;
 		setPosition(OverlayPosition.DYNAMIC);
 		setLayer(OverlayLayer.ABOVE_SCENE);
@@ -46,43 +43,21 @@ public class NpcDefenceOverlay extends Overlay
 		}
 
 		graphics.setFont(fontManager.font());
-		List<DefenceState> states = tracker.states();
-		DefenceState previous = config.previousTargetDisplay()
-			? previousTargetState.previousState(states) : null;
-
-		// Every independently tracked target owns its own overhead. The previous-target option
-		// only ensures that target is drawn last; it must never hide other valid party evidence.
-		int previousIndex = previous == null ? -1 : previous.getNpcIndex();
-		renderTrackedTargets(graphics, states, previousIndex);
-
-		if (previous != null)
-		{
-			NPC npc = liveNpc(previous.getNpcIndex());
-			if (npc != null && isDisplayable(previous))
-			{
-				renderAtNpc(graphics, previous, npc,
-					config.defenceHpBarPosition(), config.defenceHpBarYOffset());
-			}
-		}
-		return null;
-	}
-
-	private void renderTrackedTargets(Graphics2D graphics, List<DefenceState> states,
-		int alreadyScheduledIndex)
-	{
 		DefenceOverlayPosition position = config.defenceHpBarPosition();
-		for (DefenceState state : states)
+		int yOffset = config.defenceHpBarYOffset();
+		for (DefenceState state : tracker.states())
 		{
-			if (state == null || state.getNpcIndex() == alreadyScheduledIndex || !isDisplayable(state))
+			if (!isDisplayable(state))
 			{
 				continue;
 			}
 			NPC npc = liveNpc(state.getNpcIndex());
 			if (npc != null)
 			{
-				renderAtNpc(graphics, state, npc, position, config.defenceHpBarYOffset());
+				renderAtNpc(graphics, state, npc, position, yOffset);
 			}
 		}
+		return null;
 	}
 
 	private void renderAtNpc(Graphics2D graphics, DefenceState state, NPC npc,

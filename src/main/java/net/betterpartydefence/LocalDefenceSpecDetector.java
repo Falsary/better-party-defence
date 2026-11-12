@@ -57,6 +57,7 @@ class LocalDefenceSpecDetector
 	private SpecialWeapon weapon;
 	private NPC target;
 	private int hitsplatTick = -1;
+	private long hitsplatObservedAtMillis;
 	private boolean hpChangedOnSpecCycle;
 	private final List<Integer> hitsplats = new ArrayList<>();
 
@@ -153,6 +154,7 @@ class LocalDefenceSpecDetector
 		hpChangedOnSpecCycle = lastHpChangeCycle == client.getGameCycle();
 		hitsplatTick = serverTick + hitDelay(used, npc);
 		hitsplats.clear();
+		hitsplatObservedAtMillis = 0L;
 		log.debug("Local defence spec armed: weapon={} target={} npc={} expectedTick={}",
 			weapon, npc.getName(), npc.getIndex(), hitsplatTick);
 	}
@@ -195,6 +197,10 @@ class LocalDefenceSpecDetector
 		int tick = client.getTickCount();
 		if (tick == hitsplatTick)
 		{
+			if (hitsplats.isEmpty())
+			{
+				hitsplatObservedAtMillis = System.currentTimeMillis();
+			}
 			hitsplats.add(splat.getAmount());
 			log.debug("Local defence spec hitsplat accepted: weapon={} amount={} type={} tick={} expected={}",
 				weapon, splat.getAmount(), splat.getHitsplatType(), tick, hitsplatTick);
@@ -298,7 +304,8 @@ class LocalDefenceSpecDetector
 		// Apply locally immediately; no party or websocket round-trip is required for our own overlay.
 		// Pass the player name with the drain so the info-box hover history is tied to the same
 		// accepted event as the Defence calculation.
-		defenceTracker.queueLocal(used, npcIndex, rawHit, world, playerName, npc);
+		defenceTracker.queueLocal(used, npcIndex, rawHit, world, playerName, npc,
+			hitsplatObservedAtMillis > 0 ? hitsplatObservedAtMillis : System.currentTimeMillis());
 
 		// Hub Party Panel uses this same PartyService session. If RuneLite's core Special Attack
 		// Counter is active it already sends this exact message, so never duplicate it.
@@ -374,5 +381,6 @@ class LocalDefenceSpecDetector
 		hitsplatTick = -1;
 		hpChangedOnSpecCycle = false;
 		hitsplats.clear();
+		hitsplatObservedAtMillis = 0L;
 	}
 }

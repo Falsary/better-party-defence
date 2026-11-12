@@ -56,7 +56,6 @@ public class EncounterLifecycleRegressionTest
 		when(npc.getId()).thenReturn(1);
 		when(npc.getHealthRatio()).thenReturn(1);
 		when(npcs.byIndex(NPC_INDEX)).thenReturn(npc);
-		when(config.syncWithOtherPartyDefenceUsers()).thenReturn(true);
 
 		tracker = new DefenceTracker(client, config);
 		plugin = new BetterPartyDefencePlugin();

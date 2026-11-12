@@ -559,8 +559,6 @@ public class CombatEvidencePreservationRegressionTest
 			when(localPlayer.getInteracting()).thenAnswer(invocation -> interacting);
 			when(localPlayer.getWorldLocation()).thenReturn(new WorldPoint(3200, 3200, 0));
 			when(client.getLocalPlayer()).thenReturn(localPlayer);
-
-			when(config.syncWithOtherPartyDefenceUsers()).thenReturn(true);
 			tracker = new DefenceTracker(client, config);
 
 			ClientThread clientThread = mock(ClientThread.class);

@@ -50,7 +50,6 @@ public class PartySyncRegressionTest
 		when(npcs.byIndex(81)).thenReturn(npc);
 		when(npcs.iterator()).thenAnswer(i -> Collections.singletonList(npc).iterator());
 		BetterPartyDefenceConfig config=mock(BetterPartyDefenceConfig.class);
-		when(config.syncWithOtherPartyDefenceUsers()).thenReturn(true);
 		tracker=new DefenceTracker(client,config);
 		plugin=new BetterPartyDefencePlugin();
 		set("client",client); set("config",config); set("defenceTracker",tracker);
@@ -627,8 +626,9 @@ public class PartySyncRegressionTest
 		set("clientThread", thread);
 		when(client.getTopLevelWorldView().isInstance()).thenReturn(true);
 
-		BpdDefenceSync old = new BpdDefenceSync(301, state(189, a),
-			BpdDefenceSync.SCOPE_INSTANCE, fingerprint(), 0, 0, 0, 100, 1).withPartyId(1L);
+		BpdDefenceSync old = BpdDefenceSyncValidationTest.withLegacyPartyId(
+			new BpdDefenceSync(301, state(189, a),
+				BpdDefenceSync.SCOPE_INSTANCE, fingerprint(), 0, 0, 0, 100, 1), 1L);
 		old.setMemberId(7L);
 		plugin.onBpdDefenceSync(old);
 

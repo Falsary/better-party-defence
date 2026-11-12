@@ -87,7 +87,6 @@ public class ArchiveGuardianScopeRegressionTest
 		when(senderMember.getDisplayName()).thenReturn("RalosPlayer");
 
 		BetterPartyDefenceConfig config = mock(BetterPartyDefenceConfig.class);
-		when(config.syncWithOtherPartyDefenceUsers()).thenReturn(true);
 		tracker = new DefenceTracker(client, config);
 
 		ClientThread clientThread = mock(ClientThread.class);

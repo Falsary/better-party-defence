@@ -79,23 +79,6 @@ public class NpcDefenceOverlayDisplayRegressionTest
 	}
 
 	@Test
-	public void previousTargetSettingDoesNotSuppressOtherTrackedOverheads()
-	{
-		Harness h = new Harness();
-		h.previousTargetDisplay = false;
-		NPC bossA = h.addNpc(BOSS_A_INDEX, "Chaos Elemental");
-		NPC bossB = h.addNpc(BOSS_B_INDEX, "Corporeal Beast");
-		h.selectAndDrain(bossB, "LocalPlayer");
-		h.trackPartySpec(bossA, "Alice");
-
-		h.renderOverlay();
-
-		assertEquals(BOSS_B_INDEX, h.tracker.state().getNpcIndex());
-		verify(bossA).getCanvasTextLocation(any(Graphics2D.class), anyString(), anyInt());
-		verify(bossB).getCanvasTextLocation(any(Graphics2D.class), anyString(), anyInt());
-	}
-
-	@Test
 	public void threeTrackedBossesRenderIndependently()
 	{
 		Harness h = new Harness();
@@ -116,7 +99,7 @@ public class NpcDefenceOverlayDisplayRegressionTest
 	}
 
 	@Test
-	public void previousTargetIsDrawnOnceWithOtherPartyTarget()
+	public void switchingTargetsStillDrawsEachTrackedBossOnce()
 	{
 		Harness h = new Harness();
 		NPC bossA = h.addNpc(BOSS_A_INDEX, "Chaos Elemental");
@@ -262,10 +245,8 @@ public class NpcDefenceOverlayDisplayRegressionTest
 		private final SkillIconManager skillIconManager = mock(SkillIconManager.class);
 		private final InitialSyncDisplayGate initialSyncDisplayGate = new InitialSyncDisplayGate();
 		private final DefenceTracker tracker;
-		private final PreviousTargetDisplayState previousTargetDisplayState;
 		private final NpcDefenceOverlay overlay;
 
-		private boolean previousTargetDisplay = true;
 		private boolean alwaysShow;
 		private boolean defenceEnabled = true;
 		private DefenceOverlayPosition position = DefenceOverlayPosition.ABOVE_HP_BAR;
@@ -292,7 +273,6 @@ public class NpcDefenceOverlayDisplayRegressionTest
 
 			when(config.defenceHpBar()).thenAnswer(invocation -> defenceEnabled);
 			when(config.defenceAlwaysShow()).thenAnswer(invocation -> alwaysShow);
-			when(config.previousTargetDisplay()).thenAnswer(invocation -> previousTargetDisplay);
 			when(config.defenceHpBarPosition()).thenAnswer(invocation -> position);
 			when(config.defenceHpBarYOffset()).thenReturn(0);
 			when(config.defenceValueFormat()).thenReturn(DefenceValueFormat.CURRENT);
@@ -320,10 +300,9 @@ public class NpcDefenceOverlayDisplayRegressionTest
 			when(fontMetrics.getDescent()).thenReturn(3);
 
 			tracker = new DefenceTracker(client, config);
-			previousTargetDisplayState = new PreviousTargetDisplayState(client, tracker, config);
 			overlay = new NpcDefenceOverlay(client, tracker, config,
 				new SkillIconSource(client, skillIconManager, config),
-				new TrackerFontManager(config), previousTargetDisplayState, initialSyncDisplayGate);
+				new TrackerFontManager(config), initialSyncDisplayGate);
 		}
 
 		private NPC addNpc(int index, String name)
@@ -375,7 +354,6 @@ public class NpcDefenceOverlayDisplayRegressionTest
 		{
 			tick++;
 			tracker.onGameTick();
-			previousTargetDisplayState.update();
 		}
 
 		private void renderOverlay()

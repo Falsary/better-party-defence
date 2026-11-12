@@ -109,6 +109,48 @@ public class EncounterTimelineReplayTest
 		assertEquals(full, reduced);
 	}
 
+	@Test public void closeCrossClockHitsRemainUnordered()
+	{
+		SpecHistoryEntry first = event("A", SpecialWeapon.ARCLIGHT, 1, "a").withObservedAtMillis(10_000);
+		SpecHistoryEntry second = new SpecHistoryEntry("B", SpecialWeapon.DRAGON_WARHAMMER, 1,
+			"b", "peer-clock", 0).withObservedAtMillis(10_500);
+		assertEquals("ba", EncounterTimeline.replay(List.of(first, second), "", recordingOrder()));
+	}
+
+	@Test public void sharedTicksOverrideWallClockAndClockCycles()
+	{
+		SpecHistoryEntry first = event("A", SpecialWeapon.ARCLIGHT, 1, "a").withObservedAtMillis(30_000);
+		SpecHistoryEntry second = new SpecHistoryEntry("A", SpecialWeapon.DRAGON_WARHAMMER, 1,
+			"b", "clock", 1).withObservedAtMillis(10_000);
+		SpecHistoryEntry other = new SpecHistoryEntry("B", SpecialWeapon.ARCLIGHT, 1,
+			"c", "peer-clock", 0).withObservedAtMillis(20_000);
+		assertEquals("cab", EncounterTimeline.replay(List.of(first, second, other), "", recordingOrder()));
+	}
+
+	@Test public void mergingAnOlderCopyPreservesTheOriginTimestamp()
+	{
+		SpecHistoryEntry old = event("A", SpecialWeapon.ARCLIGHT, 1, "a");
+		SpecHistoryEntry timed = old.withObservedAtMillis(10_000);
+		assertEquals(List.of(timed), EncounterTimeline.union(List.of(old), List.of(timed)));
+		assertEquals(List.of(timed), EncounterTimeline.union(List.of(timed), List.of(old)));
+	}
+
+	private static EncounterTimeline.Replay<String> recordingOrder()
+	{
+		return new EncounterTimeline.Replay<String>()
+		{
+			@Override public String apply(String state, SpecHistoryEntry event)
+			{
+				return state + event.getEventId();
+			}
+
+			@Override public String conservative(String a, String b)
+			{
+				return a.compareTo(b) >= 0 ? a : b;
+			}
+		};
+	}
+
 	@Test public void trackerEffectKeyGroupsOnlyFormulaEquivalents()
 	{
 		DefenceTracker tracker = new DefenceTracker(mock(Client.class),
