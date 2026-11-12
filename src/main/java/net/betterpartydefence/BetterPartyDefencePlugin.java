@@ -154,11 +154,19 @@ public class BetterPartyDefencePlugin extends Plugin
 	private static final int NON_INSTANCE_HP_TOLERANCE = 20;
 	private static final int NON_INSTANCE_POSITION_TOLERANCE = 16;
 	private static final long SYNC_MAX_AGE_MILLIS = 5_000L;
-	private static final long SYNC_REBROADCAST_INTERVAL_MILLIS = 2_000L;
-	private static final long ENCOUNTER_PRESENCE_INTERVAL_MILLIS = 2_000L;
-	private static final long BOSS_PRESENCE_INTERVAL_MILLIS = 2_000L;
+	// Keepalive cadences. State changes are still sent immediately; these only bound how often
+	// an unchanged snapshot, heartbeat or unanswered request is repeated on the party socket.
+	private static final long SYNC_REBROADCAST_INTERVAL_MILLIS = 30_000L;
+	private static final long ENCOUNTER_PRESENCE_INTERVAL_MILLIS = 30_000L;
+	/** Shorter than the others: this request is the recovery path after a missed snapshot. */
+	private static final long BOSS_PRESENCE_INTERVAL_MILLIS = 10_000L;
 	/** Maximum time to withhold a new party-eligible boss display while requesting better peer state. */
 	private static final int INITIAL_SYNC_DISPLAY_GRACE_TICKS = 4;
+	/**
+	 * A heartbeat older than this is no information, not proof of a different encounter. It is
+	 * deliberately shorter than the heartbeat interval: between heartbeats, specs use the same
+	 * fallback rules as members without one.
+	 */
 	private static final long ENCOUNTER_PRESENCE_MAX_AGE_MILLIS = 6_000L;
 	/** Blocks stale pre-reset absolute snapshots long enough for their normal max age to expire. */
 	private static final long ENCOUNTER_RESET_BARRIER_MILLIS = SYNC_MAX_AGE_MILLIS;
@@ -1253,7 +1261,17 @@ public class BetterPartyDefencePlugin extends Plugin
 
 		long now = System.currentTimeMillis();
 		boolean changed = !scope.equals(lastPresenceScope);
-		if (!changed && now - lastPresenceBroadcastMillis < ENCOUNTER_PRESENCE_INTERVAL_MILLIS)
+		if (scope.getType() == BpdDefenceSync.SCOPE_WORLD && !supportedBossVisible())
+		{
+			// Idle in the open world: no heartbeat. Peers without one fall back to the standard
+			// same-world rules. Send a single notice only when leaving a raid/instance, so peers
+			// stop associating this member with the old scope.
+			if (lastPresenceScope == null || !changed)
+			{
+				return;
+			}
+		}
+		else if (!changed && now - lastPresenceBroadcastMillis < ENCOUNTER_PRESENCE_INTERVAL_MILLIS)
 		{
 			return;
 		}
@@ -1262,6 +1280,27 @@ public class BetterPartyDefencePlugin extends Plugin
 			.withPartyId(partyService.getPartyId()));
 		lastPresenceScope = scope;
 		lastPresenceBroadcastMillis = now;
+	}
+
+	/** True while at least one supported, live boss is rendered on this client. */
+	private boolean supportedBossVisible()
+	{
+		WorldView worldView = client.getTopLevelWorldView();
+		if (worldView == null || worldView.npcs() == null)
+		{
+			return false;
+		}
+
+		Iterator<? extends NPC> iterator = worldView.npcs().iterator();
+		while (iterator != null && iterator.hasNext())
+		{
+			NPC npc = iterator.next();
+			if (BossDefence.isLiveNpc(npc) && npc.getName() != null && BossDefence.matchingNpc(npc) != null)
+			{
+				return true;
+			}
+		}
+		return false;
 	}
 
 	private boolean partyMessageBelongsToCurrentParty(long eventPartyId)
