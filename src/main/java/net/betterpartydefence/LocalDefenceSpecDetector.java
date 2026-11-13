@@ -226,8 +226,6 @@ class LocalDefenceSpecDetector
 	{
 		if (weapon == null || target == null)
 		{
-			log.debug("Local defence spec hitsplat ignored: detector is not armed (weapon={} target={})",
-				weapon, target == null ? "null" : target.getName());
 			return;
 		}
 
