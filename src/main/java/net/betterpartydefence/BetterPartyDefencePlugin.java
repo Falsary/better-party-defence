@@ -426,9 +426,6 @@ public class BetterPartyDefencePlugin extends Plugin
 			return;
 		}
 		raidTimerClock.sample(input.source, scope, input.elapsedTicks, input.stopped, tick);
-		log.debug("Raid timer {} elapsed={} stopped={} localTick={} domain={}",
-			RaidTimerClock.sourceName(input.source), input.elapsedTicks, input.stopped, tick,
-			raidTimerClock.domain());
 		applySharedRaidTickAnchor(tick);
 	}
 
