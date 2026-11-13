@@ -23,8 +23,6 @@ final class EncounterTimeline
 	static final int VERSION = 1;
 	static final int MAX_EVENTS = 256;
 	static final int MAX_REPLAY_STEPS = 100000;
-	/** Allow several game ticks of clock skew and callback delay between clients. */
-	private static final long CROSS_CLOCK_ORDER_GAP_MILLIS = 5_000L;
 	static final Comparator<SpecHistoryEntry> DISPLAY_ORDER = Comparator
 		.comparing(SpecHistoryEntry::getTickAnchor)
 		.thenComparingLong(SpecHistoryEntry::getEncounterTick)
@@ -165,11 +163,21 @@ final class EncounterTimeline
 		return a.getEncounterTick() + uncertainty < b.getEncounterTick();
 	}
 
+	/**
+	 * Compare two events that carry different tick anchors, i.e. that were timed by independent
+	 * clocks. These are open-world encounters: no shared tick origin exists, so the only
+	 * comparable value is the UTC millisecond stamp recorded when the event was observed.
+	 *
+	 * <p>There is deliberately no minimum gap. The stamp is the observation time of the event
+	 * itself, never the packet arrival time, so two events one millisecond apart are still one
+	 * millisecond apart. Equal stamps stay unordered. Raid encounters never reach this method
+	 * because their events share a tick anchor; they keep the tick ordering in {@link #before}.
+	 */
 	private static boolean crossClockBefore(SpecHistoryEntry a, SpecHistoryEntry b)
 	{
 		return !Objects.equals(a.getTickAnchor(), b.getTickAnchor())
-			&& a.getObservedAtMillis() > 0L && b.getObservedAtMillis() > a.getObservedAtMillis()
-			&& b.getObservedAtMillis() - a.getObservedAtMillis() > CROSS_CLOCK_ORDER_GAP_MILLIS;
+			&& a.getObservedAtMillis() > 0L && b.getObservedAtMillis() > 0L
+			&& a.getObservedAtMillis() < b.getObservedAtMillis();
 	}
 
 	static long tickUncertainty(String anchor)

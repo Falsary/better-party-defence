@@ -109,12 +109,15 @@ public class EncounterTimelineReplayTest
 		assertEquals(full, reduced);
 	}
 
-	@Test public void closeCrossClockHitsRemainUnordered()
+	@Test public void closeCrossClockHitsOrderByMilliseconds()
 	{
+		// Independent clocks (an open-world encounter): the event stamps decide the order, with
+		// no minimum separation. 500 ms apart is still an order, not an ambiguous pair.
 		SpecHistoryEntry first = event("A", SpecialWeapon.ARCLIGHT, 1, "a").withObservedAtMillis(10_000);
 		SpecHistoryEntry second = new SpecHistoryEntry("B", SpecialWeapon.DRAGON_WARHAMMER, 1,
 			"b", "peer-clock", 0).withObservedAtMillis(10_500);
-		assertEquals("ba", EncounterTimeline.replay(List.of(first, second), "", recordingOrder()));
+		assertEquals("ab", EncounterTimeline.replay(List.of(first, second), "", recordingOrder()));
+		assertEquals("ab", EncounterTimeline.replay(List.of(second, first), "", recordingOrder()));
 	}
 
 	@Test public void sharedTicksOverrideWallClockAndClockCycles()

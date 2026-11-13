@@ -120,13 +120,78 @@ class LocalDefenceSpecDetector
 			return;
 		}
 
-		// Special energy went down. Defer target/equipment reads until player/NPC update has completed.
+		// Special energy went down. Defer the equipment read until the player/NPC update has
+		// completed, but capture the actor we are interacting with now: a boss can clear the
+		// interaction before that deferred read runs (digging, teleporting, dying, region
+		// rebuild), which previously discarded a spec that had already been spent.
 		specialPercentage = current;
 		final int serverTick = client.getTickCount();
-		clientThread.invokeLater(() -> beginSpec(serverTick));
+		final NPC castTarget = interactingNpc();
+		clientThread.invokeLater(() -> beginSpec(serverTick, castTarget));
 	}
 
-	private void beginSpec(int serverTick)
+	private NPC interactingNpc()
+	{
+		Player local = client.getLocalPlayer();
+		Actor interacting = local == null ? null : local.getInteracting();
+		return interacting instanceof NPC ? (NPC) interacting : null;
+	}
+
+	/**
+	 * Resolve the target for a deferred spec detection.
+	 *
+	 * <p>The live interaction stays authoritative whenever it is still present. If it was
+	 * cleared between the energy change and this read, the actor captured at spec time is
+	 * used instead, provided it still maps to a supported boss. The fallback is deliberately
+	 * weapon-agnostic and boss-agnostic: a cleared interaction is a property of the game
+	 * state, not of one weapon or one boss.</p>
+	 */
+	/**
+	 * Resolve the target for a deferred spec detection.
+	 *
+	 * <p>The captured actor is the one the special attack was cast on. The live interaction is
+	 * only preferred while it still refers to that same actor, compared by NPC type and scene
+	 * index (a rebind at the same slot keeps the same identity). If the player switches targets
+	 * between spending the special and this read, the live interaction is a different NPC and
+	 * arming on it would apply this weapon to something that was never hit, so the captured
+	 * actor is used instead. A cleared interaction therefore no longer loses the spec, and a
+	 * changed one no longer steals it.</p>
+	 *
+	 * <p>Package-private so the target resolution can be tested without a game client.</p>
+	 */
+	NPC resolveTarget(NPC castTarget)
+	{
+		NPC live = interactingNpc();
+		if (castTarget == null)
+		{
+			// Nothing was captured (the interaction had already cleared at spec time). There is
+			// no better evidence than the interaction as it stands now.
+			return live;
+		}
+		if (live != null && sameCapturedTarget(live, castTarget))
+		{
+			return live;
+		}
+		if (live != null)
+		{
+			log.debug("Local defence spec keeps captured target {} and ignores new interaction {}",
+				castTarget.getName(), live.getName());
+		}
+		if (castTarget.getName() == null || BossDefence.matchingNpc(castTarget) == null)
+		{
+			return null;
+		}
+		log.debug("Local defence spec target resolved from captured actor: target={} npc={}",
+			castTarget.getName(), castTarget.getIndex());
+		return castTarget;
+	}
+
+	private static boolean sameCapturedTarget(NPC live, NPC cast)
+	{
+		return live == cast || (live.getId() == cast.getId() && live.getIndex() == cast.getIndex());
+	}
+
+	private void beginSpec(int serverTick, NPC castTarget)
 	{
 		SpecialWeapon used = usedSupportedWeapon();
 		if (used == null)
@@ -134,15 +199,13 @@ class LocalDefenceSpecDetector
 			return;
 		}
 
-		Player local = client.getLocalPlayer();
-		Actor interacting = local == null ? null : local.getInteracting();
-		if (!(interacting instanceof NPC))
+		NPC npc = resolveTarget(castTarget);
+		if (npc == null)
 		{
 			log.debug("Local defence spec {} ignored: no NPC target", used);
 			return;
 		}
 
-		NPC npc = (NPC) interacting;
 		if (npc.getName() == null || BossDefence.matchingNpc(npc) == null)
 		{
 			log.debug("Local defence spec {} ignored: unsupported target {}", used, npc.getName());
@@ -281,6 +344,10 @@ class LocalDefenceSpecDetector
 			|| observed.getId() != armed.getId())
 		{
 			return false;
+		}
+		if (boss == BossDefence.GIANT_MOLE && armed.getIndex() == observed.getIndex())
+		{
+			return true;
 		}
 		return NpcTargetResolver.matches(
 			observed, boss, armed.getId(), armed.getWorldLocation(), 2);

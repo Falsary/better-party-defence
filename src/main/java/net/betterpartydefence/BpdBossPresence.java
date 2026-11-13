@@ -23,6 +23,7 @@ public class BpdBossPresence extends PartyMemberMessage
 	private int bossPlane;
 	private int healthPercent;
 	private long sentAtMillis;
+	private BpdDefenceSync offeredHistory;
 	/** Sender's PartyService session. Zero means a legacy sender with no party id. */
 	@ToString.Exclude
 	private long partyId;
@@ -81,4 +82,6 @@ public class BpdBossPresence extends PartyMemberMessage
 	public long getSentAtMillis() { return sentAtMillis; }
 	public long getPartyId() { return partyId; }
 	public BpdBossPresence withPartyId(long partyId) { this.partyId = partyId; return this; }
+	BpdDefenceSync getOfferedHistory() { return offeredHistory; }
+	void offerHistory(BpdDefenceSync history) { offeredHistory = history; }
 }
