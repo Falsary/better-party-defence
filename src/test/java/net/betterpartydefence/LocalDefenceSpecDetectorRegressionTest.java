@@ -118,6 +118,7 @@ public class LocalDefenceSpecDetectorRegressionTest
 		Harness h = new Harness();
 		h.armDwh();
 		NPC replacement = h.replacementMole();
+		when(replacement.getWorldLocation()).thenReturn(new WorldPoint(3030, 3030, 0));
 		h.tick = 101;
 		h.hitsplat(replacement, 1, true);
 		h.detector.onGameTick();

@@ -184,17 +184,41 @@ public class EncounterTickSyncTest
         assertEquals(tracker.state().getCurrent(), wire.toSyncState().getCurrent());
     }
 
-    @Test public void lateJoinPreservesOriginTicksAndCreatesSeparateLocalAnchor()
+    @Test public void lateJoinKeepsOriginTicksAndSeparateAnchor()
     {
-        local(100, SpecialWeapon.DRAGON_WARHAMMER, 1);
+        // Explicit stamps: this test is about anchor preservation, so the ordering input must
+        // not depend on whether two System.currentTimeMillis() calls land in the same ms.
+        when(client.getTickCount()).thenReturn(100);
+        tracker.queueLocal(SpecialWeapon.DRAGON_WARHAMMER, 1, 1, 301, "Alice", null, 1_000_000L);
+        tracker.onGameTick();
         SyncState snapshot = tracker.syncState();
         tracker.reset();
         tracker.applySyncState(snapshot, npc);
-        local(40000, SpecialWeapon.BANDOS_GODSWORD, 20);
+        when(client.getTickCount()).thenReturn(40000);
+        tracker.queueLocal(SpecialWeapon.BANDOS_GODSWORD, 1, 20, 301, "Alice", null, 1_000_001L);
+        tracker.onGameTick();
         assertEquals(2, tracker.specHistory().size());
         assertTrue(tracker.specHistory().contains(snapshot.getHistory().get(0)));
-        assertEquals(189, tracker.state().getCurrent());
+        // The late joiner's spec is now ordered after the adopted history by its own UTC stamp,
+        // so both drains land: 189 after the adopted DWH, then the BGS drain on top.
+        assertEquals(177, tracker.state().getCurrent());
         for (SpecHistoryEntry e : tracker.specHistory()) { assertEquals(0, e.getEncounterTick()); }
+    }
+
+    @Test public void equalStampsAcrossIndependentAnchorsStayUnordered()
+    {
+        when(client.getTickCount()).thenReturn(100);
+        tracker.queueLocal(SpecialWeapon.DRAGON_WARHAMMER, 1, 1, 301, "Alice", null, 1_000_000L);
+        tracker.onGameTick();
+        SyncState snapshot = tracker.syncState();
+        tracker.reset();
+        tracker.applySyncState(snapshot, npc);
+        when(client.getTickCount()).thenReturn(40000);
+        tracker.queueLocal(SpecialWeapon.BANDOS_GODSWORD, 1, 20, 301, "Alice", null, 1_000_000L);
+        tracker.onGameTick();
+        // Identical stamps carry no order, so both orders stay legal and the replay takes the
+        // conservative maximum. This pins the deterministic counterpart of the flaky case.
+        assertEquals(189, tracker.state().getCurrent());
     }
 
     @Test public void resetCannotReusePreviousOrigin()
@@ -296,10 +320,12 @@ public class EncounterTickSyncTest
 
     @Test public void twoIndependentClocksConvergeThroughStandardEchoIdentityPromotion()
     {
-        local(9000, SpecialWeapon.DRAGON_WARHAMMER, 1);
+        when(client.getTickCount()).thenReturn(9000);
+        tracker.queueLocal(SpecialWeapon.DRAGON_WARHAMMER, 1, 1, 301, "Alice", null, 1_000_000L);
+        tracker.onGameTick();
         DefenceTracker peer = new DefenceTracker(client, mock(BetterPartyDefenceConfig.class));
         when(client.getTickCount()).thenReturn(50);
-        peer.queueLocal(SpecialWeapon.BANDOS_GODSWORD, 1, 20, 301, "Bob");
+        peer.queueLocal(SpecialWeapon.BANDOS_GODSWORD, 1, 20, 301, "Bob", null, 1_000_002L);
         peer.onGameTick();
         tracker.queue(SpecialWeapon.BANDOS_GODSWORD, 1, 20, 301, "Bob");
         tracker.onGameTick();
@@ -309,7 +335,9 @@ public class EncounterTickSyncTest
         SyncState bob = peer.syncState();
         assertTrue(tracker.mergeEventSyncState(bob, npc));
         assertTrue(peer.mergeEventSyncState(alice, npc));
-        assertEquals(189, tracker.state().getCurrent());
+        // The peer's BGS is stamped 2 ms later, so it is ordered after the DWH and both drains
+        // land. This used to be 189 only because cross-anchor pairs were never ordered.
+        assertEquals(177, tracker.state().getCurrent());
         assertEquals(tracker.syncState(), peer.syncState());
         assertTrue(EncounterTimeline.complete(tracker.specHistory()));
     }

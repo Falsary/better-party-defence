@@ -125,6 +125,7 @@ public class DefenceTracker
 
 	/** Specs which contributed to the current tracked encounter, shown in the info-box tooltip. */
 	private final List<SpecHistoryEntry> specHistory = new ArrayList<>();
+	private List<SpecHistoryEntry> specHistorySnapshot;
 	private final List<AppliedSpec> localSpecs = new ArrayList<>();
 	private static final int STANDARD_SPEC_CORRELATION_TICKS = 2;
 	private final Map<SpecHistoryEntry, Integer> recentStandardSpecs = new IdentityHashMap<>();
@@ -426,7 +427,7 @@ public class DefenceTracker
 		String localTickAnchor;
 		int localAnchorTick;
 		EffectState effects;
-		final List<SpecHistoryEntry> history = new ArrayList<>();
+		List<SpecHistoryEntry> history = Collections.emptyList();
 	}
 
 	@Inject
@@ -743,6 +744,49 @@ public class DefenceTracker
 			return;
 		}
 
+		// A local spec carries the exact actor it was cast on, but that actor can stop being
+		// "live" before the drain is processed: it left render, dug underground, despawned, or
+		// the scene index was reused. The special attack was already spent, so the drain must
+		// still be recorded against the encounter that produced it. This applies to every
+		// supported boss, not to one boss; only an observed kill clears the saved state.
+		DrainTarget evidence = drain.getTarget();
+		if (drain.getEventId() != null && evidence != null && evidence.getBossType() != null)
+		{
+			BossDefence bossType = evidence.getBossType();
+			NPC cast = evidence.getActor();
+			if (cast != null && cast.isDead())
+			{
+				// A spec whose actor is genuinely dead is evidence the encounter ended. Leaving
+				// render is not death: a boss that burrows, teleports or is culled must keep its
+				// saved state, which is the whole point of the detached path below.
+				int world = publicWorldFor(cast);
+				recordBossDeath(bossType, world);
+				if (world > 0)
+				{
+					clearPublicState(bossType, world, "confirmed spec on a dead actor");
+				}
+				return;
+			}
+			NPC indexed = npcByIndex(drain.getNpcIndex());
+			if (cast != null && indexed != cast && publicWorldFor(cast) == drain.getWorld())
+			{
+				// Same actor, new scene slot: the captured object is still the live one.
+				if (npcByIndex(cast.getIndex()) == cast)
+				{
+					processResolvedDrain(drain, cast);
+					return;
+				}
+				// Its slot is empty, so the encounter is detached rather than replaced. A slot
+				// already taken by another actor is deliberately not adopted here: that is how a
+				// freshly spawned instance of the same boss would inherit the previous spec.
+				if (indexed == null)
+				{
+					applyLocalSpecToDetachedBoss(drain, cast);
+					return;
+				}
+			}
+		}
+
 		NPC target = resolveTargetForDrain(drain);
 		if (target == null)
 		{
@@ -752,6 +796,46 @@ public class DefenceTracker
 			return;
 		}
 		processResolvedDrain(drain, target);
+	}
+
+	/**
+	 * Apply an already-spent local spec to an encounter whose actor is no longer in the scene.
+	 *
+	 * <p>Only the state belonging to that exact actor is touched. A scene index can already have
+	 * been reused by a freshly spawned instance of the same boss, and that instance keeps its
+	 * own state: the slot is dropped only while it still points at the captured actor, and the
+	 * live encounter is re-selected afterwards so a detached drain cannot leave the overlay (or
+	 * any later drain) bound to a stale actor.</p>
+	 */
+	private void applyLocalSpecToDetachedBoss(Drain drain, NPC cast)
+	{
+		SavedState selected = snapshotCurrent();
+		saveCurrent();
+		for (SavedState saved : detachedPublicTargets)
+		{
+			if (saved.boundActor == cast)
+			{
+				loadSavedState(saved);
+				break;
+			}
+		}
+		if (boundActor != cast)
+		{
+			setBoss(cast.getName(), cast.getIndex(), cast);
+		}
+		bossIndex = cast.getIndex();
+		apply(drain, cast);
+		SavedState occupant = tracked.get(drain.getNpcIndex());
+		if (occupant != null && occupant.boundActor == cast)
+		{
+			tracked.remove(drain.getNpcIndex());
+		}
+		bossIndex = -1;
+		rememberDetachedPublicTarget(snapshotCurrent());
+		if (selected != null && selected.boundActor != cast)
+		{
+			loadSavedState(selected);
+		}
 	}
 
 	/**
@@ -843,7 +927,12 @@ public class DefenceTracker
 	{
 		if (boundActor == npc) { return specHistory; }
 		SavedState state = tracked.get(npc.getIndex());
-		return state != null && state.boundActor == npc ? state.history : Collections.emptyList();
+		if (state != null && state.boundActor == npc) { return state.history; }
+		for (SavedState detached : detachedPublicTargets)
+		{
+			if (detached.boundActor == npc) { return detached.history; }
+		}
+		return Collections.emptyList();
 	}
 
 	enum PartySpecResult { ADDED, MATCHED_STANDARD, IGNORED }
@@ -908,11 +997,12 @@ public class DefenceTracker
 					// position while correcting the Ralos hit count for this matched cast.
 					loadSavedState(timelineBaseline());
 					for (SpecHistoryEntry event : corrected) { applyHistoryEvent(event, npc); }
-					specHistory.addAll(corrected);
+					appendSpecHistory(corrected);
 				}
 				else
 				{
 					specHistory.set(match, partyEntry);
+					specHistorySnapshot = null;
 				}
 				return;
 			}
@@ -958,7 +1048,7 @@ public class DefenceTracker
 		}
 		else
 		{
-			specHistory.add(partyEntry);
+			addSpecHistory(partyEntry);
 		}
 		if (shouldReplayTimeline(specHistory))
 		{
@@ -1157,9 +1247,13 @@ public class DefenceTracker
 
 	private void setBoss(String name, int index)
 	{
-		NPC bossNpc = npcByIndex(index);
+		setBoss(name, index, npcByIndex(index));
+	}
+
+	private void setBoss(String name, int index, NPC bossNpc)
+	{
 		BossDefence boss = BossDefence.matchingNpc(bossNpc);
-		specHistory.clear();
+		clearSpecHistory();
 		bossName = name;
 		bossIndex = index;
 		bossType = boss;
@@ -1280,7 +1374,7 @@ public class DefenceTracker
 		if (bossType == BossDefence.KEPHRI
 			&& mechanics.resetsStatsOnActorEntry(bossNpcId) && !kephriFinalResetApplied)
 		{
-			specHistory.clear();
+			clearSpecHistory();
 			clearDeferredForBoss(bossType);
 			clearDeferredForTarget(bossIndex, boundActor);
 			initializeStats(bossType);
@@ -1305,7 +1399,7 @@ public class DefenceTracker
 
 		if (state == 2 && sotetsegEncounterState != 2)
 		{
-			specHistory.clear();
+			clearSpecHistory();
 			clearDeferredForBoss(bossType);
 			clearDeferredForTarget(bossIndex, boundActor);
 			initializeStats(bossType);
@@ -1388,7 +1482,7 @@ public class DefenceTracker
 		}
 		if (drain.getEventId() == null)
 		{
-			specHistory.add(new SpecHistoryEntry(playerName, drain.getWeapon(), drain.getHit()));
+			addSpecHistory(new SpecHistoryEntry(playerName, drain.getWeapon(), drain.getHit()));
 			return;
 		}
 		String tickAnchor = drain.getTickAnchor();
@@ -1410,7 +1504,7 @@ public class DefenceTracker
 			// on a boundary). Only a genuinely pre-raid negative is rejected.
 			if (encounterTick >= 0)
 			{
-				specHistory.add(new SpecHistoryEntry(playerName, drain.getWeapon(), drain.getSpell(), drain.getHit(),
+				addSpecHistory(new SpecHistoryEntry(playerName, drain.getWeapon(), drain.getSpell(), drain.getHit(),
 					drain.getEventId(), tickAnchor, encounterTick, drain.getObservedAtMillis()));
 				return;
 			}
@@ -1421,9 +1515,30 @@ public class DefenceTracker
 			localTickAnchor = drain.getEventId();
 			localAnchorTick = drain.getObservedTick();
 		}
-		specHistory.add(new SpecHistoryEntry(playerName, drain.getWeapon(), drain.getSpell(), drain.getHit(),
+		addSpecHistory(new SpecHistoryEntry(playerName, drain.getWeapon(), drain.getSpell(), drain.getHit(),
 			drain.getEventId(), localTickAnchor, (long) drain.getObservedTick() - localAnchorTick,
 			drain.getObservedAtMillis()));
+	}
+
+	private void addSpecHistory(SpecHistoryEntry entry)
+	{
+		specHistory.add(entry);
+		specHistorySnapshot = null;
+	}
+
+	private void appendSpecHistory(List<SpecHistoryEntry> entries)
+	{
+		if (!entries.isEmpty())
+		{
+			specHistory.addAll(entries);
+			specHistorySnapshot = null;
+		}
+	}
+
+	private void clearSpecHistory()
+	{
+		specHistory.clear();
+		specHistorySnapshot = null;
 	}
 
 	/**
@@ -1436,13 +1551,18 @@ public class DefenceTracker
 		{
 			return Collections.emptyList();
 		}
-		return Collections.unmodifiableList(new ArrayList<>(specHistory));
+		return specHistory();
 	}
 
-	/** Current active target history. Kept for tracker/tests and sync-facing callers. */
+	/** Immutable active history, shared by readers until the history changes. */
 	public List<SpecHistoryEntry> specHistory()
 	{
-		return Collections.unmodifiableList(new ArrayList<>(specHistory));
+		if (specHistorySnapshot == null)
+		{
+			specHistorySnapshot = specHistory.isEmpty() ? Collections.emptyList()
+				: Collections.unmodifiableList(new ArrayList<>(specHistory));
+		}
+		return specHistorySnapshot;
 	}
 
 	public boolean hasDefenceSpecHistory()
@@ -1841,14 +1961,21 @@ public class DefenceTracker
 		{
 			return null;
 		}
-		long roll = (MAGIC_ROLL_LEVEL_OFFSET + (saved.magicUsesDefence ? saved.bossDef : saved.magicLevel))
-			* (saved.magicDefBonus + MAGIC_ROLL_BONUS_OFFSET);
-		long baseRoll = (MAGIC_ROLL_LEVEL_OFFSET + (saved.magicUsesDefence ? saved.bossStartDef : saved.magicStartLevel))
-			* (saved.magicStartDefBonus + MAGIC_ROLL_BONUS_OFFSET);
-		return new DefenceState(saved.npcIndex, Text.removeTags(saved.bossName), saved.bossDef, saved.minDef,
-			saved.bossStartDef, roll, baseRoll, saved.magicDefBonus, saved.magicStartDefBonus,
-			saved.magicLevel, saved.magicStartLevel, saved.drained,
-			saved.bossType.has(BossDefence.Flag.TFA));
+		return toDefenceState(saved.npcIndex, saved.bossName, saved.bossType, saved.bossDef, saved.minDef,
+			saved.bossStartDef, saved.magicLevel, saved.magicStartLevel, saved.magicDefBonus,
+			saved.magicStartDefBonus, saved.magicUsesDefence, saved.drained);
+	}
+
+	private DefenceState toDefenceState(int npcIndex, String name, BossDefence boss, long defence,
+		long minDefence, long baseDefence, long magic, long baseMagic, long magicDefence,
+		long baseMagicDefence, boolean useDefenceForMagic, boolean hasDrain)
+	{
+		long roll = (MAGIC_ROLL_LEVEL_OFFSET + (useDefenceForMagic ? defence : magic))
+			* (magicDefence + MAGIC_ROLL_BONUS_OFFSET);
+		long baseRoll = (MAGIC_ROLL_LEVEL_OFFSET + (useDefenceForMagic ? baseDefence : baseMagic))
+			* (baseMagicDefence + MAGIC_ROLL_BONUS_OFFSET);
+		return new DefenceState(npcIndex, Text.removeTags(name), defence, minDefence, baseDefence, roll,
+			baseRoll, magicDefence, baseMagicDefence, magic, baseMagic, hasDrain, boss.has(BossDefence.Flag.TFA));
 	}
 
 	private SyncState toSyncState(SavedState saved)
@@ -1883,22 +2010,28 @@ public class DefenceTracker
 		{
 			return null;
 		}
-		SavedState current = snapshotCurrent();
-		return toDefenceState(current);
+		return toDefenceState(bossIndex, bossName, bossType, bossDef, minDef, bossStartDef,
+			magicLevel, magicStartLevel, magicDefBonus, magicStartDefBonus, magicUsesDefence, drained);
 	}
 
 	/** Every concrete target retained in memory, used by the attached NPC display. */
 	public List<DefenceState> states()
 	{
-		saveCurrent();
+		// Use live stats for the selected NPC without copying its history into the saved state.
+		DefenceState current = bossIndex >= 0 ? state() : null;
 		List<DefenceState> out = new ArrayList<>();
 		for (SavedState saved : tracked.values())
 		{
-			DefenceState state = toDefenceState(saved);
+			DefenceState state = current != null && saved.npcIndex == bossIndex
+				? current : toDefenceState(saved);
 			if (state != null)
 			{
 				out.add(state);
 			}
+		}
+		if (current != null && !tracked.containsKey(bossIndex))
+		{
+			out.add(current);
 		}
 		return out;
 	}
@@ -1907,6 +2040,31 @@ public class DefenceTracker
 	public SyncState syncState()
 	{
 		return toSyncState(snapshotCurrent());
+	}
+
+	/** Only offer history already bound to the actor that will identify it to the party. */
+	SyncState syncStateForActor(NPC npc)
+	{
+		if (npc == boundActor)
+		{
+			return syncState();
+		}
+		SavedState saved = tracked.get(npc.getIndex());
+		return saved != null && saved.boundActor == npc ? toSyncState(saved) : null;
+	}
+
+	/** Rebuild a live target from the confirmed specs that survived a delayed reset. */
+	void replaySpecsAfterReset(NPC npc, List<SpecHistoryEntry> surviving)
+	{
+		SavedState selected = snapshotCurrent();
+		SavedState target = npc == boundActor ? selected : tracked.get(npc.getIndex());
+		loadSavedState(target);
+		replayTimeline(surviving, npc);
+		saveCurrent();
+		if (selected != null && selected.npcIndex != npc.getIndex())
+		{
+			loadSavedState(selected);
+		}
 	}
 
 	/** Every bound drained target this client can authoritatively rebroadcast to the party. */
@@ -2109,7 +2267,7 @@ public class DefenceTracker
 			// Preserve RuneLite's weapon-specific hit conversion, including Ralos.
 			int hit = event.getWeapon().computeHit(event.getHit(), localNpc);
 			calculateDefence(event.getWeapon(), hit, localNpc);
-			specHistory.add(event);
+			addSpecHistory(event);
 		}
 		drained = true;
 		saveCurrent();
@@ -2160,6 +2318,11 @@ public class DefenceTracker
 	/** Recover identified events before snapshot version comparisons: lower versions can have missing IDs. */
 	public boolean mergeEventSyncState(SyncState incoming, NPC npc)
 	{
+		return mergeEventSyncState(incoming, npc, false);
+	}
+
+	boolean mergeEventSyncState(SyncState incoming, NPC npc, boolean matchedPublicEncounter)
+	{
 		if (incoming == null || npc == null || !BossDefence.isLiveNpc(npc)
 			|| BossDefence.matchingNpc(npc) != incoming.getBossType()) { return false; }
 		saveCurrent();
@@ -2172,11 +2335,17 @@ public class DefenceTracker
 			|| target.demon != incoming.isDemon()) { return false; }
 		List<SpecHistoryEntry> merged = EncounterTimeline.union(target.history, incoming.getHistory());
 		if (merged == null || new java.util.HashSet<>(merged).equals(new java.util.HashSet<>(target.history))) { return false; }
-		// Without a shared identified event there is no proof that the two stat epochs agree.
+		// A validated public snapshot can identify the live encounter without a shared spec.
 		boolean shared = target.history.stream().anyMatch(a -> incoming.getHistory().stream()
 			.anyMatch(b -> EncounterTimeline.compatibleEvent(a, b) || (a.getEventId() == null || b.getEventId() == null)
 				&& EncounterTimeline.samePayload(a, b)));
-		if (!shared) { return false; }
+		if (!shared && !(target.boundActor == npc && target.publicWorld == client.getWorld()
+			&& (matchedPublicEncounter && merged.stream().allMatch(entry -> entry.getObservedAtMillis() > 0)
+				&& NpcTargetResolver.uniqueLiveNpc(client.getTopLevelWorldView(), target.bossType) == npc
+				|| onlyNoOpEvents(target.history, npc) || onlyNoOpEvents(incoming.getHistory(), npc))))
+		{
+			return false;
+		}
 		if (hasPendingFor(npc.getIndex())) { return false; }
 		SavedState selected = snapshotCurrent();
 		loadSavedState(target);
@@ -2184,6 +2353,28 @@ public class DefenceTracker
 		saveCurrent();
 		if (selected != null && selected.npcIndex != npc.getIndex()) { loadSavedState(selected); }
 		return true;
+	}
+
+	/**
+	 * True when every event provably cannot change Defence, Magic level or Magic-defence bonus,
+	 * so merging it without shared spec evidence cannot move the total.
+	 *
+	 * <p>Checked against each weapon's branch in {@link #calculateDefence}, not against the sign
+	 * of the hit. A zero hit is a no-op for BGS, the Arclight family, Accursed Sceptre, Seercull,
+	 * Eye of Ayak, Barrelchest Anchor and Bone Dagger, because every one of those branches is
+	 * gated on {@code hit > 0}. Dragon Warhammer and Elder Maul are not: Tekton keeps a
+	 * guaranteed 5% drain on a miss, which the branch applies through
+	 * {@code computeDrainPercent(hit, npc) > 0}. Asking the weapon for its actual drain
+	 * percentage is what keeps that case out of the no-op set. Ralos carries a glaive count as
+	 * its hit, so a zero count is no glaives. Spells are excluded entirely: a curse can lower
+	 * magic Defence with no damage, and undated legacy rows are never waved through.</p>
+	 */
+	static boolean onlyNoOpEvents(List<SpecHistoryEntry> history, NPC npc)
+	{
+		return !history.isEmpty() && history.stream().allMatch(entry ->
+			entry.getSpell() == null && entry.getWeapon() != null && entry.getHit() == 0
+				&& entry.getObservedAtMillis() > 0
+				&& entry.getWeapon().computeDrainPercent(0, npc) <= 0);
 	}
 
 	/**
@@ -2241,7 +2432,7 @@ public class DefenceTracker
 		baseline.magicLevel = baseline.magicStartLevel;
 		baseline.magicDefBonus = baseline.magicStartDefBonus;
 		baseline.accursedApplied = false;
-		baseline.history.clear();
+		baseline.history = Collections.emptyList();
 		return baseline;
 	}
 
@@ -2273,7 +2464,7 @@ public class DefenceTracker
 			}
 		}, event -> effectKey(event, npc));
 		loadSavedState(result);
-		specHistory.addAll(events);
+		appendSpecHistory(events);
 		drained = true;
 	}
 
@@ -2337,7 +2528,7 @@ public class DefenceTracker
 		saved.drained = true;
 		if (sync.getHistory() != null)
 		{
-			saved.history.addAll(sync.getHistory());
+			saved.history = Collections.unmodifiableList(new ArrayList<>(sync.getHistory()));
 		}
 
 		unboundTracked.put(saved.bossType, saved);
@@ -2390,10 +2581,10 @@ public class DefenceTracker
 			? client.getVarbitValue(VarbitID.TOB_CLIENT_WAVEPROGRESS_TYPE) : -1;
 		wasInCoxRaid = client.getVarbitValue(VarbitID.RAIDS_CLIENT_INDUNGEON) == 1;
 
-		specHistory.clear();
+		clearSpecHistory();
 		if (sync.getHistory() != null)
 		{
-			specHistory.addAll(sync.getHistory());
+			appendSpecHistory(sync.getHistory());
 		}
 		if (localNpc != null)
 		{
@@ -2449,7 +2640,7 @@ public class DefenceTracker
 		s.localTickAnchor = localTickAnchor;
 		s.localAnchorTick = localAnchorTick;
 		s.effects = effects;
-		s.history.addAll(specHistory);
+		s.history = specHistory();
 		return s;
 	}
 
@@ -2603,9 +2794,13 @@ public class DefenceTracker
 		drained = s.drained;
 		localTickAnchor = s.localTickAnchor;
 		localAnchorTick = s.localAnchorTick;
-		specHistory.clear();
 		effects = s.effects;
-		specHistory.addAll(s.history);
+		if (specHistorySnapshot != s.history)
+		{
+			specHistory.clear();
+			specHistory.addAll(s.history);
+			specHistorySnapshot = s.history;
+		}
 	}
 
 	private void pruneInactiveTargets()
@@ -2696,7 +2891,7 @@ public class DefenceTracker
 		demon = false;
 		accursedApplied = false;
 		drained = false;
-		specHistory.clear();
+		clearSpecHistory();
 	}
 
 	private void removeCurrent(String reason)

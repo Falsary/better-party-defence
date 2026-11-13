@@ -238,15 +238,16 @@ public class PartySynchronizationCharacterizationTest
 	}
 
 	@Test
-	public void resetBarrierIsBoundToTheExactEncounterScope()
+	public void resetTimestampIsBoundToTheExactEncounterScope()
 	{
 		ClientNode node = new ClientNode();
+		long beforeReset = System.currentTimeMillis() - 1;
 		node.applyReset(BossDefence.CORPOREAL_BEAST, BpdDefenceSync.SCOPE_WORLD, 0);
 
 		assertTrue("a delayed packet from the reset scope must be blocked",
-			node.resetBlocked(BossDefence.CORPOREAL_BEAST, BpdDefenceSync.SCOPE_WORLD, 0));
+			node.resetBlocked(BossDefence.CORPOREAL_BEAST, BpdDefenceSync.SCOPE_WORLD, 0, beforeReset));
 		assertFalse("the barrier must not suppress another concrete scope",
-			node.resetBlocked(BossDefence.CORPOREAL_BEAST, BpdDefenceSync.SCOPE_INSTANCE, 77));
+			node.resetBlocked(BossDefence.CORPOREAL_BEAST, BpdDefenceSync.SCOPE_INSTANCE, 77, beforeReset));
 	}
 
 	@Test
@@ -408,14 +409,14 @@ public class PartySynchronizationCharacterizationTest
 			}
 		}
 
-		private boolean resetBlocked(BossDefence boss, int scopeType, int scopeId)
+		private boolean resetBlocked(BossDefence boss, int scopeType, int scopeId, long observedAt)
 		{
 			try
 			{
 				Method method = BetterPartyDefencePlugin.class.getDeclaredMethod(
-					"isBlockedByRecentEncounterReset", BossDefence.class, int.class, int.class);
+					"observationPredatesReset", BossDefence.class, int.class, int.class, long.class);
 				method.setAccessible(true);
-				return (boolean) method.invoke(plugin, boss, scopeType, scopeId);
+				return (boolean) method.invoke(plugin, boss, scopeType, scopeId, observedAt);
 			}
 			catch (ReflectiveOperationException ex)
 			{

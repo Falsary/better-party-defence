@@ -3,10 +3,12 @@ package net.betterpartydefence;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
+import java.awt.image.BufferedImage;
 import java.lang.reflect.Field;
 import java.util.ArrayList;
 import java.util.List;
@@ -18,6 +20,7 @@ import net.runelite.api.WorldView;
 import net.runelite.api.coords.WorldPoint;
 import net.runelite.api.gameval.NpcID;
 import net.runelite.api.gameval.VarbitID;
+import net.runelite.client.plugins.Plugin;
 import net.runelite.client.plugins.specialcounter.SpecialWeapon;
 import org.junit.Before;
 import org.junit.Test;
@@ -102,6 +105,64 @@ public class DefenceTrackerParityTest
 		Field field = object.getClass().getDeclaredField(name);
 		field.setAccessible(true);
 		return (long) field.get(object);
+	}
+
+	@Test
+	public void infoboxTooltipsReuseHistoryUntilSpecsTargetOrConfigChange()
+	{
+		when(config.defenceInfoBoxValue()).thenReturn(DefenceInfoBoxValue.CURRENT);
+		when(config.magicDefenceDisplay()).thenReturn(MagicDefenceDisplay.BONUS);
+		when(config.extraInfoInInfoBox()).thenReturn(true);
+		fakeNpc("Corporeal Beast", 30);
+		fakeNpc("Lizardman shaman", 31);
+		DefenceTracker tracker = makeTracker();
+		var image = new BufferedImage(1, 1, BufferedImage.TYPE_INT_ARGB);
+		var plugin = mock(Plugin.class);
+		var defence = new DefenceInfoBox(image, plugin, tracker, config);
+		var magic = new DefenceInfoBox(image, plugin, tracker, config, DefenceInfoBox.Stat.MAGIC_DEFENCE);
+
+		tracker.queue(SpecialWeapon.ACCURSED_SCEPTRE, 30, 1, WORLD, "Alice");
+		tracker.onGameTick();
+		defence.getText();
+		magic.getText();
+		String defenceTooltip = defence.getTooltip();
+		String magicTooltip = magic.getTooltip();
+		assertTrue(defenceTooltip.contains("Alice"));
+		assertTrue(magicTooltip.contains("Alice"));
+		var history = tracker.specHistoryForCurrentTarget(30);
+		tracker.onGameTick();
+		defence.getText();
+		magic.getText();
+		assertSame(history, tracker.specHistoryForCurrentTarget(30));
+		assertSame(defenceTooltip, defence.getTooltip());
+		assertSame(magicTooltip, magic.getTooltip());
+
+		tracker.queue(SpecialWeapon.ACCURSED_SCEPTRE, 30, 1, WORLD, "Bob");
+		tracker.onGameTick();
+		defence.getText();
+		magic.getText();
+		assertTrue(defence.getTooltip().contains("Bob"));
+		assertTrue(magic.getTooltip().contains("Bob"));
+		assertEquals(1, history.size());
+
+		tracker.queue(SpecialWeapon.ACCURSED_SCEPTRE, 31, 1, WORLD, "Charlie");
+		tracker.onGameTick();
+		defence.getText();
+		magic.getText();
+		assertTrue(defence.getTooltip().contains("Charlie"));
+		assertTrue(magic.getTooltip().contains("Charlie"));
+		assertFalse(magic.getTooltip().contains("Alice"));
+
+		when(config.extraInfoInInfoBox()).thenReturn(false);
+		defence.getText();
+		magic.getText();
+		assertEquals("Better Party Defence", defence.getTooltip());
+		assertEquals("Better Party Defence", magic.getTooltip());
+		when(config.extraInfoInInfoBox()).thenReturn(true);
+		defence.getText();
+		magic.getText();
+		assertTrue(defence.getTooltip().contains("Charlie"));
+		assertTrue(magic.getTooltip().contains("Charlie"));
 	}
 
 	@Test
@@ -870,7 +931,7 @@ public class DefenceTrackerParityTest
 	}
 
 	@Test
-	public void heldExactObservationCannotAttachToReusedIndex()
+	public void exactObservationAppliesToItsOwnEncounterAfterTheActorLeavesTheScene()
 	{
 		when(client.getTickCount()).thenReturn(100);
 		WorldPoint spawn = new WorldPoint(3004, 3004, 0);
@@ -879,14 +940,38 @@ public class DefenceTrackerParityTest
 		tracker.queueLocal(SpecialWeapon.DRAGON_WARHAMMER, 97, 1, WORLD, "Alice", original);
 		removeNpc(97);
 		tracker.onGameTick();
-		assertNull(tracker.state());
-		assertTrue(tracker.hasUnprocessedSpecs());
+		// A local spec carries the actor it was cast on, so the encounter keeps the drain even
+		// when the actor leaves the scene (render cull, teleport, burrow). Only an observed
+		// kill ends it. This is the general form of the old Giant Mole-only path.
+		assertEquals(189, tracker.state().getCurrent());
+		assertFalse(tracker.hasUnprocessedSpecs());
+	}
 
-		fakeNpc("Chaos Elemental", 97, -1, spawn);
+	@Test
+	public void staleSpecDoesNotAttachToANewInstanceAtTheSameIndex()
+	{
+		when(client.getTickCount()).thenReturn(100);
+		WorldPoint spawn = new WorldPoint(3004, 3004, 0);
+		NPC previous = fakeNpc("Chaos Elemental", 97, 7, spawn);
+		DefenceTracker tracker = makeTracker();
+		tracker.queueLocal(SpecialWeapon.DRAGON_WARHAMMER, 97, 1, WORLD, "Alice", previous);
+		tracker.onGameTick();
+		assertEquals(189, tracker.state().getCurrent());
+
+		// The encounter ends unseen and a new instance takes the same scene slot.
+		removeNpc(97);
+		fakeNpc("Chaos Elemental", 97, 8, new WorldPoint(3100, 3100, 0));
 		when(client.getTickCount()).thenReturn(101);
 		tracker.onGameTick();
-		assertNull(tracker.state());
-		assertFalse(tracker.hasUnprocessedSpecs());
+		long fresh = tracker.state() == null ? -1 : tracker.state().getCurrent();
+
+		// The old encounter's spec arrives late, still carrying its original actor.
+		tracker.queueLocal(SpecialWeapon.BANDOS_GODSWORD, 97, 30, WORLD, "Alice", previous);
+		when(client.getTickCount()).thenReturn(102);
+		tracker.onGameTick();
+
+		assertEquals("A new spawn must not inherit the previous encounter's drain",
+			fresh, tracker.state() == null ? -1 : tracker.state().getCurrent());
 	}
 
 	@Test

@@ -158,10 +158,6 @@ public class BetterPartyDefencePlugin extends Plugin
 	private static final int INITIAL_SYNC_DISPLAY_GRACE_TICKS = 4;
 	/** Expired presence falls back to the standard same-world and target-association rules. */
 	private static final long ENCOUNTER_PRESENCE_MAX_AGE_MILLIS = 6_000L;
-	/** Blocks stale pre-reset absolute snapshots long enough for their normal max age to expire. */
-	private static final long ENCOUNTER_RESET_BARRIER_MILLIS = SYNC_MAX_AGE_MILLIS;
-	/** Duplicate death/wipe notices from several clients must not clear a freshly restarted encounter. */
-	private static final long ENCOUNTER_RESET_DEDUP_MILLIS = 10_000L;
 	private static final int TOA_PARTY_MEMBER_DEAD = 30;
 	private static final int[] TOA_PARTY_HEALTH_VARBITS =
 	{
@@ -196,8 +192,8 @@ public class BetterPartyDefencePlugin extends Plugin
 	/** Raid scopes retained for the lifetime of their concrete raid encounter. */
 	private final Map<BossDefence, SyncScope> retainedRaidScopes = new HashMap<>();
 	private final Map<Long, SenderEncounterPresence> senderEncounterPresence = new HashMap<>();
-	/** Recent authoritative encounter resets, keyed by boss + concrete world/raid scope. */
-	private final Map<EncounterResetKey, Long> recentEncounterResets = new HashMap<>();
+	/** Latest authoritative reset for each boss and scope in the current world session. */
+	private final Map<EncounterResetKey, Long> encounterResetTimes = new HashMap<>();
 	/** Party members proven to be running BPD during this PartyService session. */
 	private final Set<Long> knownBpdPartyMembers = new HashSet<>();
 	/** Debounces the all-party-dead ToA state so one wipe clears once, not every tick. */
@@ -208,6 +204,7 @@ public class BetterPartyDefencePlugin extends Plugin
 	private SyncScope lastPresenceScope;
 	/** Revalidate visible bosses once RuneLite confirms the local member joined the party. */
 	private boolean revalidateBossesAfterPartyJoin;
+	private final Set<BossDefence> pendingJoinHistoryOffers = new HashSet<>();
 	/** Presentation-only gate: never changes tracker math/state, only suppresses an unverified first frame. */
 	private final InitialSyncDisplayGate initialSyncDisplayGate = new InitialSyncDisplayGate();
 
@@ -277,6 +274,7 @@ public class BetterPartyDefencePlugin extends Plugin
 		pendingSnapshots.clear();
 		pendingPartySpecs.clear();
 		bossesNeedingCatchUp.clear();
+		pendingJoinHistoryOffers.clear();
 		visibleTrackedBosses.clear();
 		pendingKerisTimers.clear();
 		recentSyncedSpecs.clear();
@@ -285,7 +283,7 @@ public class BetterPartyDefencePlugin extends Plugin
 		senderEncounterPresence.clear();
 		initialSyncDisplayGate.clear();
 		revalidateBossesAfterPartyJoin = false;
-		recentEncounterResets.clear();
+		encounterResetTimes.clear();
 		knownBpdPartyMembers.clear();
 		toaPartyWasFullyDead = false;
 		ocellusPhaseOneEnded = false;
@@ -326,8 +324,6 @@ public class BetterPartyDefencePlugin extends Plugin
 		long now = System.currentTimeMillis();
 		senderEncounterPresence.entrySet().removeIf(
 			entry -> now - entry.getValue().getReceivedAtMillis() > ENCOUNTER_PRESENCE_MAX_AGE_MILLIS);
-		recentEncounterResets.entrySet().removeIf(
-			entry -> now - entry.getValue() > ENCOUNTER_RESET_DEDUP_MILLIS);
 
 		// Local defence tracking is intentionally independent of party membership. Hub Party is
 		// the transport for remote specs, not a prerequisite for drawing our own tracked target.
@@ -687,6 +683,7 @@ public class BetterPartyDefencePlugin extends Plugin
 		pendingSnapshots.clear();
 		pendingPartySpecs.clear();
 		bossesNeedingCatchUp.clear();
+		pendingJoinHistoryOffers.clear();
 		visibleTrackedBosses.clear();
 		pendingKerisTimers.clear();
 		recentSyncedSpecs.clear();
@@ -696,7 +693,6 @@ public class BetterPartyDefencePlugin extends Plugin
 		// Party membership is transport only. Do not clear remembered raid scopes or tracker state
 		// here: leaving a Hub Party while still inside the same raid must preserve the encounter.
 		senderEncounterPresence.clear();
-		recentEncounterResets.clear();
 		knownBpdPartyMembers.clear();
 		initialSyncDisplayGate.clear();
 		revalidateBossesAfterPartyJoin = false;
@@ -748,6 +744,7 @@ public class BetterPartyDefencePlugin extends Plugin
 			pendingSnapshots.clear();
 			pendingPartySpecs.clear();
 			bossesNeedingCatchUp.clear();
+			pendingJoinHistoryOffers.clear();
 			visibleTrackedBosses.clear();
 			pendingKerisTimers.clear();
 			recentSyncedSpecs.clear();
@@ -757,7 +754,7 @@ public class BetterPartyDefencePlugin extends Plugin
 			senderEncounterPresence.clear();
 			initialSyncDisplayGate.clear();
 			revalidateBossesAfterPartyJoin = false;
-			recentEncounterResets.clear();
+			encounterResetTimes.clear();
 			knownBpdPartyMembers.clear();
 			toaPartyWasFullyDead = false;
 			ocellusPhaseOneEnded = false;
@@ -1045,7 +1042,23 @@ public class BetterPartyDefencePlugin extends Plugin
 			rememberSenderEncounterPresence(event.getMemberId(), event.getWorld(),
 				event.getScopeType(), event.getScopeId(), event.getSentAtMillis());
 
-			if (sync == null || !sync.isDrained())
+			BpdDefenceSync offered = event.getOfferedHistory();
+			DefenceTracker.SyncState offeredState = null;
+			if (offered != null && offered.getWorld() == event.getWorld()
+				&& boss.name().equals(offered.getBossType())
+				&& offered.getScopeType() == event.getScopeType() && offered.getScopeId() == event.getScopeId()
+				&& Objects.equals(offered.getBossLocation(),
+					new WorldPoint(event.getBossX(), event.getBossY(), event.getBossPlane())))
+			{
+				offeredState = offered.toSyncState();
+				if (offeredState != null && offeredState.isDrained())
+				{
+					offered.setMemberId(event.getMemberId());
+					onBpdDefenceSync(offered);
+				}
+			}
+
+			if (sync == null || !sync.isDrained() || historyCovers(offeredState, sync))
 			{
 				return;
 			}
@@ -1062,6 +1075,21 @@ public class BetterPartyDefencePlugin extends Plugin
 				event.getMemberId(), boss, event.getScopeType(), event.getScopeId(),
 				sync.getCurrent(), sync.getBase());
 		});
+	}
+
+	private static boolean historyCovers(DefenceTracker.SyncState offered, DefenceTracker.SyncState local)
+	{
+		if (offered == null || !offered.isDrained())
+		{
+			return false;
+		}
+		List<DefenceTracker.SpecHistoryEntry> union = EncounterTimeline.union(offered.getHistory(), local.getHistory());
+		if (union != null)
+		{
+			return union.size() == offered.getHistory().size();
+		}
+		SyncHistoryRelation.Result relation = SyncHistoryRelation.compare(local, offered);
+		return relation == SyncHistoryRelation.Result.SAME || relation == SyncHistoryRelation.Result.EXTENSION;
 	}
 
 	/** Allow at most one additional off-scope responder per request. */
@@ -1170,7 +1198,7 @@ public class BetterPartyDefencePlugin extends Plugin
 				timer.getBossX(), timer.getBossY(), timer.getBossPlane(), NON_INSTANCE_POSITION_TOLERANCE);
 			SyncScope scope = localSyncScope(boss, npc);
 			int remaining = timer.remainingTicks(now, clockScope, raidTick);
-			Long resetAt = recentEncounterResets.get(new EncounterResetKey(client.getWorld(), boss,
+			Long resetAt = encounterResetTimes.get(new EncounterResetKey(client.getWorld(), boss,
 				timer.getScopeType(), timer.getScopeId()));
 			if (remaining <= 0 || scope == null || scope.getType() != timer.getScopeType()
 				|| scope.getId() != timer.getScopeId() || !peerSyncAllowedAtCurrentEncounter(boss)
@@ -1242,7 +1270,7 @@ public class BetterPartyDefencePlugin extends Plugin
 			rememberSenderEncounterPresence(event.getMemberId(), event.getWorld(),
 				event.getScopeType(), event.getScopeId(), event.getSentAtMillis());
 			applyEncounterReset(boss, new SyncScope(event.getScopeType(), event.getScopeId()),
-				"party encounter reset from member " + event.getMemberId(), false);
+				"party encounter reset from member " + event.getMemberId(), false, event.getSentAtMillis());
 		});
 	}
 
@@ -1546,9 +1574,9 @@ public class BetterPartyDefencePlugin extends Plugin
 			log.debug("Ignoring BPD sync for {} in a solo/single-combat encounter", boss);
 			return;
 		}
-		if (isBlockedByRecentEncounterReset(boss, event.getScopeType(), event.getScopeId()))
+		if (snapshotPredatesReset(event, sync))
 		{
-			log.debug("Ignoring BPD sync for {} during the post-reset stale-snapshot barrier", boss);
+			log.debug("Ignoring BPD sync for {} with history from before the encounter reset", boss);
 			return;
 		}
 
@@ -1677,15 +1705,17 @@ public class BetterPartyDefencePlugin extends Plugin
 
 	private void resetEncounterAndBroadcast(BossDefence boss, SyncScope scope, String reason)
 	{
-		if (!applyEncounterReset(boss, scope, reason, true))
+		BpdEncounterReset event = scope == null ? null
+			: new BpdEncounterReset(client.getWorld(), boss, scope.getType(), scope.getId());
+		long resetAt = event == null ? System.currentTimeMillis() : event.getSentAtMillis();
+		if (!applyEncounterReset(boss, scope, reason, true, resetAt))
 		{
 			return;
 		}
 
-		if (scope != null && partyService.isInParty())
+		if (event != null && partyService.isInParty())
 		{
-			partyService.send(new BpdEncounterReset(client.getWorld(), boss, scope.getType(), scope.getId())
-				.withPartyId(partyService.getPartyId()));
+			partyService.send(event.withPartyId(partyService.getPartyId()));
 			log.debug("Broadcast BPD encounter reset boss={} scope={}:{} reason={}",
 				boss, scope.getType(), scope.getId(), reason);
 		}
@@ -1694,22 +1724,48 @@ public class BetterPartyDefencePlugin extends Plugin
 	/** Clear Defence + history + all reconciliation metadata as one encounter state. */
 	private boolean applyEncounterReset(BossDefence boss, SyncScope scope, String reason, boolean authoritativeLocal)
 	{
+		return applyEncounterReset(boss, scope, reason, authoritativeLocal, System.currentTimeMillis());
+	}
+
+	private boolean applyEncounterReset(BossDefence boss, SyncScope scope, String reason,
+		boolean authoritativeLocal, long resetAt)
+	{
 		if (boss == null)
 		{
 			return false;
 		}
 
-		long now = System.currentTimeMillis();
 		EncounterResetKey key = scope == null ? null
 			: new EncounterResetKey(client.getWorld(), boss, scope.getType(), scope.getId());
 		if (key != null)
 		{
-			Long lastReset = recentEncounterResets.get(key);
-			if (!authoritativeLocal && lastReset != null && now - lastReset <= ENCOUNTER_RESET_DEDUP_MILLIS)
+			Long lastReset = encounterResetTimes.get(key);
+			if (!authoritativeLocal && lastReset != null && resetAt <= lastReset)
 			{
 				return false;
 			}
-			recentEncounterResets.put(key, now);
+			encounterResetTimes.merge(key, resetAt, Math::max);
+			if (!authoritativeLocal)
+			{
+				NPC liveBoss = findLiveNpcForBoss(boss);
+				DefenceTracker.SyncState current = liveBoss == null ? null : defenceTracker.syncStateForActor(liveBoss);
+				if (current != null && scopeMatches(scope.getType(), scope.getId(), boss))
+				{
+					List<DefenceTracker.SpecHistoryEntry> surviving = current.getHistory().stream()
+						.filter(spec -> spec.getObservedAtMillis() > resetAt)
+						.collect(java.util.stream.Collectors.toCollection(ArrayList::new));
+					if (surviving.size() != current.getHistory().size() && EncounterTimeline.complete(surviving))
+					{
+						defenceTracker.replaySpecsAfterReset(liveBoss, surviving);
+						syncStateVersions.remove(boss);
+						return true;
+					}
+					if (!surviving.isEmpty() && surviving.size() == current.getHistory().size())
+					{
+						return false; // The next encounter already has confirmed combat evidence.
+					}
+				}
+			}
 		}
 
 		WorldView view = client.getTopLevelWorldView();
@@ -1718,9 +1774,10 @@ public class BetterPartyDefencePlugin extends Plugin
 		{
 			defenceTracker.clearPublicState(boss, client.getWorld(), reason);
 			pendingSnapshots.removeIf(snapshot -> boss.name().equals(snapshot.getBossType())
-				&& snapshot.getScopeType() == BpdDefenceSync.SCOPE_WORLD);
+				&& snapshot.getScopeType() == BpdDefenceSync.SCOPE_WORLD
+				&& !snapshotHasOnlyNewSpecs(snapshot, resetAt));
 			pendingPartySpecs.removeIf(spec -> spec.getBoss() == boss
-				&& spec.getScopeType() == BpdDefenceSync.SCOPE_WORLD);
+				&& spec.getScopeType() == BpdDefenceSync.SCOPE_WORLD && !specWasObservedAfter(spec, resetAt));
 			pendingWorldSyncs.remove(boss);
 			return true;
 		}
@@ -1732,7 +1789,7 @@ public class BetterPartyDefencePlugin extends Plugin
 		{
 			defenceTracker.clearBossState(boss, reason);
 		}
-		clearBossScopedReconciliationMetadata(boss);
+		clearBossScopedReconciliationMetadata(boss, scope, resetAt);
 		log.debug("Reset encounter state for {}: {}", boss, reason);
 		return true;
 	}
@@ -1746,6 +1803,11 @@ public class BetterPartyDefencePlugin extends Plugin
 	 */
 	private void clearBossScopedReconciliationMetadata(BossDefence boss)
 	{
+		clearBossScopedReconciliationMetadata(boss, null, 0);
+	}
+
+	private void clearBossScopedReconciliationMetadata(BossDefence boss, SyncScope scope, long resetAt)
+	{
 		if (boss == null)
 		{
 			return;
@@ -1754,9 +1816,14 @@ public class BetterPartyDefencePlugin extends Plugin
 		{
 			bossEffectDisplay.clearBoss(boss);
 		}
-		pendingSnapshots.removeIf(snapshot -> boss.name().equals(snapshot.getBossType()));
-		pendingPartySpecs.removeIf(spec -> spec.getBoss() == boss);
+		pendingSnapshots.removeIf(snapshot -> boss.name().equals(snapshot.getBossType())
+			&& (scope == null || scope.getType() == snapshot.getScopeType()
+				&& scope.getId() == snapshot.getScopeId() && !snapshotHasOnlyNewSpecs(snapshot, resetAt)));
+		pendingPartySpecs.removeIf(spec -> spec.getBoss() == boss
+			&& (scope == null || scope.getType() == spec.getScopeType()
+				&& scope.getId() == spec.getScopeId() && !specWasObservedAfter(spec, resetAt)));
 		bossesNeedingCatchUp.remove(boss);
+		pendingJoinHistoryOffers.remove(boss);
 		visibleTrackedBosses.remove(boss);
 		pendingKerisTimers.removeIf(timer -> timer.getBoss() == boss);
 		pendingWorldSyncs.remove(boss);
@@ -1769,11 +1836,31 @@ public class BetterPartyDefencePlugin extends Plugin
 		}
 	}
 
-	private boolean isBlockedByRecentEncounterReset(BossDefence boss, int scopeType, int scopeId)
+	private static boolean specWasObservedAfter(BpdSpecEvent spec, long resetAt)
 	{
-		EncounterResetKey key = new EncounterResetKey(client.getWorld(), boss, scopeType, scopeId);
-		Long resetAt = recentEncounterResets.get(key);
-		return resetAt != null && System.currentTimeMillis() - resetAt <= ENCOUNTER_RESET_BARRIER_MILLIS;
+		Long observedAt = spec.getObservedAt();
+		return observedAt != null && observedAt > resetAt && observedAt <= spec.getSentAt();
+	}
+
+	private static boolean snapshotHasOnlyNewSpecs(BpdDefenceSync snapshot, long resetAt)
+	{
+		DefenceTracker.SyncState state = snapshot.toSyncState();
+		return state != null && !state.getHistory().isEmpty()
+			&& state.getHistory().stream().allMatch(spec -> spec.getObservedAtMillis() > resetAt);
+	}
+
+	private boolean observationPredatesReset(BossDefence boss, int scopeType, int scopeId, long observedAt)
+	{
+		Long resetAt = encounterResetTimes.get(new EncounterResetKey(client.getWorld(), boss, scopeType, scopeId));
+		// An untimestamped observation cannot establish that it belongs to the next fight.
+		return resetAt != null && observedAt <= resetAt;
+	}
+
+	private boolean snapshotPredatesReset(BpdDefenceSync event, DefenceTracker.SyncState state)
+	{
+		// A snapshot's absolute Defence can already include an old hit even if its packet is fresh.
+		return state.getHistory().stream().anyMatch(spec -> observationPredatesReset(
+			state.getBossType(), event.getScopeType(), event.getScopeId(), spec.getObservedAtMillis()));
 	}
 
 	private boolean incomingEncounterResetScopeMatches(BpdEncounterReset event, BossDefence boss)
@@ -1819,6 +1906,10 @@ public class BetterPartyDefencePlugin extends Plugin
 			return;
 		}
 
+		if (revalidateBossesAfterPartyJoin)
+		{
+			pendingJoinHistoryOffers.addAll(defenceTracker.drainedBosses());
+		}
 		Set<BossDefence> seen = new HashSet<>();
 		Iterator<? extends NPC> iterator = worldView.npcs().iterator();
 		while (iterator != null && iterator.hasNext())
@@ -1835,7 +1926,8 @@ public class BetterPartyDefencePlugin extends Plugin
 				continue;
 			}
 
-			boolean revalidate = revalidateBossesAfterPartyJoin || bossesNeedingCatchUp.contains(boss);
+			boolean offerOnJoin = pendingJoinHistoryOffers.contains(boss);
+			boolean revalidate = revalidateBossesAfterPartyJoin || offerOnJoin || bossesNeedingCatchUp.contains(boss);
 			if (!revalidate && visibleTrackedBosses.contains(boss))
 			{
 				continue;
@@ -1864,10 +1956,18 @@ public class BetterPartyDefencePlugin extends Plugin
 			{
 				initialSyncDisplayGate.arm(npc.getIndex(), boss, client.getTickCount(), INITIAL_SYNC_DISPLAY_GRACE_TICKS);
 			}
-			partyService.send(new BpdBossPresence(
+			BpdBossPresence request = new BpdBossPresence(
 				client.getWorld(), boss, scope.getType(), scope.getId(),
 				point.getX(), point.getY(), point.getPlane(), healthPercent(npc))
-				.withPartyId(partyService.getPartyId()));
+				.withPartyId(partyService.getPartyId());
+			DefenceTracker.SyncState offer = revalidate ? defenceTracker.syncStateForActor(npc) : null;
+			if (offer != null && offer.isDrained())
+			{
+				request.offerHistory(new BpdDefenceSync(client.getWorld(), offer, scope.getType(), scope.getId(),
+					point.getX(), point.getY(), point.getPlane(), request.getHealthPercent(), observeLocalStateVersion(offer)));
+			}
+			partyService.send(request);
+			pendingJoinHistoryOffers.remove(boss);
 			bossesNeedingCatchUp.remove(boss);
 			log.debug("Broadcast BPD boss presence boss={} scope={}:{} actor={}",
 				boss, scope.getType(), scope.getId(), npc.getIndex());
@@ -1984,15 +2084,18 @@ public class BetterPartyDefencePlugin extends Plugin
 			long now = System.currentTimeMillis();
 			if (sender == null || boss == null || event.getWorld() != client.getWorld()
 				|| event.getSentAt() < now - SYNC_MAX_AGE_MILLIS || event.getSentAt() > now + SYNC_MAX_AGE_MILLIS
-				|| boss == BossDefence.TFA_OCELLUS_P1 && ocellusPhaseOneEnded
-				|| isBlockedByRecentEncounterReset(boss, event.getScopeType(), event.getScopeId()))
+				|| boss == BossDefence.TFA_OCELLUS_P1 && ocellusPhaseOneEnded)
 			{
 				continue;
 			}
 			String player = Objects.toString(sender.getDisplayName(), "Unknown");
 			DefenceTracker.SpecHistoryEntry entry = event.historyEntry(player);
 			WorldPoint tile = event.location();
-			if (entry == null || tile == null || !scopeMatches(event.getScopeType(), event.getScopeId(), boss)) { continue; }
+			if (entry == null || tile == null || !scopeMatches(event.getScopeType(), event.getScopeId(), boss)
+				|| observationPredatesReset(boss, event.getScopeType(), event.getScopeId(), entry.getObservedAtMillis()))
+			{
+				continue;
+			}
 			WorldView view = client.getTopLevelWorldView();
 			if (view == null || view.npcs() == null) { continue; }
 			NPC npc = view.npcs().byIndex(event.getNpcIndex());
@@ -2367,7 +2470,7 @@ public class BetterPartyDefencePlugin extends Plugin
 			DefenceTracker.SyncState sync = pending.getSync();
 
 			if (event.getWorld() != client.getWorld() || event.getSentAtMillis() <= 0
-				|| now - event.getSentAtMillis() > SYNC_MAX_AGE_MILLIS)
+				|| now - event.getSentAtMillis() > SYNC_MAX_AGE_MILLIS || snapshotPredatesReset(event, sync))
 			{
 				iterator.remove();
 				continue;
@@ -2426,8 +2529,9 @@ public class BetterPartyDefencePlugin extends Plugin
 		DefenceTracker.SyncState before = defenceTracker.syncStateForBoss(incoming.getBossType());
 		// Event recovery is independent of Lamport snapshot order. A delayed lower-version
 		// snapshot can contain a unique spec absent locally; never discard it on version alone.
+		boolean matchedPublicEncounter = event.getScopeType() == BpdDefenceSync.SCOPE_WORLD;
 		if (event.getEventVersion() == EncounterTimeline.VERSION && localBoss != null
-			&& defenceTracker.mergeEventSyncState(incoming, localBoss))
+			&& defenceTracker.mergeEventSyncState(incoming, localBoss, matchedPublicEncounter))
 		{
 			DefenceTracker.SyncState merged = defenceTracker.syncStateForBoss(incoming.getBossType());
 			long next = Math.max(observeLocalStateVersion(merged), event.getStateVersion());

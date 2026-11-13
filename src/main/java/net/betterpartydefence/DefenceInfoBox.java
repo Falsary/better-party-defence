@@ -22,11 +22,14 @@ public class DefenceInfoBox extends InfoBox
 		MAGIC_DEFENCE
 	}
 
+	private static final String DEFAULT_TOOLTIP = "Better Party Defence";
+
 	private final DefenceTracker tracker;
 	private final BetterPartyDefenceConfig config;
 	private final Stat stat;
-	/** The last tooltip pushed, so a per-frame render only rebuilds it on a change. */
-	private String tooltip = "";
+
+	/** The tracker reuses this immutable snapshot until the encounter history changes. */
+	private List<SpecHistoryEntry> tooltipHistory;
 
 	public DefenceInfoBox(BufferedImage image, Plugin plugin, DefenceTracker tracker, BetterPartyDefenceConfig config)
 	{
@@ -44,7 +47,7 @@ public class DefenceInfoBox extends InfoBox
 		this.tracker = tracker;
 		this.config = config;
 		this.stat = stat;
-		setTooltip("Better Party Defence");
+		setTooltip(DEFAULT_TOOLTIP);
 	}
 
 	@Override
@@ -108,54 +111,52 @@ public class DefenceInfoBox extends InfoBox
 	/** Tooltip intentionally contains only spec history; current Defence/Magic data is not repeated here. */
 	private void updateTooltip(DefenceState state)
 	{
-		String text;
 		if (!config.extraInfoInInfoBox())
 		{
-			text = "Better Party Defence";
-		}
-		else
-		{
-			// Read history for the exact NPC state rendered above. If selection changes between
-			// reads, fail closed to an empty tooltip rather than showing a previous target's count.
-			List<SpecHistoryEntry> history = relevantHistory(
-				tracker.specHistoryForCurrentTarget(state.getNpcIndex()));
-			if (history.isEmpty())
+			if (tooltipHistory != null)
 			{
-				text = "No specs yet";
+				tooltipHistory = null;
+				setTooltip(DEFAULT_TOOLTIP);
+			}
+			return;
+		}
+
+		List<SpecHistoryEntry> history = tracker.specHistoryForCurrentTarget(state.getNpcIndex());
+		if (history == tooltipHistory)
+		{
+			return;
+		}
+		tooltipHistory = history;
+		List<SpecHistoryEntry> relevant = relevantHistory(history);
+		if (relevant.isEmpty())
+		{
+			setTooltip("No specs yet");
+			return;
+		}
+
+		StringBuilder tip = new StringBuilder("Spec history:");
+		for (SpecSummary summary : aggregateHistory(relevant))
+		{
+			tip.append("<br>");
+			if (summary.miss)
+			{
+				tip.append("<col=ff0000>");
+			}
+			tip.append(summary.playerName)
+				.append(": ")
+				.append(shortWeaponName(summary.weapon));
+			if (summary.miss)
+			{
+				tip.append(" miss: ")
+					.append(summary.value)
+					.append("</col>");
 			}
 			else
 			{
-				StringBuilder tip = new StringBuilder("Spec history:");
-				for (SpecSummary summary : aggregateHistory(history))
-				{
-					tip.append("<br>");
-					if (summary.miss)
-					{
-						tip.append("<col=ff0000>");
-					}
-					tip.append(summary.playerName)
-						.append(": ")
-						.append(shortWeaponName(summary.weapon));
-					if (summary.miss)
-					{
-						tip.append(" miss: ")
-							.append(summary.value)
-							.append("</col>");
-					}
-					else
-					{
-						tip.append(' ').append(summary.value);
-					}
-				}
-				text = tip.toString();
+				tip.append(' ').append(summary.value);
 			}
 		}
-
-		if (!text.equals(tooltip))
-		{
-			tooltip = text;
-			setTooltip(text);
-		}
+		setTooltip(tip.toString());
 	}
 
 	private List<SpecHistoryEntry> relevantHistory(List<SpecHistoryEntry> history)
