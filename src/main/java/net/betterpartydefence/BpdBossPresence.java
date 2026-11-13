@@ -1,5 +1,6 @@
 package net.betterpartydefence;
 
+import lombok.ToString;
 import net.runelite.client.party.messages.PartyMemberMessage;
 
 /**
@@ -7,6 +8,7 @@ import net.runelite.client.party.messages.PartyMemberMessage;
  * boss is actually rendered, allowing another BPD peer that still holds valid remembered state for
  * the same encounter to answer with an absolute {@link BpdDefenceSync} snapshot immediately.
  */
+@ToString(doNotUseGetters = true)
 public class BpdBossPresence extends PartyMemberMessage
 {
 	public static final int PROTOCOL_VERSION = 1;
@@ -22,6 +24,7 @@ public class BpdBossPresence extends PartyMemberMessage
 	private int healthPercent;
 	private long sentAtMillis;
 	/** Sender's PartyService session. Zero means a legacy sender with no party id. */
+	@ToString.Exclude
 	private long partyId;
 
 	/** Required for party-message deserialisation. */

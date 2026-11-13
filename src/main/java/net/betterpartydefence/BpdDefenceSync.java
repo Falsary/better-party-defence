@@ -5,6 +5,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
+import lombok.ToString;
 import net.betterpartydefence.DefenceTracker.SpecHistoryEntry;
 import net.betterpartydefence.DefenceTracker.SyncState;
 import net.runelite.api.coords.WorldPoint;
@@ -16,6 +17,7 @@ import net.runelite.client.plugins.specialcounter.SpecialWeapon;
  * normal SpecialCounterUpdate path: it carries an absolute tracker snapshot so another BPD user
  * in the same encounter can stay in sync even when that boss actor is not loaded on their client.
  */
+@ToString(doNotUseGetters = true)
 public class BpdDefenceSync extends PartyMemberMessage
 {
 	public static final int PROTOCOL_VERSION = 2;
@@ -45,6 +47,7 @@ public class BpdDefenceSync extends PartyMemberMessage
 	private Integer scopeId;
 
 	@SerializedName("p")
+	@ToString.Exclude
 	private Integer bossLocation;
 
 	@SerializedName(value = "h", alternate = "healthPercent")
@@ -123,9 +126,13 @@ public class BpdDefenceSync extends PartyMemberMessage
 	private List<Long> historyObservedAtMillis;
 
 	// Read-only compatibility fields for version 1 snapshots.
+	@ToString.Exclude
 	private Integer bossX;
+	@ToString.Exclude
 	private Integer bossY;
+	@ToString.Exclude
 	private Integer bossPlane;
+	@ToString.Exclude
 	private Long partyId;
 
 	/** Required for party-message deserialisation. */
@@ -221,6 +228,7 @@ public class BpdDefenceSync extends PartyMemberMessage
 		return (plane << 28) | (x << 14) | y;
 	}
 
+	@ToString.Include(name = "location")
 	public WorldPoint getBossLocation()
 	{
 		if (bossLocation != null)

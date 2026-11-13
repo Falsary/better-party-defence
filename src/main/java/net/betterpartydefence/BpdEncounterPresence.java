@@ -1,5 +1,6 @@
 package net.betterpartydefence;
 
+import lombok.ToString;
 import net.runelite.client.party.messages.PartyMemberMessage;
 
 /**
@@ -7,6 +8,7 @@ import net.runelite.client.party.messages.PartyMemberMessage;
  * same Hub Party prove which actual raid/instance they are currently in before accepting normal
  * RuneLite SpecialCounterUpdate events from one another.
  */
+@ToString(doNotUseGetters = true)
 public class BpdEncounterPresence extends PartyMemberMessage
 {
 	public static final int PROTOCOL_VERSION = 1;
@@ -17,6 +19,7 @@ public class BpdEncounterPresence extends PartyMemberMessage
 	private int scopeId;
 	private long sentAtMillis;
 	/** Sender's PartyService session. Zero means a legacy sender with no party id. */
+	@ToString.Exclude
 	private long partyId;
 
 	/** Required for party-message deserialisation. */
