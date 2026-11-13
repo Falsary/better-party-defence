@@ -2,6 +2,7 @@ package net.betterpartydefence;
 
 import com.google.gson.annotations.SerializedName;
 import lombok.Getter;
+import lombok.ToString;
 import net.betterpartydefence.DefenceTracker.SpecHistoryEntry;
 import net.runelite.api.coords.WorldPoint;
 import net.runelite.client.party.messages.PartyMemberMessage;
@@ -9,12 +10,14 @@ import net.runelite.client.plugins.specialcounter.SpecialWeapon;
 
 /** One observation from its originator. The party transport supplies the sender identity. */
 @Getter
+@ToString(doNotUseGetters = true)
 public final class BpdSpecEvent extends PartyMemberMessage
 {
 	@SerializedName("w") private int world;
 	@SerializedName("s") private int scopeType;
 	@SerializedName("i") private Integer scopeId;
 	@SerializedName("b") private BossDefence boss;
+	@ToString.Exclude
 	@SerializedName("p") private int tile;
 	@SerializedName("n") private int npcIndex;
 	@SerializedName("hp") private Integer healthPercent;
@@ -64,6 +67,7 @@ public final class BpdSpecEvent extends PartyMemberMessage
 		return healthPercent == null ? -1 : healthPercent;
 	}
 
+	@ToString.Include
 	WorldPoint location()
 	{
 		return tile > 0 && tile >>> 30 == 0 ? WorldPoint.fromCoord(tile) : null;

@@ -77,11 +77,15 @@ public class DefenceTracker
 	private final Map<Integer, SavedState> tracked = new LinkedHashMap<>();
 	/** Synced state received before this client has a concrete NPC actor for that boss. */
 	private final Map<BossDefence, SavedState> unboundTracked = new LinkedHashMap<>();
+	/** Public encounters whose original scene slots no longer identify their actors. */
+	private final List<SavedState> detachedPublicTargets = new ArrayList<>();
 
 	/** -1 = nothing tracked. */
 	private int bossIndex = -1;
 	private String bossName = "";
 	private BossDefence bossType;
+	private int publicWorld;
+	private Integer privateInstance;
 	/** Last concrete NPC id bound to the encounter; used to detect phase transitions. */
 	private int bossNpcId = -1;
 	/** Last observed tile of the bound actor; distinguishes a live target from a reused index. */
@@ -126,6 +130,7 @@ public class DefenceTracker
 	private final Map<SpecHistoryEntry, Integer> recentStandardSpecs = new IdentityHashMap<>();
 	/** Logical encounters this client authoritatively observed ending on a dead NPC actor. */
 	private final Set<BossDefence> endedBosses = new LinkedHashSet<>();
+	private final Set<BossDefence> endedPublicBosses = new LinkedHashSet<>();
 
 	/** Filled from the socket reader thread, drained on the client thread. */
 	private final ConcurrentLinkedDeque<Drain> pending = new ConcurrentLinkedDeque<>();
@@ -397,6 +402,8 @@ public class DefenceTracker
 		int npcIndex;
 		String bossName;
 		BossDefence bossType;
+		int publicWorld;
+		Integer privateInstance;
 		int bossNpcId;
 		WorldPoint targetLocation;
 		/** Runtime-only actor reference; null for unattached snapshot state. */
@@ -578,6 +585,7 @@ public class DefenceTracker
 	public void onGameTick()
 	{
 		localSpecs.clear();
+		reconcileSceneBindings();
 		int currentTick = client.getTickCount();
 		recentStandardSpecs.values().removeIf(tick -> currentTick - tick > STANDARD_SPEC_CORRELATION_TICKS);
 		for (Drain drain = pending.poll(); drain != null; drain = pending.poll())
@@ -591,7 +599,7 @@ public class DefenceTracker
 		if (bossType != null && bossType.has(BossDefence.Flag.COX_SCALED)
 			&& wasInCoxRaid && !inCoxRaid)
 		{
-			reset("Chambers raid ended");
+			resetInstancedState("Chambers raid ended");
 		}
 		wasInCoxRaid = inCoxRaid;
 
@@ -603,7 +611,7 @@ public class DefenceTracker
 		// A BPD sync snapshot can seed this tracker before the boss is loaded locally. Once the
 		// same logical boss enters our scene, bind the existing synced state to that actor rather
 		// than starting a fresh encounter.
-		if (bossIndex == -1 && bossType != null)
+		if (bossIndex == -1 && bossType != null && publicWorld == 0)
 		{
 			NPC replacement = findNpcForBoss(bossType);
 			if (replacement != null)
@@ -670,7 +678,7 @@ public class DefenceTracker
 					{
 						if (bossType != null)
 						{
-							endedBosses.add(bossType);
+							recordBossDeath(bossType, publicWorld);
 						}
 						removeCurrent("tracked NPC died");
 					}
@@ -1155,6 +1163,8 @@ public class DefenceTracker
 		bossName = name;
 		bossIndex = index;
 		bossType = boss;
+		publicWorld = publicWorldFor(bossNpc);
+		privateInstance = privateInstanceFor(boss, bossNpc);
 		bossNpcId = bossNpc == null ? -1 : bossNpc.getId();
 		observeBoundActor(bossNpc);
 		kephriFinalResetApplied = boss == BossDefence.KEPHRI && isKephriFinalPhaseId(bossNpcId);
@@ -1227,7 +1237,15 @@ public class DefenceTracker
 		}
 		if (bossType != null)
 		{
-			unboundTracked.remove(bossType);
+			if (publicWorld > 0)
+			{
+				NPC previousActor = boundActor;
+				detachedPublicTargets.removeIf(saved -> saved.boundActor == previousActor);
+			}
+			else
+			{
+				unboundTracked.remove(bossType);
+			}
 		}
 		bossIndex = npc.getIndex();
 		bossName = npc.getName();
@@ -1256,7 +1274,7 @@ public class DefenceTracker
 		BossMechanics mechanics = BossMechanics.forBoss(bossType);
 		if (mechanics.endsEncounterOnActorEntry(bossNpcId))
 		{
-			reset("boss final phase ended");
+			resetInstancedState("boss final phase ended");
 			return;
 		}
 		if (bossType == BossDefence.KEPHRI
@@ -1295,7 +1313,7 @@ public class DefenceTracker
 		}
 		else if (state == 0 && sotetsegEncounterState != 0)
 		{
-			reset("Sotetseg encounter ended");
+			resetInstancedState("Sotetseg encounter ended");
 			return;
 		}
 		sotetsegEncounterState = state;
@@ -1424,7 +1442,7 @@ public class DefenceTracker
 	/** Current active target history. Kept for tracker/tests and sync-facing callers. */
 	public List<SpecHistoryEntry> specHistory()
 	{
-		return bossIndex < 0 ? Collections.emptyList() : specHistoryForCurrentTarget(bossIndex);
+		return Collections.unmodifiableList(new ArrayList<>(specHistory));
 	}
 
 	public boolean hasDefenceSpecHistory()
@@ -1627,6 +1645,190 @@ public class DefenceTracker
 		return worldView == null || worldView.npcs() == null ? null : worldView.npcs().byIndex(index);
 	}
 
+	private int publicWorldFor(NPC npc)
+	{
+		if (npc == null || BetterPartyDefencePlugin.isRaidEncounterBoss(BossDefence.matchingNpc(npc)))
+		{
+			return 0;
+		}
+		WorldView view = client.getTopLevelWorldView();
+		WorldView actorView = npc.getWorldView();
+		return view != null && !view.isInstance() && (actorView == null || actorView == view)
+			? client.getWorld() : 0;
+	}
+
+	private Integer privateInstanceFor(BossDefence boss, NPC npc)
+	{
+		WorldView view = client.getTopLevelWorldView();
+		return npc != null && view != null && view.isInstance() && !BetterPartyDefencePlugin.isRaidEncounterBoss(boss)
+			? BetterPartyDefencePlugin.instanceFingerprint(view) : null;
+	}
+
+	private void reconcileSceneBindings()
+	{
+		int world = client.getWorld();
+		WorldView view = client.getTopLevelWorldView();
+		boolean inInstance = view != null && view.isInstance();
+		Integer instance = null;
+		for (Iterator<SavedState> it = tracked.values().iterator(); it.hasNext();)
+		{
+			SavedState saved = it.next();
+			if (inInstance && saved.privateInstance != null && instance == null)
+			{
+				instance = BetterPartyDefencePlugin.instanceFingerprint(view);
+			}
+			if (view != null && saved.privateInstance != null && !saved.privateInstance.equals(instance))
+			{
+				it.remove();
+				if (bossIndex == saved.npcIndex && boundActor == saved.boundActor)
+				{
+					clearActiveFields();
+				}
+				continue;
+			}
+			if (saved.publicWorld <= 0 || saved.boundActor == null)
+			{
+				continue;
+			}
+			NPC indexed = npcByIndex(saved.npcIndex);
+			if (saved.publicWorld == world && view != null && !inInstance && indexed == saved.boundActor)
+			{
+				continue;
+			}
+
+			it.remove();
+			boolean selected = bossIndex == saved.npcIndex && boundActor == saved.boundActor;
+			if (saved.boundActor.isDead() || saved.publicWorld != world)
+			{
+				if (saved.publicWorld == world)
+				{
+					endedPublicBosses.add(saved.bossType);
+				}
+				if (selected)
+				{
+					clearActiveFields();
+				}
+				continue;
+			}
+			if (selected)
+			{
+				bossIndex = -1;
+				saved = snapshotCurrent();
+			}
+			if (saved.drained || saved.effects != null)
+			{
+				rememberDetachedPublicTarget(saved);
+			}
+			else if (selected)
+			{
+				clearActiveFields();
+			}
+		}
+
+		detachedPublicTargets.removeIf(saved -> {
+			if (saved.publicWorld != world)
+			{
+				return true;
+			}
+			if (saved.boundActor.isDead())
+			{
+				endedPublicBosses.add(saved.bossType);
+				return true;
+			}
+			return false;
+		});
+		if (publicWorld > 0 && (publicWorld != world || bossIndex < 0 && endedPublicBosses.contains(bossType)))
+		{
+			clearActiveFields();
+		}
+		if (view == null || inInstance || detachedPublicTargets.isEmpty())
+		{
+			return;
+		}
+		if (bossIndex < 0 && publicWorld > 0)
+		{
+			for (NPC npc : NpcTargetResolver.liveCandidates(view, bossType))
+			{
+				SavedState saved = detachedPublicTarget(bossType, npc);
+				if (saved != null && saved.boundActor == boundActor)
+				{
+					rebindBoss(npc);
+					break;
+				}
+			}
+		}
+		else if (bossType == null)
+		{
+			// Restore a public encounter after an unrelated target or raid was cleared.
+			Set<BossDefence> bosses = new LinkedHashSet<>();
+			for (SavedState saved : detachedPublicTargets)
+			{
+				bosses.add(saved.bossType);
+			}
+			for (BossDefence boss : bosses)
+			{
+				for (NPC npc : NpcTargetResolver.liveCandidates(view, boss))
+				{
+					SavedState saved = detachedPublicTarget(boss, npc);
+					if (saved != null)
+					{
+						loadSavedState(saved);
+						rebindBoss(npc);
+						return;
+					}
+				}
+			}
+		}
+	}
+
+	private void rememberDetachedPublicTarget(SavedState saved)
+	{
+		saved.npcIndex = -1;
+		detachedPublicTargets.removeIf(old -> old.boundActor == saved.boundActor);
+		detachedPublicTargets.add(saved);
+	}
+
+	private SavedState detachedPublicTarget(BossDefence boss, NPC npc)
+	{
+		int world = publicWorldFor(npc);
+		if (world <= 0 || !BossDefence.isLiveNpc(npc) || endedPublicBosses.contains(boss))
+		{
+			return null;
+		}
+		SavedState candidate = null;
+		boolean ambiguous = false;
+		for (SavedState saved : detachedPublicTargets)
+		{
+			if (saved.bossType != boss || saved.publicWorld != world || saved.boundActor.isDead())
+			{
+				continue;
+			}
+			if (saved.boundActor == npc)
+			{
+				return saved;
+			}
+			if (candidate != null)
+			{
+				ambiguous = true;
+			}
+			candidate = saved;
+		}
+		WorldPoint tile = npc.getWorldLocation();
+		if (ambiguous || candidate == null || NpcTargetResolver.uniqueLiveNpc(client.getTopLevelWorldView(), boss) != npc
+			|| candidate.targetLocation != null && tile != null && candidate.targetLocation.getPlane() != tile.getPlane())
+		{
+			return null;
+		}
+		for (SavedState saved : tracked.values())
+		{
+			if (saved.bossType == boss && saved.publicWorld == world && saved.boundActor != npc)
+			{
+				return null;
+			}
+		}
+		return candidate;
+	}
+
 	private void observeBoundActor(NPC npc)
 	{
 		boundActor = npc;
@@ -1731,7 +1933,11 @@ public class DefenceTracker
 			return null;
 		}
 		saveCurrent();
-		if (bossType == boss)
+		WorldView view = client.getTopLevelWorldView();
+		boolean inPublicWorld = view != null && !view.isInstance();
+		if (bossType == boss && (privateInstance == null || !inPublicWorld)
+			&& (publicWorld == 0 || inPublicWorld && publicWorld == client.getWorld()
+			&& (boundActor == null || !boundActor.isDead())))
 		{
 			return toSyncState(snapshotCurrent());
 		}
@@ -1743,12 +1949,71 @@ public class DefenceTracker
 		SavedState best = null;
 		for (SavedState saved : tracked.values())
 		{
-			if (saved.bossType == boss && (best == null || saved.history.size() > best.history.size()))
+			if (saved.bossType == boss && (saved.privateInstance == null || !inPublicWorld)
+				&& (saved.publicWorld == 0
+				|| inPublicWorld && saved.publicWorld == client.getWorld())
+				&& (saved.publicWorld == 0 || saved.boundActor == null || !saved.boundActor.isDead())
+				&& (best == null || saved.history.size() > best.history.size()))
 			{
 				best = saved;
 			}
 		}
 		return toSyncState(best);
+	}
+
+	/** An off-scene responder must have one public candidate near the requested boss. */
+	SyncState publicSyncStateForBoss(BossDefence boss, int world, WorldPoint point, int tolerance)
+	{
+		if (world <= 0 || point == null || endedPublicBosses.contains(boss))
+		{
+			return null;
+		}
+		saveCurrent();
+		SavedState candidate = null;
+		List<SavedState> candidates = new ArrayList<>(tracked.values());
+		candidates.addAll(detachedPublicTargets);
+		for (SavedState saved : candidates)
+		{
+			if (saved.publicWorld != world || saved.bossType != boss || !saved.drained
+				|| !BossDefence.isLiveNpc(saved.boundActor))
+			{
+				continue;
+			}
+			if (candidate != null)
+			{
+				return null;
+			}
+			candidate = saved;
+		}
+		return candidate != null && candidate.targetLocation != null
+			&& candidate.targetLocation.distanceTo(point) <= tolerance ? toSyncState(candidate) : null;
+	}
+
+	boolean hasPublicState(BossDefence boss, int world)
+	{
+		return tracked.values().stream().anyMatch(saved -> saved.bossType == boss && saved.publicWorld == world)
+			|| detachedPublicTargets.stream().anyMatch(saved -> saved.bossType == boss && saved.publicWorld == world);
+	}
+
+	void clearPublicState(BossDefence boss, int world, String reason)
+	{
+		// Clear queued hits attached to the removed actors without clearing a private copy's hits.
+		List<SavedState> candidates = new ArrayList<>(tracked.values());
+		candidates.addAll(detachedPublicTargets);
+		for (SavedState saved : candidates)
+		{
+			if (saved.bossType == boss && saved.publicWorld == world)
+			{
+				clearDeferredForTarget(-1, saved.boundActor);
+			}
+		}
+		detachedPublicTargets.removeIf(saved -> saved.bossType == boss && saved.publicWorld == world);
+		tracked.values().removeIf(saved -> saved.bossType == boss && saved.publicWorld == world);
+		if (bossType == boss && publicWorld == world)
+		{
+			clearActiveFields();
+		}
+		log.debug("Cleared public {} state in world {}: {}", boss, world, reason);
 	}
 
 	/**
@@ -2101,6 +2366,8 @@ public class DefenceTracker
 		localTickAnchor = previousTarget == null ? null : previousTarget.localTickAnchor;
 		localAnchorTick = previousTarget == null ? 0 : previousTarget.localAnchorTick;
 		bossType = sync.getBossType();
+		publicWorld = publicWorldFor(localNpc);
+		privateInstance = privateInstanceFor(bossType, localNpc);
 		bossName = sync.getBossName() == null ? bossType.getNpcName() : sync.getBossName();
 		bossIndex = localNpc == null ? -1 : localNpc.getIndex();
 		bossNpcId = localNpc == null ? -1 : localNpc.getId();
@@ -2159,6 +2426,8 @@ public class DefenceTracker
 		s.npcIndex = bossIndex;
 		s.bossName = bossName;
 		s.bossType = bossType;
+		s.publicWorld = publicWorld;
+		s.privateInstance = privateInstance;
 		s.bossNpcId = bossNpcId;
 		s.targetLocation = targetLocation;
 		s.boundActor = boundActor;
@@ -2195,6 +2464,11 @@ public class DefenceTracker
 		{
 			tracked.put(s.npcIndex, s);
 			unboundTracked.remove(s.bossType);
+		}
+		else if (s.publicWorld > 0)
+		{
+			// The detached public record is unchanged until it is rebound.
+			return;
 		}
 		else
 		{
@@ -2239,6 +2513,14 @@ public class DefenceTracker
 			return false;
 		}
 
+		SavedState detached = detachedPublicTarget(boss, npc);
+		if (detached != null)
+		{
+			loadSavedState(detached);
+			rebindBoss(npc);
+			return true;
+		}
+
 		SavedState unbound = unboundTracked.remove(boss);
 		if (unbound != null)
 		{
@@ -2246,6 +2528,8 @@ public class DefenceTracker
 			bossIndex = npc.getIndex();
 			bossNpcId = npc.getId();
 			bossName = npc.getName();
+			publicWorld = publicWorldFor(npc);
+			privateInstance = privateInstanceFor(boss, npc);
 			observeBoundActor(npc);
 			saveCurrent();
 			return true;
@@ -2297,6 +2581,8 @@ public class DefenceTracker
 		bossIndex = s.npcIndex;
 		bossName = s.bossName;
 		bossType = s.bossType;
+		publicWorld = s.publicWorld;
+		privateInstance = s.privateInstance;
 		bossNpcId = s.bossNpcId;
 		targetLocation = s.targetLocation;
 		boundActor = s.boundActor;
@@ -2352,7 +2638,7 @@ public class DefenceTracker
 				}
 				if (ended != null && ended.bossType != null)
 				{
-					endedBosses.add(ended.bossType);
+					recordBossDeath(ended.bossType, ended.publicWorld);
 				}
 				clearDeferredForTarget(entry.getKey(), saved == null ? null : saved.boundActor);
 				it.remove();
@@ -2371,6 +2657,18 @@ public class DefenceTracker
 		return ended;
 	}
 
+	private void recordBossDeath(BossDefence boss, int world)
+	{
+		(world > 0 ? endedPublicBosses : endedBosses).add(boss);
+	}
+
+	Set<BossDefence> consumeEndedPublicBosses()
+	{
+		Set<BossDefence> ended = new LinkedHashSet<>(endedPublicBosses);
+		endedPublicBosses.clear();
+		return ended;
+	}
+
 	private void clearActiveFields()
 	{
 		effects = null;
@@ -2378,6 +2676,8 @@ public class DefenceTracker
 		bossIndex = -1;
 		bossName = "";
 		bossType = null;
+		publicWorld = 0;
+		privateInstance = null;
 		bossNpcId = -1;
 		targetLocation = null;
 		boundActor = null;
@@ -2427,6 +2727,23 @@ public class DefenceTracker
 				return;
 			}
 		}
+	}
+
+	void resetInstancedState(String reason)
+	{
+		List<SavedState> publicTargets = new ArrayList<>();
+		for (SavedState saved : tracked.values())
+		{
+			if (saved.publicWorld > 0)
+			{
+				publicTargets.add(saved);
+			}
+		}
+		publicTargets.addAll(detachedPublicTargets);
+		Set<BossDefence> publicDeaths = new LinkedHashSet<>(endedPublicBosses);
+		reset(reason);
+		publicTargets.forEach(this::rememberDetachedPublicTarget);
+		endedPublicBosses.addAll(publicDeaths);
 	}
 
 	/** Display-only effects use the same saved target and rebind rules as its combat stats. */
@@ -2528,6 +2845,13 @@ public class DefenceTracker
 				bosses.add(saved.bossType);
 			}
 		}
+		for (SavedState saved : detachedPublicTargets)
+		{
+			if (saved.drained || includeEffects && saved.effects != null)
+			{
+				bosses.add(saved.bossType);
+			}
+		}
 		return bosses;
 	}
 
@@ -2545,6 +2869,10 @@ public class DefenceTracker
 		{
 			return true;
 		}
+		if (detachedPublicTargets.stream().anyMatch(saved -> saved.bossType == boss))
+		{
+			return true;
+		}
 		for (SavedState saved : tracked.values())
 		{
 			if (saved != null && saved.bossType == boss)
@@ -2558,12 +2886,22 @@ public class DefenceTracker
 	/** Remove only one logical boss while retaining other simultaneous/remembered targets. */
 	public void clearBossState(BossDefence boss, String reason)
 	{
+		clearBossState(boss, reason, true);
+	}
+
+	void clearInstancedBossState(BossDefence boss, String reason)
+	{
+		clearBossState(boss, reason, false);
+	}
+
+	private void clearBossState(BossDefence boss, String reason, boolean includePublic)
+	{
 		if (boss == null)
 		{
 			return;
 		}
 
-		boolean clearingActive = bossType == boss;
+		boolean clearingActive = bossType == boss && (includePublic || publicWorld == 0);
 		Set<Integer> clearedIndices = new LinkedHashSet<>();
 		Set<NPC> clearedActors = new LinkedHashSet<>();
 		if (clearingActive)
@@ -2579,7 +2917,7 @@ public class DefenceTracker
 		}
 		tracked.entrySet().removeIf(entry -> {
 			SavedState saved = entry.getValue();
-			if (saved == null || saved.bossType != boss)
+			if (saved == null || saved.bossType != boss || !includePublic && saved.publicWorld > 0)
 			{
 				return false;
 			}
@@ -2591,6 +2929,10 @@ public class DefenceTracker
 			return true;
 		});
 		unboundTracked.remove(boss);
+		if (includePublic)
+		{
+			detachedPublicTargets.removeIf(saved -> saved.bossType == boss);
+		}
 		clearDeferredForBoss(boss);
 		for (Integer index : clearedIndices)
 		{
@@ -2642,14 +2984,16 @@ public class DefenceTracker
 		recentStandardSpecs.clear();
 		localSpecs.clear();
 		if (bossType != null || bossIndex != -1 || !tracked.isEmpty() || !unboundTracked.isEmpty()
-			|| !pending.isEmpty() || !heldDrains.isEmpty())
+			|| !detachedPublicTargets.isEmpty() || !pending.isEmpty() || !heldDrains.isEmpty())
 		{
 			log.debug("Reset defence tracker: {}", reason);
 		}
 		clearActiveFields();
 		tracked.clear();
 		unboundTracked.clear();
+		detachedPublicTargets.clear();
 		endedBosses.clear();
+		endedPublicBosses.clear();
 		pending.clear();
 		heldDrains.clear();
 	}

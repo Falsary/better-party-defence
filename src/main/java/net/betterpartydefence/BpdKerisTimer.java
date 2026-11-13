@@ -1,15 +1,18 @@
 package net.betterpartydefence;
 
+import lombok.ToString;
 import net.runelite.api.coords.WorldPoint;
 import net.runelite.client.party.messages.PartyMemberMessage;
 
 /** A landed Red Keris effect. It carries its original impact time and no Defence state. */
+@ToString(doNotUseGetters = true)
 public class BpdKerisTimer extends PartyMemberMessage
 {
 	static final int PROTOCOL_VERSION = 1;
 	private static final int TICK_MILLIS = 600;
 
 	private int protocolVersion;
+	@ToString.Exclude
 	private long partyId;
 	private int world;
 	private BossDefence boss;

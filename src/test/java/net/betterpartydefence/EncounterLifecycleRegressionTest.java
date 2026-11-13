@@ -13,6 +13,7 @@ import java.lang.reflect.Method;
 import java.util.Collections;
 import java.util.Deque;
 import java.util.Map;
+import java.util.Set;
 import net.betterpartydefence.DefenceTracker.DefenceState;
 import net.betterpartydefence.DefenceTracker.SpecHistoryEntry;
 import net.betterpartydefence.DefenceTracker.SyncState;
@@ -84,7 +85,7 @@ public class EncounterLifecycleRegressionTest
 		scopeConstructor.setAccessible(true);
 		privateMap("retainedRaidScopes").put(BossDefence.TEKTON,
 			scopeConstructor.newInstance(BpdDefenceSync.SCOPE_COX, 77));
-		privateMap("lastBossPresenceBroadcastMillis").put(BossDefence.TEKTON, 123L);
+		Set<?> visibleBosses = markTektonVisible();
 		BpdDefenceSync queuedSnapshot = new BpdDefenceSync(
 			WORLD, tektonState(), BpdDefenceSync.SCOPE_COX, 77, 0, 0, 0, 100, 99);
 		privateDeque("pendingSnapshots").addLast(queuedSnapshot);
@@ -104,8 +105,7 @@ public class EncounterLifecycleRegressionTest
 		assertTrue("logical versions belong to the ended encounter", versions.isEmpty());
 		assertTrue("retained raid scopes belong to the ended encounter",
 			privateMap("retainedRaidScopes").isEmpty());
-		assertTrue("presence throttle belongs to the ended encounter",
-			privateMap("lastBossPresenceBroadcastMillis").isEmpty());
+		assertTrue("visibility belongs to the ended encounter", visibleBosses.isEmpty());
 		assertTrue("queued snapshots from the ended encounter must be discarded",
 			privateDeque("pendingSnapshots").isEmpty());
 		assertTrue("pending world sync belongs to the ended encounter",
@@ -153,6 +153,14 @@ public class EncounterLifecycleRegressionTest
 		Field field = BetterPartyDefencePlugin.class.getDeclaredField(name);
 		field.setAccessible(true);
 		return field;
+	}
+
+	@SuppressWarnings("unchecked")
+	private Set<BossDefence> markTektonVisible() throws Exception
+	{
+		Set<BossDefence> visibleBosses = (Set<BossDefence>) pluginField("visibleTrackedBosses").get(plugin);
+		visibleBosses.add(BossDefence.TEKTON);
+		return visibleBosses;
 	}
 
 	@SuppressWarnings("unchecked")

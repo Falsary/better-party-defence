@@ -1,5 +1,6 @@
 package net.betterpartydefence;
 
+import lombok.ToString;
 import net.runelite.client.party.messages.PartyMemberMessage;
 
 /**
@@ -7,6 +8,7 @@ import net.runelite.client.party.messages.PartyMemberMessage;
  * Defence snapshot and spec history for one logical target when an encounter authoritatively
  * ends while the surrounding world/raid session may continue.
  */
+@ToString(doNotUseGetters = true)
 public class BpdEncounterReset extends PartyMemberMessage
 {
 	public static final int PROTOCOL_VERSION = 1;
@@ -18,6 +20,7 @@ public class BpdEncounterReset extends PartyMemberMessage
 	private int scopeId;
 	private long sentAtMillis;
 	/** Sender's PartyService session. Zero means a legacy sender with no party id. */
+	@ToString.Exclude
 	private long partyId;
 
 	/** Required for party-message deserialisation. */

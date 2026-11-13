@@ -2,6 +2,7 @@ package net.betterpartydefence;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
@@ -33,6 +34,7 @@ import net.runelite.client.eventbus.EventBus;
 import net.runelite.client.events.PartyChanged;
 import net.runelite.client.party.PartyMember;
 import net.runelite.client.party.PartyService;
+import net.runelite.client.party.events.UserJoin;
 import net.runelite.client.plugins.specialcounter.SpecialCounterUpdate;
 import net.runelite.client.plugins.specialcounter.SpecialWeapon;
 import org.junit.Test;
@@ -184,6 +186,207 @@ public class EncounterRecoveryRegressionTest
 		assertEquals(120L, bob.tracker.state().getCurrent());
 		assertEquals(1, bob.sentBossPresenceRequests);
 		assertEquals(1, alice.sentDefenceSyncs);
+	}
+
+	@Test
+	public void publicBossRebindsBeyondEightTilesWithoutNetworkTraffic()
+	{
+		for (String boss : List.of("Giant Mole", "Corporeal Beast", "Chaos Elemental"))
+		{
+			Node node = new Node();
+			NPC original = node.addNpc(MOLE_INDEX, boss);
+			node.tracker.queueLocal(SpecialWeapon.DRAGON_WARHAMMER, MOLE_INDEX, 1, WORLD, "Alice", original);
+			node.tick();
+			SyncState before = node.tracker.syncState();
+			int requests = node.sentBossPresenceRequests;
+			int specs = node.sentSpecs.size();
+
+			NPC replacement = node.addNpc(MOLE_INDEX, boss);
+			when(replacement.getWorldLocation()).thenReturn(new WorldPoint(3040, 3000, 0));
+			node.tick();
+			node.tick();
+
+			assertTrue(node.tracker.hasBoundNpc());
+			assertEquals(before, node.tracker.syncState());
+			assertEquals(requests, node.sentBossPresenceRequests);
+			assertEquals(specs, node.sentSpecs.size());
+			assertEquals(0, node.sentDefenceSyncs);
+		}
+	}
+
+	@Test
+	public void publicBossCacheSurvivesUnrelatedIndexReuseAndClearsOnObservedKill()
+	{
+		Node node = new Node();
+		node.addMole();
+		node.localSpec(SpecialWeapon.DRAGON_WARHAMMER, 1);
+		node.tick();
+		SyncState before = node.tracker.syncState();
+
+		node.addNpc(MOLE_INDEX, "Goblin");
+		node.tick();
+		assertFalse(node.tracker.hasBoundNpc());
+		assertTrue(node.tracker.states().isEmpty());
+		assertTrue(node.tracker.hasRememberedState(BossDefence.GIANT_MOLE));
+
+		int replacementIndex = MOLE_INDEX + 1;
+		NPC replacement = node.addNpc(replacementIndex, "Giant Mole");
+		when(replacement.getWorldLocation()).thenReturn(new WorldPoint(3040, 3000, 0));
+		node.tick();
+		assertTrue(node.tracker.hasBoundNpc());
+		assertEquals(replacementIndex, node.tracker.state().getNpcIndex());
+		assertEquals(before, node.tracker.syncState());
+
+		when(replacement.isDead()).thenReturn(true);
+		node.tick();
+		assertFalse(node.tracker.hasRememberedState(BossDefence.GIANT_MOLE));
+	}
+
+	@Test
+	public void publicBossCacheDoesNotAttachToPrivateCopyOrSurviveAWorldChange()
+	{
+		Node node = new Node();
+		node.addMole();
+		node.localSpec(SpecialWeapon.DRAGON_WARHAMMER, 1);
+		node.tick();
+		SyncState before = node.tracker.syncState();
+
+		when(node.worldView.isInstance()).thenReturn(true);
+		node.addMole();
+		node.tick();
+		assertFalse(node.tracker.hasBoundNpc());
+		assertNull(node.tracker.syncStateForBoss(BossDefence.GIANT_MOLE));
+		node.apply(moleState(123));
+		node.tick();
+		assertEquals(123L, node.tracker.state().getCurrent());
+
+		when(node.worldView.isInstance()).thenReturn(false);
+		node.addMole();
+		node.tick();
+		assertEquals(before, node.tracker.syncState());
+
+		when(node.client.getWorld()).thenReturn(WORLD + 1);
+		node.tick();
+		assertFalse(node.tracker.hasRememberedState(BossDefence.GIANT_MOLE));
+	}
+
+	@Test
+	public void ambiguousPublicBossesDoNotInheritAStoredDrain()
+	{
+		Node node = new Node();
+		node.addMole();
+		node.localSpec(SpecialWeapon.DRAGON_WARHAMMER, 1);
+		node.tick();
+		SyncState before = node.tracker.syncState();
+		node.removeMole();
+		node.addNpc(MOLE_INDEX + 1, "Giant Mole");
+		node.addNpc(MOLE_INDEX + 2, "Giant Mole");
+
+		node.tick();
+		assertFalse(node.tracker.hasBoundNpc());
+		assertTrue(node.tracker.states().isEmpty());
+		assertEquals(before, node.tracker.syncState());
+	}
+
+	@Test
+	public void corpCatchUpAddsOneReplyFromAnInstancedPeerAndKillClearsItsCache()
+	{
+		Node holder = new Node();
+		Node returning = new Node();
+		NPC corp = holder.addNpc(MOLE_INDEX, "Corporeal Beast");
+		holder.tracker.queueLocal(SpecialWeapon.DRAGON_WARHAMMER, MOLE_INDEX, 1, WORLD, "Alice", corp);
+		holder.tick();
+		SyncState before = holder.tracker.syncState();
+		holder.removeMole();
+		when(holder.worldView.isInstance()).thenReturn(true);
+		holder.tick();
+		holder.setPeer(returning);
+		returning.setPeer(holder);
+		NPC visibleCorp = returning.addNpc(MOLE_INDEX, "Corporeal Beast");
+		returning.tick();
+		for (int i = 0; i < 12; i++)
+		{
+			returning.tick();
+			holder.tick();
+		}
+		assertEquals(1, returning.sentBossPresenceRequests);
+		assertEquals(1, holder.sentDefenceSyncs);
+		assertEquals(before, returning.tracker.syncState());
+
+		when(visibleCorp.isDead()).thenReturn(true);
+		returning.tick();
+		assertEquals(1, returning.sentEncounterResets);
+		assertFalse(holder.tracker.hasRememberedState(BossDefence.CORPOREAL_BEAST));
+	}
+
+	@Test
+	public void onlyOneInstancedPeerCanSendTheAdditionalReply()
+	{
+		Node first = new Node();
+		Node second = new Node();
+		when(second.localMember.getMemberId()).thenReturn(2L);
+		when(first.party.getMembers()).thenReturn(List.of(first.localMember, second.localMember));
+		when(second.party.getMembers()).thenReturn(List.of(first.localMember, second.localMember));
+		for (Node holder : List.of(first, second))
+		{
+			holder.addMole();
+			holder.apply(moleState(94));
+			holder.removeMole();
+			when(holder.worldView.isInstance()).thenReturn(true);
+			holder.tick();
+		}
+
+		BpdBossPresence request = new BpdBossPresence(WORLD, BossDefence.GIANT_MOLE,
+			BpdDefenceSync.SCOPE_WORLD, 0, 3000, 3000, 0, -1);
+		request.setMemberId(REMOTE_MEMBER_ID);
+		first.plugin.onBpdBossPresence(request);
+		second.plugin.onBpdBossPresence(request);
+		assertEquals(1, first.sentDefenceSyncs);
+		assertEquals(0, second.sentDefenceSyncs);
+	}
+
+	@Test
+	public void visibleBossWaitsForLocalPartyJoinAndRequestsOnce()
+	{
+		Node bob = new Node();
+		bob.addMole();
+		bob.apply(moleState(180));
+		when(bob.party.getPartyId()).thenReturn(2L);
+		when(bob.party.getLocalMember()).thenReturn(null);
+		bob.plugin.onPartyChanged(new PartyChanged("test-party", 2L));
+		bob.tick();
+		assertEquals(0, bob.sentBossPresenceRequests);
+
+		when(bob.party.getLocalMember()).thenReturn(bob.localMember);
+		bob.eventBus.post(new UserJoin(2L, REMOTE_MEMBER_ID));
+		bob.tick();
+		assertEquals(0, bob.sentBossPresenceRequests);
+
+		bob.eventBus.post(new UserJoin(2L, bob.localMember.getMemberId()));
+		bob.tick();
+		bob.tick();
+		assertEquals(1, bob.sentBossPresenceRequests);
+	}
+
+	@Test
+	public void unansweredBossRequestWaitsForBossToReturnToView()
+	{
+		Node bob = new Node();
+		bob.addMole();
+		bob.tick();
+		assertEquals(1, bob.sentBossPresenceRequests);
+
+		for (int i = 0; i < 100; i++)
+		{
+			bob.tick();
+		}
+		assertEquals(1, bob.sentBossPresenceRequests);
+
+		bob.removeMole();
+		bob.tick();
+		bob.addMole();
+		bob.tick();
+		assertEquals(2, bob.sentBossPresenceRequests);
 	}
 
 	@Test
@@ -570,6 +773,7 @@ public class EncounterRecoveryRegressionTest
 		private Node peer;
 		private final List<Integer> sentEncounterScopes = new ArrayList<>();
 		private int sentDefenceSyncs;
+		private int sentEncounterResets;
 		private final List<BpdSpecEvent> sentSpecs = new ArrayList<>();
 		private int sentBossPresenceRequests;
 		private int tick = 100;
@@ -628,6 +832,16 @@ public class EncounterRecoveryRegressionTest
 				else if (message instanceof BpdEncounterPresence)
 				{
 					sentEncounterScopes.add(((BpdEncounterPresence) message).getScopeType());
+				}
+				else if (message instanceof BpdEncounterReset)
+				{
+					sentEncounterResets++;
+					BpdEncounterReset reset = (BpdEncounterReset) message;
+					if (peer != null)
+					{
+						reset.setMemberId(REMOTE_MEMBER_ID);
+						peer.plugin.onBpdEncounterReset(reset);
+					}
 				}
 				else if (message instanceof BpdBossPresence)
 				{
