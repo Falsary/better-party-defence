@@ -9,9 +9,10 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 import java.awt.image.BufferedImage;
-import java.lang.reflect.Field;
 import java.util.ArrayList;
 import java.util.List;
+import net.betterpartydefence.BetterPartyDefenceConfig.DefenceInfoBoxValue;
+import net.betterpartydefence.BetterPartyDefenceConfig.MagicDefenceDisplay;
 import net.runelite.api.Client;
 import net.runelite.api.IndexedObjectSet;
 import net.runelite.api.NPC;
@@ -26,8 +27,7 @@ import org.junit.Before;
 import org.junit.Test;
 
 /** Regression tests for the defence math retained from the original OSParty-derived tracker. */
-public class DefenceTrackerParityTest
-{
+public class DefenceTrackerParityTest {
 	private static final int WORLD = 1;
 
 	private Client client;
@@ -38,8 +38,7 @@ public class DefenceTrackerParityTest
 
 	@SuppressWarnings("unchecked")
 	@Before
-	public void setUp()
-	{
+	public void setUp() {
 		client = mock(Client.class);
 		config = mock(BetterPartyDefenceConfig.class);
 		worldView = mock(WorldView.class);
@@ -56,18 +55,15 @@ public class DefenceTrackerParityTest
 		when(config.defenceAlwaysShow()).thenReturn(false);
 	}
 
-	private NPC fakeNpc(String name, int index)
-	{
+	private NPC fakeNpc(String name, int index) {
 		return fakeNpc(name, index, -1);
 	}
 
-	private NPC fakeNpc(String name, int index, int id)
-	{
+	private NPC fakeNpc(String name, int index, int id) {
 		return fakeNpc(name, index, id, null);
 	}
 
-	private NPC fakeNpc(String name, int index, int id, WorldPoint location)
-	{
+	private NPC fakeNpc(String name, int index, int id, WorldPoint location) {
 		NPC npc = mock(NPC.class);
 		when(npc.getName()).thenReturn(name);
 		when(npc.getIndex()).thenReturn(index);
@@ -80,36 +76,24 @@ public class DefenceTrackerParityTest
 		return npc;
 	}
 
-	private void removeNpc(int index)
-	{
+	private void removeNpc(int index) {
 		sceneNpcs.removeIf(npc -> npc.getIndex() == index);
 		when(npcs.byIndex(index)).thenReturn(null);
 	}
 
-	private void restoreNpc(NPC npc)
-	{
+	private void restoreNpc(NPC npc) {
 		when(npcs.byIndex(npc.getIndex())).thenReturn(npc);
-		if (!sceneNpcs.contains(npc))
-		{
+		if (!sceneNpcs.contains(npc)) {
 			sceneNpcs.add(npc);
 		}
 	}
 
-	private DefenceTracker makeTracker()
-	{
+	private DefenceTracker makeTracker() {
 		return new DefenceTracker(client, config);
 	}
 
-	private long field(Object object, String name) throws Exception
-	{
-		Field field = object.getClass().getDeclaredField(name);
-		field.setAccessible(true);
-		return (long) field.get(object);
-	}
-
 	@Test
-	public void infoboxTooltipsReuseHistoryUntilSpecsTargetOrConfigChange()
-	{
+	public void infoboxTooltipsReuseHistoryUntilSpecsTargetOrConfigChange() {
 		when(config.defenceInfoBoxValue()).thenReturn(DefenceInfoBoxValue.CURRENT);
 		when(config.magicDefenceDisplay()).thenReturn(MagicDefenceDisplay.BONUS);
 		when(config.extraInfoInInfoBox()).thenReturn(true);
@@ -166,16 +150,19 @@ public class DefenceTrackerParityTest
 	}
 
 	@Test
-	public void bossNameMatchingHandlesTagsAndPhaseSuffixes()
-	{
-		assertEquals(BossDefence.CORE, BossDefence.matchingNpcName("Core"));
+	public void bossNameMatchingHandlesTagsAndPhaseSuffixes() {
+		assertNull(BossDefence.matchingNpcName("Core"));
 		assertEquals(BossDefence.OBELISK, BossDefence.matchingNpcName("<col=00ffff>Obelisk</col>"));
 		assertEquals(BossDefence.VETION, BossDefence.matchingNpcName("Vet'ion Reborn"));
+		assertEquals(BossDefence.TEKTON, BossDefence.matchingNpcName("Tekton (enraged)"));
+		assertEquals(BossDefence.TFA_DREADNOTH,
+				BossDefence.matchingNpcName("Dreadnoth the Jellied (enraged)"));
+		assertEquals(BossDefence.TFA_DREADNOTH,
+				BossDefence.matchingNpcName("Enraged Dreadnoth, the Jellied"));
 	}
 
 	@Test
-	public void supportedWeaponFilterIsDefenceOnly()
-	{
+	public void supportedWeaponFilterIsDefenceOnly() {
 		assertTrue(DefenceTracker.isSupportedWeapon(SpecialWeapon.DRAGON_WARHAMMER));
 		assertTrue(DefenceTracker.isSupportedWeapon(SpecialWeapon.EYE_OF_AYAK));
 		assertFalse(DefenceTracker.isSupportedWeapon(SpecialWeapon.BULWARK));
@@ -183,8 +170,7 @@ public class DefenceTrackerParityTest
 	}
 
 	@Test
-	public void infoBoxWeaponClassificationSeparatesDefenceAndMagic()
-	{
+	public void infoBoxWeaponClassificationSeparatesDefenceAndMagic() {
 		assertTrue(DefenceTracker.drainsDefence(SpecialWeapon.DRAGON_WARHAMMER));
 		assertTrue(DefenceTracker.drainsDefence(SpecialWeapon.TONALZTICS_OF_RALOS));
 		assertFalse(DefenceTracker.drainsMagicDefence(SpecialWeapon.DRAGON_WARHAMMER));
@@ -200,8 +186,7 @@ public class DefenceTrackerParityTest
 	}
 
 	@Test
-	public void tfaMagicIsHiddenWhileInternalMagicAndNormalDefenceRemainIntact()
-	{
+	public void tfaMagicIsHiddenWhileInternalMagicAndNormalDefenceRemainIntact() {
 		fakeNpc("Archive Guardian", 71);
 		DefenceTracker tracker = makeTracker();
 		tracker.queue(SpecialWeapon.DRAGON_WARHAMMER, 71, 1, WORLD);
@@ -209,7 +194,7 @@ public class DefenceTrackerParityTest
 
 		DefenceTracker.DefenceState state = tracker.state();
 		assertTrue(state.isTfaBoss());
-		assertFalse(MagicDefenceVisibility.isVisible(state));
+		assertFalse(DefenceReadout.magicDefenceVisible(state));
 		assertEquals(182, state.getCurrent());
 		// Preserve Magic for Ralos calculations and complete party sync.
 		assertEquals(250, state.getMagicLevel());
@@ -217,8 +202,7 @@ public class DefenceTrackerParityTest
 	}
 
 	@Test
-	public void dagonhaiMonkRetainsUncappedNormalDefenceAndHidesMagic()
-	{
+	public void dagonhaiMonkRetainsUncappedNormalDefenceAndHidesMagic() {
 		fakeNpc("Dagon'hai Monk", 73, 16645);
 		DefenceTracker tracker = makeTracker();
 		tracker.queue(SpecialWeapon.DRAGON_WARHAMMER, 73, 1, WORLD);
@@ -226,15 +210,14 @@ public class DefenceTrackerParityTest
 
 		DefenceTracker.DefenceState state = tracker.state();
 		assertTrue(state.isTfaBoss());
-		assertFalse(MagicDefenceVisibility.isVisible(state));
+		assertFalse(DefenceReadout.magicDefenceVisible(state));
 		assertEquals(0, state.getMin());
 		assertTrue(state.getCurrent() < state.getBase());
 		assertEquals(290, state.getMagicLevel());
 	}
 
 	@Test
-	public void magicOutsideTfaStillDisplays()
-	{
+	public void magicOutsideTfaStillDisplays() {
 		fakeNpc("Corporeal Beast", 75);
 		DefenceTracker tracker = makeTracker();
 		tracker.queue(SpecialWeapon.EYE_OF_AYAK, 75, 30, WORLD);
@@ -242,13 +225,12 @@ public class DefenceTrackerParityTest
 
 		DefenceTracker.DefenceState state = tracker.state();
 		assertFalse(state.isTfaBoss());
-		assertTrue(MagicDefenceVisibility.isVisible(state));
+		assertTrue(DefenceReadout.magicDefenceVisible(state));
 		assertEquals(120, state.getMagicDef());
 	}
 
 	@Test
-	public void magicOnlySpecDoesNotCreateDefenceHistory()
-	{
+	public void magicOnlySpecDoesNotCreateDefenceHistory() {
 		fakeNpc("Corporeal Beast", 7);
 		DefenceTracker tracker = makeTracker();
 		tracker.queue(SpecialWeapon.EYE_OF_AYAK, 7, 30, WORLD);
@@ -259,8 +241,7 @@ public class DefenceTrackerParityTest
 	}
 
 	@Test
-	public void accursedCreatesBothDefenceAndMagicHistory()
-	{
+	public void accursedCreatesBothDefenceAndMagicHistory() {
 		fakeNpc("Corporeal Beast", 7);
 		DefenceTracker tracker = makeTracker();
 		tracker.queue(SpecialWeapon.ACCURSED_SCEPTRE, 7, 1, WORLD);
@@ -270,10 +251,8 @@ public class DefenceTrackerParityTest
 		assertTrue(tracker.hasMagicDefenceSpecHistory());
 	}
 
-
 	@Test
-	public void dwhSequentialUsesCurrentDefence()
-	{
+	public void dwhSequentialUsesCurrentDefence() {
 		fakeNpc("Chaos Elemental", 3);
 		DefenceTracker tracker = makeTracker();
 		tracker.queue(SpecialWeapon.DRAGON_WARHAMMER, 3, 1, WORLD);
@@ -285,8 +264,7 @@ public class DefenceTrackerParityTest
 	}
 
 	@Test
-	public void elderMaulUsesCurrentDefence()
-	{
+	public void elderMaulUsesCurrentDefence() {
 		fakeNpc("Chaos Elemental", 3);
 		DefenceTracker tracker = makeTracker();
 		tracker.queue(SpecialWeapon.ELDER_MAUL, 3, 1, WORLD);
@@ -295,8 +273,7 @@ public class DefenceTrackerParityTest
 	}
 
 	@Test
-	public void elderMaulIsAppliedBeforeOtherSameTickDrains()
-	{
+	public void elderMaulIsAppliedBeforeOtherSameTickDrains() {
 		fakeNpc("Chaos Elemental", 3);
 		DefenceTracker tracker = makeTracker();
 		tracker.queue(SpecialWeapon.DRAGON_WARHAMMER, 3, 1, WORLD);
@@ -306,8 +283,7 @@ public class DefenceTrackerParityTest
 	}
 
 	@Test
-	public void condemnAppliesOnce() throws Exception
-	{
+	public void condemnAppliesOnce() throws Exception {
 		fakeNpc("Corporeal Beast", 7);
 		DefenceTracker tracker = makeTracker();
 		tracker.queue(SpecialWeapon.DRAGON_WARHAMMER, 7, 1, WORLD);
@@ -316,36 +292,33 @@ public class DefenceTrackerParityTest
 		tracker.queue(SpecialWeapon.ACCURSED_SCEPTRE, 7, 1, WORLD);
 		tracker.onGameTick();
 		assertEquals(184, tracker.state().getCurrent());
-		assertEquals(297, field(tracker, "magicLevel"));
+		assertEquals(297, tracker.state().getMagicLevel());
 		tracker.queue(SpecialWeapon.ACCURSED_SCEPTRE, 7, 1, WORLD);
 		tracker.onGameTick();
 		assertEquals(184, tracker.state().getCurrent());
 	}
 
 	@Test
-	public void seercullDrainsMagicLevel() throws Exception
-	{
+	public void seercullDrainsMagicLevel() throws Exception {
 		fakeNpc("Corporeal Beast", 7);
 		DefenceTracker tracker = makeTracker();
 		tracker.queue(SpecialWeapon.SEERCULL, 7, 12, WORLD);
 		tracker.onGameTick();
-		assertEquals(338, field(tracker, "magicLevel"));
+		assertEquals(338, tracker.state().getMagicLevel());
 	}
 
 	@Test
-	public void eyeOfAyakDrainsMagicDefenceBonus() throws Exception
-	{
+	public void eyeOfAyakDrainsMagicDefenceBonus() throws Exception {
 		fakeNpc("Corporeal Beast", 7);
 		DefenceTracker tracker = makeTracker();
 		tracker.queue(SpecialWeapon.EYE_OF_AYAK, 7, 30, WORLD);
 		tracker.onGameTick();
-		assertEquals(120, field(tracker, "magicDefBonus"));
+		assertEquals(120, tracker.state().getMagicDef());
 		assertEquals(310, tracker.state().getCurrent());
 	}
 
 	@Test
-	public void anchorDrainsDamageOverTen()
-	{
+	public void anchorDrainsDamageOverTen() {
 		fakeNpc("K'ril Tsutsaroth", 4);
 		DefenceTracker tracker = makeTracker();
 		tracker.queue(SpecialWeapon.BARRELCHEST_ANCHOR, 4, 200, WORLD);
@@ -354,8 +327,7 @@ public class DefenceTrackerParityTest
 	}
 
 	@Test
-	public void boneDaggerOnlyDrainsAtOrAboveBase()
-	{
+	public void boneDaggerOnlyDrainsAtOrAboveBase() {
 		fakeNpc("K'ril Tsutsaroth", 4);
 		DefenceTracker tracker = makeTracker();
 		tracker.queue(SpecialWeapon.BONE_DAGGER, 4, 5, WORLD);
@@ -367,8 +339,7 @@ public class DefenceTrackerParityTest
 	}
 
 	@Test
-	public void arclightDemonAndNonDemon()
-	{
+	public void arclightDemonAndNonDemon() {
 		fakeNpc("Abyssal Sire", 6);
 		DefenceTracker tracker = makeTracker();
 		tracker.queue(SpecialWeapon.ARCLIGHT, 6, 1, WORLD);
@@ -383,8 +354,7 @@ public class DefenceTrackerParityTest
 	}
 
 	@Test
-	public void emberlightDemonAndNonDemon()
-	{
+	public void emberlightDemonAndNonDemon() {
 		fakeNpc("Abyssal Sire", 6);
 		DefenceTracker tracker = makeTracker();
 		tracker.queue(SpecialWeapon.EMBERLIGHT, 6, 1, WORLD);
@@ -399,19 +369,17 @@ public class DefenceTrackerParityTest
 	}
 
 	@Test
-	public void ralosDrainsByMagicLevelPerConnectedGlaive() throws Exception
-	{
+	public void ralosDrainsByMagicLevelPerConnectedGlaive() throws Exception {
 		fakeNpc("Corporeal Beast", 7);
 		DefenceTracker tracker = makeTracker();
 		tracker.queue(SpecialWeapon.TONALZTICS_OF_RALOS, 7, 2, WORLD);
 		tracker.onGameTick();
 		assertEquals(224, tracker.state().getCurrent());
-		assertEquals(350, field(tracker, "magicLevel"));
+		assertEquals(350, tracker.state().getMagicLevel());
 	}
 
 	@Test
-	public void bandosCorpDrainIsDoubled()
-	{
+	public void bandosCorpDrainIsDoubled() {
 		fakeNpc("Corporeal Beast", 7);
 		DefenceTracker tracker = makeTracker();
 		tracker.queue(SpecialWeapon.BANDOS_GODSWORD, 7, 100, WORLD);
@@ -420,8 +388,7 @@ public class DefenceTrackerParityTest
 	}
 
 	@Test
-	public void defenceFloorIsRespected()
-	{
+	public void defenceFloorIsRespected() {
 		fakeNpc("Nex", 9);
 		DefenceTracker tracker = makeTracker();
 		tracker.queue(SpecialWeapon.BANDOS_GODSWORD, 9, 500, WORLD);
@@ -431,8 +398,7 @@ public class DefenceTrackerParityTest
 	}
 
 	@Test
-	public void foreignWorldDrainIsSkipped()
-	{
+	public void foreignWorldDrainIsSkipped() {
 		fakeNpc("Chaos Elemental", 3);
 		DefenceTracker tracker = makeTracker();
 		tracker.queue(SpecialWeapon.DRAGON_WARHAMMER, 3, 1, 9999);
@@ -441,8 +407,7 @@ public class DefenceTrackerParityTest
 	}
 
 	@Test
-	public void heldDrainReplaysWhenNpcAppearsOnLaterTick()
-	{
+	public void heldDrainReplaysWhenNpcAppearsOnLaterTick() {
 		DefenceTracker tracker = makeTracker();
 		NPC npc = fakeNpc("Chaos Elemental", 12, 5001, new WorldPoint(3100, 3100, 0));
 		tracker.queue(SpecialWeapon.DRAGON_WARHAMMER, 12, 1, WORLD, "Alice", npc);
@@ -456,8 +421,7 @@ public class DefenceTrackerParityTest
 	}
 
 	@Test
-	public void tektonDwhMissStillDrainsFivePercent()
-	{
+	public void tektonDwhMissStillDrainsFivePercent() {
 		fakeNpc("Tekton", 8, NpcID.RAIDS_TEKTON_FIGHTING_STANDARD);
 		DefenceTracker tracker = makeTracker();
 		tracker.queue(SpecialWeapon.DRAGON_WARHAMMER, 8, 0, WORLD);
@@ -466,8 +430,7 @@ public class DefenceTrackerParityTest
 	}
 
 	@Test
-	public void tektonBgsMissUsesRuneLiteTenDamageNormalization()
-	{
+	public void tektonBgsMissUsesRuneLiteTenDamageNormalization() {
 		fakeNpc("Tekton", 8, NpcID.RAIDS_TEKTON_FIGHTING_STANDARD);
 		DefenceTracker tracker = makeTracker();
 		tracker.queue(SpecialWeapon.BANDOS_GODSWORD, 8, 0, WORLD);
@@ -476,8 +439,7 @@ public class DefenceTrackerParityTest
 	}
 
 	@Test
-	public void stateNullBeforeAnyDrain()
-	{
+	public void stateNullBeforeAnyDrain() {
 		fakeNpc("Chaos Elemental", 3);
 		DefenceTracker tracker = makeTracker();
 		assertNull(tracker.state());
@@ -487,8 +449,7 @@ public class DefenceTrackerParityTest
 	}
 
 	@Test
-	public void resetClearsEncounterState()
-	{
+	public void resetClearsEncounterState() {
 		fakeNpc("Chaos Elemental", 3);
 		DefenceTracker tracker = makeTracker();
 		tracker.queue(SpecialWeapon.DRAGON_WARHAMMER, 3, 1, WORLD);
@@ -499,8 +460,7 @@ public class DefenceTrackerParityTest
 	}
 
 	@Test
-	public void kephriKeepsDrainAcrossShieldActorsAndResetsOnFinalPhase()
-	{
+	public void kephriKeepsDrainAcrossShieldActorsAndResetsOnFinalPhase() {
 		fakeNpc("Kephri", 20, NpcID.TOA_KEPHRI_BOSS_SHIELDED);
 		DefenceTracker tracker = makeTracker();
 		tracker.queue(SpecialWeapon.DRAGON_WARHAMMER, 20, 1, WORLD);
@@ -527,8 +487,7 @@ public class DefenceTrackerParityTest
 	}
 
 	@Test
-	public void kephriPhaseActorReplacementAtSameIndexKeepsEncounter()
-	{
+	public void kephriPhaseActorReplacementAtSameIndexKeepsEncounter() {
 		fakeNpc("Kephri", 24, NpcID.TOA_KEPHRI_BOSS_SHIELDED);
 		DefenceTracker tracker = makeTracker();
 		tracker.queue(SpecialWeapon.DRAGON_WARHAMMER, 24, 1, WORLD);
@@ -544,8 +503,43 @@ public class DefenceTrackerParityTest
 	}
 
 	@Test
-	public void immediateSameIndexRespawnDoesNotInheritState()
-	{
+	public void tektonEnragedKeepsDefenceAndHistory() {
+		fakeNpc("Tekton", 25, 111);
+		DefenceTracker tracker = makeTracker();
+		tracker.queue(SpecialWeapon.DRAGON_WARHAMMER, 25, 1, WORLD);
+		tracker.onGameTick();
+		assertEquals(144, tracker.state().getCurrent());
+		assertEquals(1, tracker.specHistory().size());
+
+		removeNpc(25);
+		fakeNpc("Tekton (enraged)", 25, 222);
+		tracker.onGameTick();
+
+		assertEquals(BossDefence.TEKTON, tracker.trackedBossType());
+		assertEquals(144, tracker.state().getCurrent());
+		assertEquals(1, tracker.specHistory().size());
+	}
+
+	@Test
+	public void enragedDreadnothKeepsDefenceAndHistory() {
+		fakeNpc("Dreadnoth the Jellied", 26, 111);
+		DefenceTracker tracker = makeTracker();
+		tracker.queue(SpecialWeapon.DRAGON_WARHAMMER, 26, 1, WORLD);
+		tracker.onGameTick();
+		assertEquals(88, tracker.state().getCurrent());
+		assertEquals(1, tracker.specHistory().size());
+
+		removeNpc(26);
+		fakeNpc("Enraged Dreadnoth, the Jellied", 26, 222);
+		tracker.onGameTick();
+
+		assertEquals(BossDefence.TFA_DREADNOTH, tracker.trackedBossType());
+		assertEquals(88, tracker.state().getCurrent());
+		assertEquals(1, tracker.specHistory().size());
+	}
+
+	@Test
+	public void immediateSameIndexRespawnDoesNotInheritState() {
 		NPC original = fakeNpc("Chaos Elemental", 107, -1, new WorldPoint(3020, 3020, 0));
 		DefenceTracker tracker = makeTracker();
 		tracker.queueLocal(SpecialWeapon.DRAGON_WARHAMMER, 107, 1, WORLD, "Alice", original);
@@ -562,8 +556,7 @@ public class DefenceTrackerParityTest
 	}
 
 	@Test
-	public void interactingWithAnotherShamanDoesNotRebindMissingTarget()
-	{
+	public void interactingWithAnotherShamanDoesNotRebindMissingTarget() {
 		when(client.getTickCount()).thenReturn(100);
 		NPC first = fakeNpc("Lizardman shaman", 110, -1, new WorldPoint(3000, 3000, 0));
 		DefenceTracker tracker = makeTracker();
@@ -585,8 +578,7 @@ public class DefenceTrackerParityTest
 	}
 
 	@Test
-	public void newSpecOnAnotherShamanDoesNotRestoreMissingTarget()
-	{
+	public void newSpecOnAnotherShamanDoesNotRestoreMissingTarget() {
 		when(client.getTickCount()).thenReturn(100);
 		NPC first = fakeNpc("Lizardman shaman", 112, -1, new WorldPoint(3030, 3030, 0));
 		DefenceTracker tracker = makeTracker();
@@ -602,14 +594,13 @@ public class DefenceTrackerParityTest
 
 		assertEquals(2, tracker.states().size());
 		assertEquals(98, tracker.states().stream()
-			.filter(state -> state.getNpcIndex() == 112).findFirst().orElseThrow(AssertionError::new).getCurrent());
+				.filter(state -> state.getNpcIndex() == 112).findFirst().orElseThrow(AssertionError::new).getCurrent());
 		assertEquals(98, tracker.states().stream()
-			.filter(state -> state.getNpcIndex() == 113).findFirst().orElseThrow(AssertionError::new).getCurrent());
+				.filter(state -> state.getNpcIndex() == 113).findFirst().orElseThrow(AssertionError::new).getCurrent());
 	}
 
 	@Test
-	public void unidentifiedLegacyObservationDoesNotUseAnotherNpcIndex()
-	{
+	public void unidentifiedLegacyObservationDoesNotUseAnotherNpcIndex() {
 		when(client.getTickCount()).thenReturn(100);
 		DefenceTracker tracker = makeTracker();
 		tracker.queue(SpecialWeapon.DRAGON_WARHAMMER, 120, 1, WORLD, "Alice");
@@ -625,8 +616,7 @@ public class DefenceTrackerParityTest
 	}
 
 	@Test
-	public void outOfRenderLegacyObservationRecoversWhenIndexedBossBecomesUnique()
-	{
+	public void outOfRenderLegacyObservationRecoversWhenIndexedBossBecomesUnique() {
 		when(client.getTickCount()).thenReturn(100);
 		DefenceTracker tracker = makeTracker();
 		tracker.queue(SpecialWeapon.DRAGON_WARHAMMER, 121, 1, WORLD, "Alice");
@@ -644,8 +634,7 @@ public class DefenceTrackerParityTest
 	}
 
 	@Test
-	public void outOfRenderLegacyObservationStaysAmbiguousWithTwoCandidates()
-	{
+	public void outOfRenderLegacyObservationStaysAmbiguousWithTwoCandidates() {
 		when(client.getTickCount()).thenReturn(100);
 		DefenceTracker tracker = makeTracker();
 		tracker.queue(SpecialWeapon.DRAGON_WARHAMMER, 124, 1, WORLD, "Alice");
@@ -662,8 +651,7 @@ public class DefenceTrackerParityTest
 	}
 
 	@Test
-	public void sotetsegTrackerSurvivesMazeButRestoresDefence()
-	{
+	public void sotetsegTrackerSurvivesMazeButRestoresDefence() {
 		when(client.getVarbitValue(VarbitID.TOB_CLIENT_WAVEPROGRESS_TYPE)).thenReturn(1);
 		fakeNpc("Sotetseg", 30, NpcID.TOB_SOTETSEG_COMBAT);
 		DefenceTracker tracker = makeTracker();
@@ -701,8 +689,7 @@ public class DefenceTrackerParityTest
 	}
 
 	@Test
-	public void coxPartyScaling()
-	{
+	public void coxPartyScaling() {
 		when(client.getVarbitValue(VarbitID.RAIDS_CLIENT_INDUNGEON)).thenReturn(1);
 		when(client.getVarbitValue(VarbitID.RAIDS_CLIENT_PARTYSIZE_SCALED)).thenReturn(5);
 		fakeNpc("Skeletal Mystic", 5);
@@ -714,8 +701,7 @@ public class DefenceTrackerParityTest
 	}
 
 	@Test
-	public void coxChallengeModeTektonScaling()
-	{
+	public void coxChallengeModeTektonScaling() {
 		when(client.getVarbitValue(VarbitID.RAIDS_CLIENT_INDUNGEON)).thenReturn(1);
 		when(client.getVarbitValue(VarbitID.RAIDS_CLIENT_PARTYSIZE_SCALED)).thenReturn(5);
 		when(client.getVarbitValue(VarbitID.RAIDS_CHALLENGE_MODE)).thenReturn(1);
@@ -727,8 +713,7 @@ public class DefenceTrackerParityTest
 		assertEquals(201, tracker.state().getCurrent());
 	}
 	@Test
-	public void leavingRenderDistancePreservesDefenceAndHistory()
-	{
+	public void leavingRenderDistancePreservesDefenceAndHistory() {
 		WorldPoint location = new WorldPoint(3110, 3110, 0);
 		fakeNpc("Chaos Elemental", 40, 5002, location);
 		DefenceTracker tracker = makeTracker();
@@ -750,8 +735,7 @@ public class DefenceTrackerParityTest
 	}
 
 	@Test
-	public void resetClearsSpecHistory()
-	{
+	public void resetClearsSpecHistory() {
 		fakeNpc("Chaos Elemental", 42);
 		DefenceTracker tracker = makeTracker();
 		tracker.queue(SpecialWeapon.BANDOS_GODSWORD, 42, 49, WORLD, "Other Party Member");
@@ -763,8 +747,7 @@ public class DefenceTrackerParityTest
 	}
 
 	@Test
-	public void currentTargetHistoryNeverIncludesPreviousTargetHistory()
-	{
+	public void currentTargetHistoryNeverIncludesPreviousTargetHistory() {
 		fakeNpc("Chaos Elemental", 43);
 		fakeNpc("Corporeal Beast", 44);
 		DefenceTracker tracker = makeTracker();
@@ -783,8 +766,7 @@ public class DefenceTrackerParityTest
 	}
 
 	@Test
-	public void simultaneousOlmTargetsKeepIndependentMemory()
-	{
+	public void simultaneousOlmTargetsKeepIndependentMemory() {
 		fakeNpc("Great Olm (Right claw)", 50);
 		fakeNpc("Great Olm (Left claw)", 51);
 		DefenceTracker tracker = makeTracker();
@@ -798,33 +780,31 @@ public class DefenceTrackerParityTest
 
 		assertEquals(2, tracker.states().size());
 		DefenceTracker.DefenceState right = tracker.states().stream()
-			.filter(state -> state.getNpcIndex() == 50).findFirst().orElse(null);
+				.filter(state -> state.getNpcIndex() == 50).findFirst().orElse(null);
 		DefenceTracker.DefenceState left = tracker.states().stream()
-			.filter(state -> state.getNpcIndex() == 51).findFirst().orElse(null);
+				.filter(state -> state.getNpcIndex() == 51).findFirst().orElse(null);
 		assertTrue(right != null && right.isDrained());
 		assertTrue(left != null && left.isDrained());
 		assertEquals(rightAfterDwh, right.getCurrent());
-		assertEquals(2, tracker.syncTargets().size());
-	}
-
-	@Test public void snapshotMustNotDeleteQueuedSpecOnAnotherTarget()
-	{
-		NPC first = fakeNpc("Chaos Elemental", 81);
-		fakeNpc("Corporeal Beast", 82);
-		DefenceTracker source = makeTracker();
-		source.queue(SpecialWeapon.DRAGON_WARHAMMER,81,1,WORLD,"Alice");
-		source.onGameTick();
-		DefenceTracker receiver = makeTracker();
-		receiver.queue(SpecialWeapon.BANDOS_GODSWORD,82,50,WORLD,"Bob");
-		receiver.applySyncState(source.syncState(),first);
-		receiver.onGameTick();
-		assertEquals(2,receiver.syncTargets().size());
-		assertEquals("Bob",receiver.specHistory().get(0).getPlayerName());
 	}
 
 	@Test
-	public void exactLocalObservationsKeepTwoSameTypeTargetsSeparate()
-	{
+	public void snapshotMustNotDeleteQueuedSpecOnAnotherTarget() {
+		NPC first = fakeNpc("Chaos Elemental", 81);
+		fakeNpc("Corporeal Beast", 82);
+		DefenceTracker source = makeTracker();
+		source.queue(SpecialWeapon.DRAGON_WARHAMMER, 81, 1, WORLD, "Alice");
+		source.onGameTick();
+		DefenceTracker receiver = makeTracker();
+		receiver.queue(SpecialWeapon.BANDOS_GODSWORD, 82, 50, WORLD, "Bob");
+		receiver.applySyncState(source.syncState(), first);
+		receiver.onGameTick();
+		assertEquals(2, receiver.states().size());
+		assertEquals("Bob", receiver.specHistory().get(0).getPlayerName());
+	}
+
+	@Test
+	public void exactLocalObservationsKeepTwoSameTypeTargetsSeparate() {
 		NPC first = fakeNpc("Chaos Elemental", 90);
 		NPC second = fakeNpc("Chaos Elemental", 91);
 		DefenceTracker tracker = makeTracker();
@@ -836,15 +816,14 @@ public class DefenceTrackerParityTest
 
 		assertEquals(2, tracker.states().size());
 		assertEquals(189, tracker.states().stream()
-			.filter(state -> state.getNpcIndex() == 90).findFirst().orElseThrow(AssertionError::new).getCurrent());
+				.filter(state -> state.getNpcIndex() == 90).findFirst().orElseThrow(AssertionError::new).getCurrent());
 		assertEquals(189, tracker.states().stream()
-			.filter(state -> state.getNpcIndex() == 91).findFirst().orElseThrow(AssertionError::new).getCurrent());
+				.filter(state -> state.getNpcIndex() == 91).findFirst().orElseThrow(AssertionError::new).getCurrent());
 		assertFalse(tracker.hasUnprocessedSpecs());
 	}
 
 	@Test
-	public void unresolvedTargetsRetainIndependentHeldQueues()
-	{
+	public void unresolvedTargetsRetainIndependentHeldQueues() {
 		NPC first = fakeNpc("Lizardman shaman", 92, 5003, new WorldPoint(3120, 3120, 0));
 		NPC second = fakeNpc("Corporeal Beast", 93, 5004, new WorldPoint(3130, 3130, 0));
 		DefenceTracker tracker = makeTracker();
@@ -866,8 +845,7 @@ public class DefenceTrackerParityTest
 	}
 
 	@Test
-	public void ambiguousSameTypeTargetsAreNeverGuessed()
-	{
+	public void ambiguousSameTypeTargetsAreNeverGuessed() {
 		fakeNpc("Chaos Elemental", 94);
 		fakeNpc("Chaos Elemental", 95);
 		DefenceTracker tracker = makeTracker();
@@ -886,8 +864,7 @@ public class DefenceTrackerParityTest
 	}
 
 	@Test
-	public void respawnedNpcDoesNotInheritStateFromReusedIndex()
-	{
+	public void respawnedNpcDoesNotInheritStateFromReusedIndex() {
 		when(client.getTickCount()).thenReturn(100);
 		WorldPoint spawn = new WorldPoint(3000, 3000, 0);
 		NPC original = fakeNpc("Chaos Elemental", 96, -1, spawn);
@@ -911,8 +888,7 @@ public class DefenceTrackerParityTest
 	}
 
 	@Test
-	public void respawnedNpcWithDifferentIndexDoesNotInheritDrainedState()
-	{
+	public void respawnedNpcWithDifferentIndexDoesNotInheritDrainedState() {
 		when(client.getTickCount()).thenReturn(100);
 		NPC original = fakeNpc("Chaos Elemental", 105, -1, new WorldPoint(3010, 3010, 0));
 		DefenceTracker tracker = makeTracker();
@@ -931,8 +907,7 @@ public class DefenceTrackerParityTest
 	}
 
 	@Test
-	public void exactObservationAppliesToItsOwnEncounterAfterTheActorLeavesTheScene()
-	{
+	public void exactObservationAppliesToItsOwnEncounterAfterTheActorLeavesTheScene() {
 		when(client.getTickCount()).thenReturn(100);
 		WorldPoint spawn = new WorldPoint(3004, 3004, 0);
 		NPC original = fakeNpc("Chaos Elemental", 97, -1, spawn);
@@ -948,8 +923,7 @@ public class DefenceTrackerParityTest
 	}
 
 	@Test
-	public void staleSpecDoesNotAttachToANewInstanceAtTheSameIndex()
-	{
+	public void staleSpecDoesNotAttachToANewInstanceAtTheSameIndex() {
 		when(client.getTickCount()).thenReturn(100);
 		WorldPoint spawn = new WorldPoint(3004, 3004, 0);
 		NPC previous = fakeNpc("Chaos Elemental", 97, 7, spawn);
@@ -971,12 +945,11 @@ public class DefenceTrackerParityTest
 		tracker.onGameTick();
 
 		assertEquals("A new spawn must not inherit the previous encounter's drain",
-			fresh, tracker.state() == null ? -1 : tracker.state().getCurrent());
+				fresh, tracker.state() == null ? -1 : tracker.state().getCurrent());
 	}
 
 	@Test
-	public void encounterResetInvalidatesHeldObservations()
-	{
+	public void encounterResetInvalidatesHeldObservations() {
 		when(client.getTickCount()).thenReturn(100);
 		DefenceTracker tracker = makeTracker();
 		tracker.queue(SpecialWeapon.DRAGON_WARHAMMER, 98, 1, WORLD, "Alice");
@@ -992,8 +965,7 @@ public class DefenceTrackerParityTest
 	}
 
 	@Test
-	public void bossClearInvalidatesPendingObservationForSameTarget()
-	{
+	public void bossClearInvalidatesPendingObservationForSameTarget() {
 		NPC target = fakeNpc("Chaos Elemental", 102);
 		DefenceTracker tracker = makeTracker();
 
@@ -1006,8 +978,7 @@ public class DefenceTrackerParityTest
 	}
 
 	@Test
-	public void bossClearInvalidatesPendingLegacyObservationForSameIndex()
-	{
+	public void bossClearInvalidatesPendingLegacyObservationForSameIndex() {
 		fakeNpc("Chaos Elemental", 103);
 		DefenceTracker tracker = makeTracker();
 
@@ -1024,8 +995,7 @@ public class DefenceTrackerParityTest
 	}
 
 	@Test
-	public void heldObservationExpiresAfterBoundedTtl()
-	{
+	public void heldObservationExpiresAfterBoundedTtl() {
 		when(client.getTickCount()).thenReturn(100);
 		DefenceTracker tracker = makeTracker();
 		tracker.queue(SpecialWeapon.DRAGON_WARHAMMER, 104, 1, WORLD, "Alice");
@@ -1040,15 +1010,13 @@ public class DefenceTrackerParityTest
 	}
 
 	@Test
-	public void outOfRenderPartyObservationRecoversWhenTheSingleTargetAppears()
-	{
+	public void outOfRenderPartyObservationRecoversWhenTheSingleTargetAppears() {
 		when(client.getTickCount()).thenReturn(100);
 		DefenceTracker tracker = makeTracker();
 		tracker.queue(SpecialWeapon.DRAGON_WARHAMMER, 100, 1, WORLD, "Alice");
 		tracker.onGameTick();
 
-		for (int tick = 101; tick <= 110; tick++)
-		{
+		for (int tick = 101; tick <= 110; tick++) {
 			when(client.getTickCount()).thenReturn(tick);
 			tracker.onGameTick();
 		}
@@ -1068,8 +1036,7 @@ public class DefenceTrackerParityTest
 	}
 
 	@Test
-	public void singleUniqueTargetStillAppliesToLegacyObservation()
-	{
+	public void singleUniqueTargetStillAppliesToLegacyObservation() {
 		fakeNpc("Chaos Elemental", 101);
 		DefenceTracker tracker = makeTracker();
 		tracker.queue(SpecialWeapon.DRAGON_WARHAMMER, 101, 1, WORLD, "Alice");

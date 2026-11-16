@@ -1,10 +1,10 @@
 # Attribution
 
-Better Party Defence was refactored from a project that included defence-tracking code derived from **OSParty** (`https://github.com/osparty/osparty`). OSParty is distributed under the BSD 2-Clause License; the required upstream notice and disclaimer are preserved in `LICENSE-OSPARTY.txt`.
+The initial display and defence values for Better Party Defence were refactored from project code derived from **OSParty** (`https://github.com/osparty/osparty`). OSParty is distributed under the BSD 2-Clause License; the required upstream notice and disclaimer are preserved in `LICENSE-OSPARTY.txt`.
 
 The retained, defence-only portions include:
 
-- boss/NPC base combat-stat and Defence-floor data used by the tracker;
+- the first implementation of the boss/NPC base combat-stat and Defence-floor data used by the tracker;
 - supported defence-draining weapon handling;
 - Defence and Magic-defence state calculations;
 - Chambers of Xeric scaling logic used by the original tracker;

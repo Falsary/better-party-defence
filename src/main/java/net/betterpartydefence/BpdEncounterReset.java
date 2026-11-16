@@ -3,14 +3,9 @@ package net.betterpartydefence;
 import lombok.ToString;
 import net.runelite.client.party.messages.PartyMemberMessage;
 
-/**
- * Experimental Better Party Defence encounter-reset message. It invalidates the absolute
- * Defence snapshot and spec history for one logical target when an encounter authoritatively
- * ends while the surrounding world/raid session may continue.
- */
+// Clear one boss encounter while the party remains active.
 @ToString(doNotUseGetters = true)
-public class BpdEncounterReset extends PartyMemberMessage
-{
+public class BpdEncounterReset extends PartyMemberMessage {
 	public static final int PROTOCOL_VERSION = 1;
 
 	private int protocolVersion;
@@ -19,17 +14,15 @@ public class BpdEncounterReset extends PartyMemberMessage
 	private int scopeType;
 	private int scopeId;
 	private long sentAtMillis;
-	/** Sender's PartyService session. Zero means a legacy sender with no party id. */
+	// Sender party session; zero is legacy.
 	@ToString.Exclude
 	private long partyId;
 
-	/** Required for party-message deserialisation. */
-	public BpdEncounterReset()
-	{
+	// Gson.
+	public BpdEncounterReset() {
 	}
 
-	public BpdEncounterReset(int world, BossDefence boss, int scopeType, int scopeId)
-	{
+	public BpdEncounterReset(int world, BossDefence boss, int scopeType, int scopeId) {
 		this.protocolVersion = PROTOCOL_VERSION;
 		this.world = world;
 		this.bossType = boss == null ? null : boss.name();
@@ -38,28 +31,40 @@ public class BpdEncounterReset extends PartyMemberMessage
 		this.sentAtMillis = System.currentTimeMillis();
 	}
 
-	public BossDefence toBossType()
-	{
-		if (bossType == null)
-		{
+	public BossDefence toBossType() {
+		if (bossType == null) {
 			return null;
 		}
-		try
-		{
-			return BossDefence.valueOf(bossType);
-		}
-		catch (RuntimeException ex)
-		{
+		try {
+			return BossDefence.valueOf(bossType).trackingType();
+		} catch (RuntimeException ex) {
 			return null;
 		}
 	}
 
-	public int getProtocolVersion() { return protocolVersion; }
-	public int getWorld() { return world; }
-	public String getBossType() { return bossType; }
-	public int getScopeType() { return scopeType; }
-	public int getScopeId() { return scopeId; }
-	public long getSentAtMillis() { return sentAtMillis; }
-	public long getPartyId() { return partyId; }
-	public BpdEncounterReset withPartyId(long partyId) { this.partyId = partyId; return this; }
+	public int getProtocolVersion() {
+		return protocolVersion;
+	}
+	public int getWorld() {
+		return world;
+	}
+	public String getBossType() {
+		return bossType;
+	}
+	public int getScopeType() {
+		return scopeType;
+	}
+	public int getScopeId() {
+		return scopeId;
+	}
+	public long getSentAtMillis() {
+		return sentAtMillis;
+	}
+	public long getPartyId() {
+		return partyId;
+	}
+	public BpdEncounterReset withPartyId(long partyId) {
+		this.partyId = partyId;
+		return this;
+	}
 }

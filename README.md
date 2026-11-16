@@ -9,7 +9,7 @@ Better Party Defence is a RuneLite plugin that estimates the current Defence of 
 <br></br>
 
 
-># Current version: **v1.5**
+># Current version: **v1.5.1**
 > **Seeing different Defence values?** Check that everyone in your party is running the same version of Better Party Defence. If someone has had RuneLite open since before the update, have them restart their client and check again.
 
 <br></br>
@@ -102,14 +102,12 @@ Better Party Defence currently supports the following bosses and encounter targe
 - Nylocas Vasilias
 - Sotetseg
 - Xarpus
-- Verzik Vitur
 
 ### Tombs of Amascut
 
 - Akkha
 - Akkha's Shadow
 - Ba-Ba
-- Core
 - Elidinis' Warden
 - Kephri
 - Obelisk

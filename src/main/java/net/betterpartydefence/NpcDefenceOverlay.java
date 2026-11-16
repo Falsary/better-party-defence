@@ -2,6 +2,7 @@ package net.betterpartydefence;
 
 import java.awt.Dimension;
 import java.awt.Graphics2D;
+import net.betterpartydefence.BetterPartyDefenceConfig.DefenceOverlayPosition;
 import net.betterpartydefence.DefenceTracker.DefenceState;
 import net.runelite.api.Client;
 import net.runelite.api.NPC;
@@ -10,24 +11,18 @@ import net.runelite.client.ui.overlay.Overlay;
 import net.runelite.client.ui.overlay.OverlayLayer;
 import net.runelite.client.ui.overlay.OverlayPosition;
 
-/** Draws the tracked NPC's Defence in scene space. */
-public class NpcDefenceOverlay extends Overlay
-{
+public class NpcDefenceOverlay extends Overlay {
 	private final Client client;
 	private final DefenceTracker tracker;
 	private final BetterPartyDefenceConfig config;
-	private final TrackerFontManager fontManager;
 	private final DefenceOverlayRenderer renderer;
 	private final InitialSyncDisplayGate initialSyncDisplayGate;
 
 	public NpcDefenceOverlay(Client client, DefenceTracker tracker, BetterPartyDefenceConfig config,
-		SkillIconSource skillIcons, TrackerFontManager fontManager,
-		InitialSyncDisplayGate initialSyncDisplayGate)
-	{
+			DefenceOverlayRenderer.IconSource skillIcons, InitialSyncDisplayGate initialSyncDisplayGate) {
 		this.client = client;
 		this.tracker = tracker;
 		this.config = config;
-		this.fontManager = fontManager;
 		this.renderer = new DefenceOverlayRenderer(config, skillIcons);
 		this.initialSyncDisplayGate = initialSyncDisplayGate;
 		setPosition(OverlayPosition.DYNAMIC);
@@ -35,25 +30,20 @@ public class NpcDefenceOverlay extends Overlay
 	}
 
 	@Override
-	public Dimension render(Graphics2D graphics)
-	{
-		if (!config.defenceHpBar())
-		{
+	public Dimension render(Graphics2D graphics) {
+		if (!config.defenceHpBar()) {
 			return null;
 		}
 
-		graphics.setFont(fontManager.font());
+		graphics.setFont(renderer.font());
 		DefenceOverlayPosition position = config.defenceHpBarPosition();
 		int yOffset = config.defenceHpBarYOffset();
-		for (DefenceState state : tracker.states())
-		{
-			if (!isDisplayable(state))
-			{
+		for (DefenceState state : tracker.states()) {
+			if (!isDisplayable(state)) {
 				continue;
 			}
 			NPC npc = liveNpc(state.getNpcIndex());
-			if (npc != null)
-			{
+			if (npc != null) {
 				renderAtNpc(graphics, state, npc, position, yOffset);
 			}
 		}
@@ -61,25 +51,16 @@ public class NpcDefenceOverlay extends Overlay
 	}
 
 	private void renderAtNpc(Graphics2D graphics, DefenceState state, NPC npc,
-		DefenceOverlayPosition position, int yOffset)
-	{
-		// The Blade in Ocellus P2 (16676) has a much taller model than its
-		// useful combat display area. Treat its true midpoint as the top of
-		// the usable area, retaining all player-selected positioning options.
-		// ABOVE/RIGHT now anchor at that midpoint, CENTRE halfway to its feet,
-		// and AT_NPC_FEET at its feet. The user's Y offset still applies below.
+			DefenceOverlayPosition position, int yOffset) {
+		// Ocellus P2 uses the model midpoint as its display height.
 		int zOffset;
-		if (npc.getId() == 16676)
-		{
+		if (BossDefence.isAttackableOcellusPhaseTwo(npc)) {
 			zOffset = (int) (npc.getLogicalHeight() * 0.5 * position.getHeightFactor());
-		}
-		else
-		{
+		} else {
 			zOffset = (int) (npc.getLogicalHeight() * position.getHeightFactor()) + position.getHeightOffset();
 		}
 		Point anchor = npc.getCanvasTextLocation(graphics, "", zOffset);
-		if (anchor == null)
-		{
+		if (anchor == null) {
 			return;
 		}
 		int centreX = anchor.getX() + position.getXNudge();
@@ -87,19 +68,15 @@ public class NpcDefenceOverlay extends Overlay
 		renderer.renderAt(graphics, state, centreX, baseline);
 	}
 
-	private boolean isDisplayable(DefenceState state)
-	{
-		// The checkbox controls only optional pre-spec preview. Any actual local/party drain
-		// remains displayable because drained=true is part of the stored/shared state.
+	private boolean isDisplayable(DefenceState state) {
+		// Config controls previews only; drained state is always shown.
 		return state != null && (state.isDrained() || config.defenceAlwaysShow())
-			&& state.getNpcIndex() >= 0
-			&& !initialSyncDisplayGate.isWaiting(state, client.getTickCount());
+				&& state.getNpcIndex() >= 0
+				&& !initialSyncDisplayGate.isWaiting(state, client.getTickCount());
 	}
 
-	private NPC liveNpc(int index)
-	{
-		if (index < 0 || client.getTopLevelWorldView() == null || client.getTopLevelWorldView().npcs() == null)
-		{
+	private NPC liveNpc(int index) {
+		if (index < 0 || client.getTopLevelWorldView() == null || client.getTopLevelWorldView().npcs() == null) {
 			return null;
 		}
 		NPC npc = client.getTopLevelWorldView().npcs().byIndex(index);
