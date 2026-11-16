@@ -1,8 +1,11 @@
 .gradle/
 build/
+bin/
 .idea/
+.vscode/
 *.iml
 out/
 .classpath
 .project
 .settings/
+.problems/

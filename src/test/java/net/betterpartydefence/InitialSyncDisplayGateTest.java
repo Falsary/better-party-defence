@@ -5,17 +5,14 @@ import static org.junit.Assert.assertTrue;
 
 import org.junit.Test;
 
-public class InitialSyncDisplayGateTest
-{
-	private DefenceTracker.DefenceState state(int index, boolean drained)
-	{
+public class InitialSyncDisplayGateTest {
+	private DefenceTracker.DefenceState state(int index, boolean drained) {
 		return new DefenceTracker.DefenceState(index, "Example boss",
-			100, 0, 100, 0, 0, 0, 0, 0, 0, drained, false);
+				100, 0, 100, 0, 0, 0, 0, 0, 0, drained, false);
 	}
 
 	@Test
-	public void waitsOnlyForTheShortInitialPeriod()
-	{
+	public void waitsOnlyForTheShortInitialPeriod() {
 		InitialSyncDisplayGate gate = new InitialSyncDisplayGate();
 		gate.arm(7, BossDefence.TEKTON, 100, 4);
 		assertTrue(gate.isWaiting(state(7, false), 100));
@@ -26,8 +23,7 @@ public class InitialSyncDisplayGateTest
 	}
 
 	@Test
-	public void doesNotHideDrainAndDoesNotAffectOtherTargets()
-	{
+	public void doesNotHideDrainAndDoesNotAffectOtherTargets() {
 		InitialSyncDisplayGate gate = new InitialSyncDisplayGate();
 		gate.arm(7, BossDefence.TEKTON, 100, 4);
 		assertFalse(gate.isWaiting(state(7, true), 101));
@@ -35,19 +31,15 @@ public class InitialSyncDisplayGateTest
 	}
 
 	@Test
-	public void releaseRequiresMatchingBoss()
-	{
+	public void releaseTreatsEnragedTektonAsTekton() {
 		InitialSyncDisplayGate gate = new InitialSyncDisplayGate();
 		gate.arm(7, BossDefence.TEKTON, 100, 4);
 		gate.release(7, BossDefence.TEKTON_ENRAGED);
-		assertTrue(gate.isWaiting(state(7, false), 101));
-		gate.release(7, BossDefence.TEKTON);
 		assertFalse(gate.isWaiting(state(7, false), 101));
 	}
 
 	@Test
-	public void duplicatePresenceDoesNotExtendGracePeriod()
-	{
+	public void duplicatePresenceDoesNotExtendGracePeriod() {
 		InitialSyncDisplayGate gate = new InitialSyncDisplayGate();
 		gate.arm(7, BossDefence.TEKTON, 100, 4);
 		gate.arm(7, BossDefence.TEKTON, 102, 4);
@@ -55,8 +47,7 @@ public class InitialSyncDisplayGateTest
 	}
 
 	@Test
-	public void clearOnRaidExitOrReset()
-	{
+	public void clearOnRaidExitOrReset() {
 		InitialSyncDisplayGate gate = new InitialSyncDisplayGate();
 		gate.arm(7, BossDefence.TEKTON, 100, 4);
 		gate.clear();
@@ -64,8 +55,7 @@ public class InitialSyncDisplayGateTest
 	}
 
 	@Test
-	public void clearForBossLeavesOtherBossGatesUntouched()
-	{
+	public void clearForBossLeavesOtherBossGatesUntouched() {
 		InitialSyncDisplayGate gate = new InitialSyncDisplayGate();
 		gate.arm(7, BossDefence.TEKTON, 100, 4);
 		gate.arm(8, BossDefence.VORKATH, 100, 4);

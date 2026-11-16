@@ -22,21 +22,19 @@ import net.runelite.client.plugins.specialcounter.SpecialWeapon;
 import org.junit.Test;
 
 /**
- * Small two-client characterization harness. It deliberately uses the production tracker and
- * {@link BpdDefenceSync} wire conversion rather than an idealized reducer.
+ * Small two-client characterization harness. It deliberately uses the production tracker and {@link BpdDefenceSync}
+ * wire conversion rather than an idealized reducer.
  *
- * <p>Tests named "remain" or "cannot" pin current synchronization limitations. They are not
- * assertions that the limitation is desirable; a Stage 3B fix should replace those expectations
- * after the production behavior changes.
+ * <p>
+ * Tests named "remain" or "cannot" pin current synchronization limitations. They are not assertions that the limitation
+ * is desirable; a Stage 3B fix should replace those expectations after the production behavior changes.
  */
-public class PartySynchronizationCharacterizationTest
-{
+public class PartySynchronizationCharacterizationTest {
 	private static final int WORLD = 301;
 	private static final int NPC_INDEX = 1;
 
 	@Test
-	public void differentTickMixedObservationsDivergeBeforeSnapshotExchange()
-	{
+	public void differentTickMixedObservationsDivergeBeforeSnapshotExchange() {
 		ClientNode alice = new ClientNode();
 		ClientNode bob = new ClientNode();
 
@@ -57,8 +55,7 @@ public class PartySynchronizationCharacterizationTest
 	}
 
 	@Test
-	public void sameTickMixedObservationsDivergeBeforeSnapshotExchange()
-	{
+	public void sameTickMixedObservationsDivergeBeforeSnapshotExchange() {
 		ClientNode alice = new ClientNode();
 		ClientNode bob = new ClientNode();
 
@@ -82,8 +79,7 @@ public class PartySynchronizationCharacterizationTest
 	}
 
 	@Test
-	public void fullSnapshotExchangeRepairsMixedObservationDivergence()
-	{
+	public void fullSnapshotExchangeRepairsMixedObservationDivergence() {
 		ClientNode alice = new ClientNode();
 		ClientNode bob = new ClientNode();
 
@@ -104,8 +100,7 @@ public class PartySynchronizationCharacterizationTest
 	}
 
 	@Test
-	public void identifiedDifferentTickEventsConvergeAfterWireExchange()
-	{
+	public void identifiedDifferentTickEventsConvergeAfterWireExchange() {
 		ClientNode alice = new ClientNode();
 		ClientNode bob = new ClientNode();
 		ClientNode seed = new ClientNode();
@@ -130,8 +125,7 @@ public class PartySynchronizationCharacterizationTest
 	}
 
 	@Test
-	public void identifiedSameTickEventsConvergeWithoutInventingAnOrder()
-	{
+	public void identifiedSameTickEventsConvergeWithoutInventingAnOrder() {
 		ClientNode alice = new ClientNode();
 		ClientNode bob = new ClientNode();
 		ClientNode seed = new ClientNode();
@@ -155,8 +149,7 @@ public class PartySynchronizationCharacterizationTest
 	}
 
 	@Test
-	public void independentIdentifiedEventsWithoutSharedEvidenceCannotMerge()
-	{
+	public void independentIdentifiedEventsWithoutSharedEvidenceCannotMerge() {
 		ClientNode alice = new ClientNode();
 		ClientNode bob = new ClientNode();
 
@@ -175,8 +168,7 @@ public class PartySynchronizationCharacterizationTest
 	}
 
 	@Test
-	public void repeatedSnapshotExchangeIsIdempotent()
-	{
+	public void repeatedSnapshotExchangeIsIdempotent() {
 		ClientNode alice = new ClientNode();
 		ClientNode bob = new ClientNode();
 		ClientNode seed = new ClientNode();
@@ -197,8 +189,7 @@ public class PartySynchronizationCharacterizationTest
 	}
 
 	@Test
-	public void lateJoinerReconstructsFromSerializedSnapshot()
-	{
+	public void lateJoinerReconstructsFromSerializedSnapshot() {
 		ClientNode source = new ClientNode();
 		source.local(100, SpecialWeapon.DRAGON_WARHAMMER, 1, "Alice");
 		source.local(101, SpecialWeapon.BANDOS_GODSWORD, 20, "Bob");
@@ -209,7 +200,7 @@ public class PartySynchronizationCharacterizationTest
 
 		ClientNode lateJoiner = new ClientNode();
 		assertTrue("an initial snapshot is acceptable without a prior local epoch",
-			lateJoiner.snapshotAcceptable(wire, received));
+				lateJoiner.snapshotAcceptable(wire, received));
 		lateJoiner.acceptSnapshot(wire, received);
 
 		assertEquals(source.current(), lateJoiner.current());
@@ -218,40 +209,38 @@ public class PartySynchronizationCharacterizationTest
 	}
 
 	@Test
-	public void snapshotWithIdenticalHistoryButTamperedDefenceIsRejected()
-	{
+	public void snapshotWithIdenticalHistoryButTamperedDefenceIsRejected() {
 		ClientNode node = new ClientNode();
 		node.local(100, SpecialWeapon.DRAGON_WARHAMMER, 1, "Alice");
 		SyncState honest = node.snapshot();
 		SyncState tampered = new SyncState(
-			honest.getBossName(), honest.getBossType(), honest.getCurrent() - 1,
-			honest.getMin(), honest.getBase(), honest.getAttackLevel(), honest.getStrengthLevel(),
-			honest.getMagicLevel(), honest.getMagicBaseLevel(), honest.getMagicDef(),
-			honest.getMagicBaseDef(), honest.isMagicUsesDefence(), honest.isDemon(),
-			honest.isAccursedApplied(), honest.isDrained(), honest.getHistory());
+				honest.getBossName(), honest.getBossType(), honest.getCurrent() - 1,
+				honest.getMin(), honest.getBase(), honest.getAttackLevel(), honest.getStrengthLevel(),
+				honest.getMagicLevel(), honest.getMagicBaseLevel(), honest.getMagicDef(),
+				honest.getMagicBaseDef(), honest.isMagicUsesDefence(), honest.isDemon(),
+				honest.isAccursedApplied(), honest.isDrained(), honest.getHistory());
 		BpdDefenceSync wire = new BpdDefenceSync(
-			WORLD, tampered, BpdDefenceSync.SCOPE_WORLD, 0, 0, 0, 0, 100, 2L);
+				WORLD, tampered, BpdDefenceSync.SCOPE_WORLD, 0, 0, 0, 0, 100, 2L);
 
 		assertFalse("an absolute value cannot override identical accepted evidence",
-			node.snapshotAcceptable(wire, tampered));
+				node.snapshotAcceptable(wire, tampered));
 		assertEquals(honest, node.snapshot());
 	}
 
 	@Test
-	public void resetBarrierIsBoundToTheExactEncounterScope()
-	{
+	public void resetTimestampIsBoundToTheExactEncounterScope() {
 		ClientNode node = new ClientNode();
+		long beforeReset = System.currentTimeMillis() - 1;
 		node.applyReset(BossDefence.CORPOREAL_BEAST, BpdDefenceSync.SCOPE_WORLD, 0);
 
 		assertTrue("a delayed packet from the reset scope must be blocked",
-			node.resetBlocked(BossDefence.CORPOREAL_BEAST, BpdDefenceSync.SCOPE_WORLD, 0));
+				node.resetBlocked(BossDefence.CORPOREAL_BEAST, BpdDefenceSync.SCOPE_WORLD, 0, beforeReset));
 		assertFalse("the barrier must not suppress another concrete scope",
-			node.resetBlocked(BossDefence.CORPOREAL_BEAST, BpdDefenceSync.SCOPE_INSTANCE, 77));
+				node.resetBlocked(BossDefence.CORPOREAL_BEAST, BpdDefenceSync.SCOPE_INSTANCE, 77, beforeReset));
 	}
 
 	@Test
-	public void partySwitchRejectsOldNonzeroPartyIdButRetainsLegacyZero()
-	{
+	public void partySwitchRejectsOldNonzeroPartyIdButRetainsLegacyZero() {
 		ClientNode node = new ClientNode();
 		PartyService party = mock(PartyService.class);
 		when(party.isInParty()).thenReturn(true);
@@ -261,19 +250,17 @@ public class PartySynchronizationCharacterizationTest
 		assertFalse(node.packetBelongsToCurrentParty(1L));
 		assertTrue(node.packetBelongsToCurrentParty(2L));
 		assertTrue("legacy senders intentionally retain the compatibility path",
-			node.packetBelongsToCurrentParty(0L));
+				node.packetBelongsToCurrentParty(0L));
 	}
 
-	private static final class ClientNode
-	{
+	private static final class ClientNode {
 		private final Client client;
 		private final NPC npc;
 		private final DefenceTracker tracker;
 		private final BetterPartyDefencePlugin plugin;
 		private int tick;
 
-		private ClientNode()
-		{
+		private ClientNode() {
 			client = mock(Client.class);
 			WorldView worldView = mock(WorldView.class);
 			@SuppressWarnings("unchecked")
@@ -298,148 +285,115 @@ public class PartySynchronizationCharacterizationTest
 			setPluginField("defenceTracker", tracker);
 		}
 
-		private void local(int atTick, SpecialWeapon weapon, int hit, String player)
-		{
+		private void local(int atTick, SpecialWeapon weapon, int hit, String player) {
 			tick = atTick;
 			tracker.queueLocal(weapon, NPC_INDEX, hit, WORLD, player, npc);
 			tracker.onGameTick();
 		}
 
-		private void standard(int atTick, SpecialWeapon weapon, int hit, String player)
-		{
+		private void standard(int atTick, SpecialWeapon weapon, int hit, String player) {
 			tick = atTick;
 			tracker.queue(weapon, NPC_INDEX, hit, WORLD, player, npc);
 			tracker.onGameTick();
 		}
 
-		private void useSharedClock(String anchor, int atTick)
-		{
+		private void useSharedClock(String anchor, int atTick) {
 			tick = atTick;
 			tracker.setSharedTickAnchor(anchor, atTick);
 		}
 
-		private long current()
-		{
+		private long current() {
 			return tracker.state().getCurrent();
 		}
 
-		private SyncState snapshot()
-		{
+		private SyncState snapshot() {
 			return tracker.syncState();
 		}
 
-		private BpdDefenceSync wire(long version)
-		{
+		private BpdDefenceSync wire(long version) {
 			return new BpdDefenceSync(WORLD, snapshot(), BpdDefenceSync.SCOPE_WORLD, 0,
-				0, 0, 0, 100, version);
+					0, 0, 0, 100, version);
 		}
 
-		private void adopt(SyncState state)
-		{
+		private void adopt(SyncState state) {
 			tracker.applySyncState(state, npc);
 		}
 
-		private boolean merge(SyncState state)
-		{
+		private boolean merge(SyncState state) {
 			return tracker.mergeEventSyncState(state, npc);
 		}
 
-		private boolean snapshotAcceptable(BpdDefenceSync wire, SyncState state)
-		{
-			try
-			{
+		private boolean snapshotAcceptable(BpdDefenceSync wire, SyncState state) {
+			try {
 				Method method = BetterPartyDefencePlugin.class.getDeclaredMethod(
-					"incomingVersionIsAcceptable", BpdDefenceSync.class, SyncState.class, NPC.class);
+						"incomingVersionIsAcceptable", BpdDefenceSync.class, SyncState.class, NPC.class);
 				method.setAccessible(true);
 				return (boolean) method.invoke(plugin, wire, state, npc);
-			}
-			catch (ReflectiveOperationException ex)
-			{
+			} catch (ReflectiveOperationException ex) {
 				throw new AssertionError(ex);
 			}
 		}
 
-		private void acceptSnapshot(BpdDefenceSync wire, SyncState state)
-		{
-			try
-			{
+		private void acceptSnapshot(BpdDefenceSync wire, SyncState state) {
+			try {
 				Method method = BetterPartyDefencePlugin.class.getDeclaredMethod(
-					"applyAcceptedSync", BpdDefenceSync.class, SyncState.class, NPC.class);
+						"applyAcceptedSync", BpdDefenceSync.class, SyncState.class, NPC.class);
 				method.setAccessible(true);
 				method.invoke(plugin, wire, state, npc);
-			}
-			catch (ReflectiveOperationException ex)
-			{
+			} catch (ReflectiveOperationException ex) {
 				throw new AssertionError(ex);
 			}
 		}
 
-		private void setPluginField(String name, Object value)
-		{
-			try
-			{
+		private void setPluginField(String name, Object value) {
+			try {
 				Field field = BetterPartyDefencePlugin.class.getDeclaredField(name);
 				field.setAccessible(true);
 				field.set(plugin, value);
-			}
-			catch (ReflectiveOperationException ex)
-			{
+			} catch (ReflectiveOperationException ex) {
 				throw new AssertionError(ex);
 			}
 		}
 
-		private void applyReset(BossDefence boss, int scopeType, int scopeId)
-		{
-			try
-			{
+		private void applyReset(BossDefence boss, int scopeType, int scopeId) {
+			try {
 				Class<?> scopeClass = Class.forName(
-					"net.betterpartydefence.BetterPartyDefencePlugin$SyncScope");
+						"net.betterpartydefence.SyncScope");
 				Constructor<?> constructor = scopeClass.getDeclaredConstructor(int.class, int.class);
 				constructor.setAccessible(true);
 				Object scope = constructor.newInstance(scopeType, scopeId);
 				Method method = BetterPartyDefencePlugin.class.getDeclaredMethod(
-					"applyEncounterReset", BossDefence.class, scopeClass, String.class, boolean.class);
+						"applyEncounterReset", BossDefence.class, scopeClass, String.class, boolean.class);
 				method.setAccessible(true);
 				method.invoke(plugin, boss, scope, "characterization reset", true);
-			}
-			catch (ReflectiveOperationException ex)
-			{
+			} catch (ReflectiveOperationException ex) {
 				throw new AssertionError(ex);
 			}
 		}
 
-		private boolean resetBlocked(BossDefence boss, int scopeType, int scopeId)
-		{
-			try
-			{
+		private boolean resetBlocked(BossDefence boss, int scopeType, int scopeId, long observedAt) {
+			try {
 				Method method = BetterPartyDefencePlugin.class.getDeclaredMethod(
-					"isBlockedByRecentEncounterReset", BossDefence.class, int.class, int.class);
+						"observationPredatesReset", BossDefence.class, int.class, int.class, long.class);
 				method.setAccessible(true);
-				return (boolean) method.invoke(plugin, boss, scopeType, scopeId);
-			}
-			catch (ReflectiveOperationException ex)
-			{
+				return (boolean) method.invoke(plugin, boss, scopeType, scopeId, observedAt);
+			} catch (ReflectiveOperationException ex) {
 				throw new AssertionError(ex);
 			}
 		}
 
-		private void useParty(PartyService party, long currentPartyId)
-		{
+		private void useParty(PartyService party, long currentPartyId) {
 			setPluginField("partyService", party);
 			setPluginField("currentPartyId", currentPartyId);
 		}
 
-		private boolean packetBelongsToCurrentParty(long packetPartyId)
-		{
-			try
-			{
+		private boolean packetBelongsToCurrentParty(long packetPartyId) {
+			try {
 				Method method = BetterPartyDefencePlugin.class.getDeclaredMethod(
-					"partyMessageBelongsToCurrentParty", long.class);
+						"partyMessageBelongsToCurrentParty", long.class);
 				method.setAccessible(true);
 				return (boolean) method.invoke(plugin, packetPartyId);
-			}
-			catch (ReflectiveOperationException ex)
-			{
+			} catch (ReflectiveOperationException ex) {
 				throw new AssertionError(ex);
 			}
 		}

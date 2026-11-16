@@ -18,8 +18,13 @@ import java.awt.image.BufferedImage;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import net.betterpartydefence.BetterPartyDefenceConfig.DefenceDrainFormat;
+import net.betterpartydefence.BetterPartyDefenceConfig.DefenceInfoBoxValue;
+import net.betterpartydefence.BetterPartyDefenceConfig.DefenceOverlayPosition;
+import net.betterpartydefence.BetterPartyDefenceConfig.DefenceThresholdUnit;
+import net.betterpartydefence.BetterPartyDefenceConfig.DefenceValueFormat;
+import net.betterpartydefence.BetterPartyDefenceConfig.TrackerFont;
 import net.betterpartydefence.DefenceTracker.SyncState;
-import net.betterpartydefence.DefenceTracker.SyncTarget;
 import net.runelite.api.Client;
 import net.runelite.api.IndexedObjectSet;
 import net.runelite.api.NPC;
@@ -35,20 +40,18 @@ import org.junit.Test;
 /**
  * Production overlay regressions for independently tracked NPCs.
  *
- * <p>The test records which NPCs the real {@link NpcDefenceOverlay#render(Graphics2D)} path asks
- * to anchor text on. It does not replace the overlay's target-selection logic with a separate
- * idealized renderer.
+ * <p>
+ * The test records which NPCs the real {@link NpcDefenceOverlay#render(Graphics2D)} path asks to anchor text on. It
+ * does not replace the overlay's target-selection logic with a separate idealized renderer.
  */
-public class NpcDefenceOverlayDisplayRegressionTest
-{
+public class NpcDefenceOverlayDisplayRegressionTest {
 	private static final int WORLD = 301;
 	private static final int BOSS_A_INDEX = 41;
 	private static final int BOSS_B_INDEX = 42;
 	private static final int BOSS_C_INDEX = 43;
 
 	@Test
-	public void singleTeammateSpecRendersWithoutLocalSelection()
-	{
+	public void singleTeammateSpecRendersWithoutLocalSelection() {
 		Harness h = new Harness();
 		NPC bossA = h.addNpc(BOSS_A_INDEX, "Chaos Elemental");
 		h.trackPartySpec(bossA, "Alice");
@@ -60,8 +63,7 @@ public class NpcDefenceOverlayDisplayRegressionTest
 	}
 
 	@Test
-	public void teammateSpecTargetRendersWhileCurrentTargetRemainsSelected()
-	{
+	public void teammateSpecTargetRendersWhileCurrentTargetRemainsSelected() {
 		Harness h = new Harness();
 		NPC bossA = h.addNpc(BOSS_A_INDEX, "Chaos Elemental");
 		NPC bossB = h.addNpc(BOSS_B_INDEX, "Corporeal Beast");
@@ -71,16 +73,15 @@ public class NpcDefenceOverlayDisplayRegressionTest
 		h.renderOverlay();
 
 		assertEquals("the active target must remain Boss B", BOSS_B_INDEX,
-			h.tracker.state().getNpcIndex());
+				h.tracker.state().getNpcIndex());
 		assertEquals("Boss A's party evidence must remain recorded", 1,
-			h.historySize(BOSS_A_INDEX));
+				h.historySize(BOSS_A_INDEX));
 		verify(bossA).getCanvasTextLocation(any(Graphics2D.class), anyString(), anyInt());
 		verify(bossB).getCanvasTextLocation(any(Graphics2D.class), anyString(), anyInt());
 	}
 
 	@Test
-	public void threeTrackedBossesRenderIndependently()
-	{
+	public void threeTrackedBossesRenderIndependently() {
 		Harness h = new Harness();
 		NPC bossA = h.addNpc(BOSS_A_INDEX, "Chaos Elemental");
 		NPC bossB = h.addNpc(BOSS_B_INDEX, "Corporeal Beast");
@@ -99,8 +100,7 @@ public class NpcDefenceOverlayDisplayRegressionTest
 	}
 
 	@Test
-	public void switchingTargetsStillDrawsEachTrackedBossOnce()
-	{
+	public void switchingTargetsStillDrawsEachTrackedBossOnce() {
 		Harness h = new Harness();
 		NPC bossA = h.addNpc(BOSS_A_INDEX, "Chaos Elemental");
 		NPC bossB = h.addNpc(BOSS_B_INDEX, "Corporeal Beast");
@@ -118,8 +118,7 @@ public class NpcDefenceOverlayDisplayRegressionTest
 	}
 
 	@Test
-	public void clickingAnotherBossChangesInfoBoxSelectionOnly()
-	{
+	public void clickingAnotherBossChangesInfoBoxSelectionOnly() {
 		Harness h = new Harness();
 		NPC bossA = h.addNpc(BOSS_A_INDEX, "Chaos Elemental");
 		NPC bossB = h.addNpc(BOSS_B_INDEX, "Corporeal Beast");
@@ -135,12 +134,11 @@ public class NpcDefenceOverlayDisplayRegressionTest
 		assertEquals(BOSS_A_INDEX, h.tracker.state().getNpcIndex());
 		assertEquals(Long.toString(h.tracker.state().getCurrent()), infoBox.getText());
 		assertEquals("interaction must not replay combat evidence", 1,
-			h.historySize(BOSS_A_INDEX));
+				h.historySize(BOSS_A_INDEX));
 	}
 
 	@Test
-	public void outOfRenderTargetAppearsWhenItReturnsWithoutInteraction()
-	{
+	public void outOfRenderTargetAppearsWhenItReturnsWithoutInteraction() {
 		Harness h = new Harness();
 		NPC bossA = h.addNpc(BOSS_A_INDEX, "Chaos Elemental");
 		NPC bossB = h.addNpc(BOSS_B_INDEX, "Corporeal Beast");
@@ -156,12 +154,11 @@ public class NpcDefenceOverlayDisplayRegressionTest
 		h.renderOverlay();
 		verify(bossA).getCanvasTextLocation(any(Graphics2D.class), anyString(), anyInt());
 		assertEquals("restoring rendering must not steal the active target", BOSS_B_INDEX,
-			h.tracker.state().getNpcIndex());
+				h.tracker.state().getNpcIndex());
 	}
 
 	@Test
-	public void initialSyncGateStillHidesUndrainedTargetUntilReleased()
-	{
+	public void initialSyncGateStillHidesUndrainedTargetUntilReleased() {
 		Harness h = new Harness();
 		h.alwaysShow = true;
 		NPC bossA = h.addNpc(BOSS_A_INDEX, "Chaos Elemental");
@@ -180,8 +177,7 @@ public class NpcDefenceOverlayDisplayRegressionTest
 	}
 
 	@Test
-	public void encounterResetRemovesAllOverheads()
-	{
+	public void encounterResetRemovesAllOverheads() {
 		Harness h = new Harness();
 		NPC bossA = h.addNpc(BOSS_A_INDEX, "Chaos Elemental");
 		NPC bossB = h.addNpc(BOSS_B_INDEX, "Corporeal Beast");
@@ -197,8 +193,7 @@ public class NpcDefenceOverlayDisplayRegressionTest
 	}
 
 	@Test
-	public void disabledTrackerDrawsNoOverheads()
-	{
+	public void disabledTrackerDrawsNoOverheads() {
 		Harness h = new Harness();
 		h.defenceEnabled = false;
 		NPC bossA = h.addNpc(BOSS_A_INDEX, "Chaos Elemental");
@@ -210,8 +205,7 @@ public class NpcDefenceOverlayDisplayRegressionTest
 	}
 
 	@Test
-	public void configuredPositionIsAppliedToEveryTrackedTarget()
-	{
+	public void configuredPositionIsAppliedToEveryTrackedTarget() {
 		Harness h = new Harness();
 		h.position = DefenceOverlayPosition.RIGHT_OF_HP_BAR;
 		NPC bossA = h.addNpc(BOSS_A_INDEX, "Chaos Elemental");
@@ -222,14 +216,14 @@ public class NpcDefenceOverlayDisplayRegressionTest
 		h.renderOverlay();
 
 		int expectedZOffset = (int) (100 * h.position.getHeightFactor())
-			+ h.position.getHeightOffset();
+				+ h.position.getHeightOffset();
 		verify(bossA).getCanvasTextLocation(h.graphics, "", expectedZOffset);
 		verify(bossB).getCanvasTextLocation(h.graphics, "", expectedZOffset);
 	}
 
-	private static final class Harness
-	{
+	private static final class Harness {
 		private final Map<Integer, NPC> npcsByIndex = new LinkedHashMap<>();
+		private final Map<Integer, BossDefence> bossByIndex = new LinkedHashMap<>();
 		private final Client client = mock(Client.class);
 		private final WorldView worldView = mock(WorldView.class);
 		@SuppressWarnings("unchecked")
@@ -240,8 +234,7 @@ public class NpcDefenceOverlayDisplayRegressionTest
 		private final BetterPartyDefenceConfig config = mock(BetterPartyDefenceConfig.class);
 		private final Graphics2D graphics = mock(Graphics2D.class);
 		private final FontMetrics fontMetrics = mock(FontMetrics.class);
-		private final BufferedImage skillImage =
-			new BufferedImage(16, 16, BufferedImage.TYPE_INT_ARGB);
+		private final BufferedImage skillImage = new BufferedImage(16, 16, BufferedImage.TYPE_INT_ARGB);
 		private final SkillIconManager skillIconManager = mock(SkillIconManager.class);
 		private final InitialSyncDisplayGate initialSyncDisplayGate = new InitialSyncDisplayGate();
 		private final DefenceTracker tracker;
@@ -254,8 +247,7 @@ public class NpcDefenceOverlayDisplayRegressionTest
 		private NPC interacting;
 
 		@SuppressWarnings("unchecked")
-		private Harness()
-		{
+		private Harness() {
 			when(client.getTopLevelWorldView()).thenReturn(worldView);
 			when(client.getLocalPlayer()).thenReturn(localPlayer);
 			when(client.getTickCount()).thenAnswer(invocation -> tick);
@@ -263,9 +255,9 @@ public class NpcDefenceOverlayDisplayRegressionTest
 			doReturn(npcs).when(worldView).npcs();
 			doReturn(players).when(worldView).players();
 			when(npcs.byIndex(anyInt())).thenAnswer(
-				invocation -> npcsByIndex.get(invocation.getArgument(0)));
+					invocation -> npcsByIndex.get(invocation.getArgument(0)));
 			when(npcs.iterator()).thenAnswer(
-				invocation -> new ArrayList<>(npcsByIndex.values()).iterator());
+					invocation -> new ArrayList<>(npcsByIndex.values()).iterator());
 			when(players.iterator()).thenReturn(java.util.Collections.emptyIterator());
 			when(localPlayer.getInteracting()).thenAnswer(invocation -> interacting);
 			when(localPlayer.getWorldLocation()).thenReturn(new WorldPoint(3200, 3200, 0));
@@ -301,12 +293,11 @@ public class NpcDefenceOverlayDisplayRegressionTest
 
 			tracker = new DefenceTracker(client, config);
 			overlay = new NpcDefenceOverlay(client, tracker, config,
-				new SkillIconSource(client, skillIconManager, config),
-				new TrackerFontManager(config), initialSyncDisplayGate);
+					new DefenceOverlayRenderer.IconSource(client, skillIconManager, config),
+					initialSyncDisplayGate);
 		}
 
-		private NPC addNpc(int index, String name)
-		{
+		private NPC addNpc(int index, String name) {
 			NPC npc = mock(NPC.class);
 			when(npc.getName()).thenReturn(name);
 			when(npc.getIndex()).thenReturn(index);
@@ -320,66 +311,52 @@ public class NpcDefenceOverlayDisplayRegressionTest
 			when(anchor.getX()).thenReturn(100);
 			when(anchor.getY()).thenReturn(100);
 			when(npc.getCanvasTextLocation(any(Graphics2D.class), anyString(), anyInt()))
-				.thenReturn(anchor);
+					.thenReturn(anchor);
 			npcsByIndex.put(index, npc);
+			bossByIndex.put(index, BossDefence.matchingNpcName(name));
 			return npc;
 		}
 
-		private void removeNpc(NPC npc)
-		{
+		private void removeNpc(NPC npc) {
 			npcsByIndex.remove(npc.getIndex());
 		}
 
-		private void restoreNpc(NPC npc)
-		{
+		private void restoreNpc(NPC npc) {
 			npcsByIndex.put(npc.getIndex(), npc);
 		}
 
-		private void selectAndDrain(NPC npc, String playerName)
-		{
+		private void selectAndDrain(NPC npc, String playerName) {
 			interacting = npc;
 			tracker.queueLocal(SpecialWeapon.DRAGON_WARHAMMER, npc.getIndex(), 1, WORLD,
-				playerName, npc);
+					playerName, npc);
 			advanceTick();
 		}
 
-		private void trackPartySpec(NPC npc, String playerName)
-		{
+		private void trackPartySpec(NPC npc, String playerName) {
 			tracker.queue(SpecialWeapon.DRAGON_WARHAMMER, npc.getIndex(), 1, WORLD,
-				playerName, npc);
+					playerName, npc);
 			advanceTick();
 		}
 
-		private void advanceTick()
-		{
+		private void advanceTick() {
 			tick++;
 			tracker.onGameTick();
 		}
 
-		private void renderOverlay()
-		{
+		private void renderOverlay() {
 			overlay.render(graphics);
 		}
 
-		private DefenceInfoBox infoBox()
-		{
+		private DefenceInfoBox infoBox() {
 			return new DefenceInfoBox(
-				new BufferedImage(1, 1, BufferedImage.TYPE_INT_ARGB),
-				mock(Plugin.class), tracker, config);
+					new BufferedImage(1, 1, BufferedImage.TYPE_INT_ARGB),
+					mock(Plugin.class), tracker, config);
 		}
 
-		private int historySize(int npcIndex)
-		{
-			for (SyncTarget target : tracker.syncTargets())
-			{
-				if (target.getNpcIndex() != npcIndex || target.getState() == null)
-				{
-					continue;
-				}
-				SyncState state = target.getState();
-				return state.getHistory() == null ? 0 : state.getHistory().size();
-			}
-			return 0;
+		private int historySize(int npcIndex) {
+			BossDefence boss = bossByIndex.get(npcIndex);
+			SyncState state = boss == null ? null : tracker.syncStateForBoss(boss);
+			return state == null || state.getHistory() == null ? 0 : state.getHistory().size();
 		}
 	}
 }

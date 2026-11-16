@@ -3,59 +3,37 @@ package net.betterpartydefence;
 import java.util.Objects;
 import java.util.UUID;
 
-/**
- * Shared raid elapsed-time clock built only from timing values the game already keeps for its
- * own raid HUDs.
- *
- * <p>ToA (script 6580) and TFA (script 10036) run a root clientscript with
- * {@code (elapsedTicks, stopped)}. The value is already in 600 ms game ticks; the rounded HUD
- * text is never parsed. CoX exposes {@code RAIDS_TIMER}, which is the same elapsed-tick counter
- * used by its "Time:" overlay, but the client interpolates it locally between server updates.
- * CoX domains therefore carry an explicit uncertainty suffix; the timeline orders CoX events
- * only when their possible tick intervals do not overlap.
- *
- * <p>Every client maps the shared elapsed value onto its own login counter at the moment it
- * observes a sample. Two clients with different login counters therefore derive the same
- * elapsed tick for the same game tick, and a late joiner only needs the current elapsed value.
- *
- * <p>ToB is deliberately absent. Its HUD publishes room progress, not elapsed time, and no
- * verified live shared ToB timer was found. ToB therefore keeps the existing conservative
- * ordering instead of inventing a clock contract.
- */
-final class RaidTimerClock
-{
+// Converts verified raid timer readings to shared elapsed ticks.
+// ToA/TFA use root scripts; CoX uses the locally interpolated RAIDS_TIMER.
+// ToB has no verified shared timer.
+final class RaidTimerClock {
 	static final int SOURCE_TOA = 1;
 	static final int SOURCE_TFA = 2;
 	static final int SOURCE_COX = 3;
 
-	/** Verified root clientscripts: {@code [scriptId, elapsedTicks, stopped]}. */
+	// Root scripts expose [scriptId, elapsedTicks, stopped].
 	static final int TOA_TIMER_SCRIPT = 6580;
 	static final int TFA_TIMER_SCRIPT = 10036;
 
 	static final long NO_TICK = Long.MIN_VALUE;
 
-	/** A one/two tick backwards resync is a correction; a larger jump is uncertain. */
+	// Allow small backwards corrections.
 	static final int RESET_BACKWARD_TOLERANCE = 2;
-	/**
-	 * Every timer-derived domain carries an explicit uncertainty radius. It bounds the CoX
-	 * local-interpolation phase and a same-scope server correction: a client can be up to two
-	 * ticks ahead of another, so events whose possible intervals overlap stay unordered.
-	 */
+	// Timer readings can differ by two ticks between clients.
+	// Events with overlapping possible times stay unordered.
 	static final String TIMER_UNCERTAINTY_SUFFIX = ":u2";
 	static final int TIMER_UNCERTAINTY_TICKS = 2;
-	/** The game's raid timers cannot legitimately exceed this (about 33 hours of ticks). */
+	// Sanity cap of about 33 hours.
 	static final int MAX_ELAPSED_TICKS = 200_000;
 	private static final int MAX_DOMAIN_LENGTH = 128;
 
-	/** One validated root timer-script invocation. */
-	static final class TimerInput
-	{
+	// One validated timer-script reading.
+	static final class TimerInput {
 		final int source;
 		final int elapsedTicks;
 		final boolean stopped;
 
-		private TimerInput(int source, int elapsedTicks, boolean stopped)
-		{
+		private TimerInput(int source, int elapsedTicks, boolean stopped) {
 			this.source = source;
 			this.elapsedTicks = elapsedTicks;
 			this.stopped = stopped;
@@ -69,132 +47,94 @@ final class RaidTimerClock
 	private int anchorRaidTick;
 	private boolean stopped;
 	private boolean active;
-	/** Bumped when a same-scope backwards jump is too large to trust; isolates the next epoch. */
+	// Starts a new timing range after an untrusted backwards jump.
 	private int generation;
-	/**
-	 * Locally unique token mixed into isolated epochs. Two independent clients can both
-	 * reach generation 1 for unrelated corrections; without this token their generated
-	 * domains would collide and be compared as one timeline.
-	 */
+	// Add a random client token so separate corrections never share an id.
 	private final String clientToken = UUID.randomUUID().toString().replace("-", "");
 
-	/**
-	 * Validate a script event without trusting anything but the root script's documented
-	 * {@code [scriptId, elapsedTicks, stopped]} layout. Display callbacks and nested scripts
-	 * have different shapes and are rejected.
-	 */
-	static TimerInput parseTimerScript(int scriptId, Object[] arguments)
-	{
+	// Check only the documented root-script arguments.
+	static TimerInput parseTimerScript(int scriptId, Object[] arguments) {
 		int source = sourceForScript(scriptId);
-		if (source == -1 || arguments == null || arguments.length != 3)
-		{
+		if (source == -1 || arguments == null || arguments.length != 3) {
 			return null;
 		}
 		Integer id = asInt(arguments[0]);
 		Integer elapsed = asInt(arguments[1]);
 		Integer stopped = asInt(arguments[2]);
 		if (id == null || id != scriptId || elapsed == null || stopped == null
-			|| stopped < 0 || stopped > 1
-			|| elapsed < -1 || elapsed > MAX_ELAPSED_TICKS)
-		{
+				|| stopped < 0 || stopped > 1
+				|| elapsed < -1 || elapsed > MAX_ELAPSED_TICKS) {
 			return null;
 		}
 		return new TimerInput(source, elapsed, stopped != 0);
 	}
 
-	private static Integer asInt(Object value)
-	{
+	private static Integer asInt(Object value) {
 		return value instanceof Number ? ((Number) value).intValue() : null;
 	}
 
-	static int sourceForScript(int scriptId)
-	{
-		switch (scriptId)
-		{
-			case TOA_TIMER_SCRIPT:
+	static int sourceForScript(int scriptId) {
+		switch (scriptId) {
+			case TOA_TIMER_SCRIPT :
 				return SOURCE_TOA;
-			case TFA_TIMER_SCRIPT:
+			case TFA_TIMER_SCRIPT :
 				return SOURCE_TFA;
-			default:
+			default :
 				return -1;
 		}
 	}
 
-	static String sourceName(int source)
-	{
-		switch (source)
-		{
-			case SOURCE_TOA:
+	static String sourceName(int source) {
+		switch (source) {
+			case SOURCE_TOA :
 				return "toa";
-			case SOURCE_TFA:
+			case SOURCE_TFA :
 				return "tfa";
-			case SOURCE_COX:
+			case SOURCE_COX :
 				return "cox";
-			default:
+			default :
 				return "unknown";
 		}
 	}
 
-	/**
-	 * Record a sample from a verified timer input.
-	 *
-	 * @param source    one of the {@code SOURCE_*} constants
-	 * @param scopeKey  a stable shared raid/instance key, identical on every client in the raid
-	 * @param raidTick  elapsed raid ticks; {@code -1} clears the timer
-	 * @param stopped   the game froze the timer at this value
-	 * @param localTick this client's game-tick counter at sampling
-	 * @return true if the clock is active after the call
-	 */
-	boolean sample(int source, String scopeKey, int raidTick, boolean stopped, int localTick)
-	{
+	// Record a validated timer reading.
+	boolean sample(int source, String scopeKey, int raidTick, boolean stopped, int localTick) {
 		if (!isKnownSource(source) || scopeKey == null || scopeKey.isEmpty()
-			|| localTick < 0 || raidTick > MAX_ELAPSED_TICKS)
-		{
+				|| localTick < 0 || raidTick > MAX_ELAPSED_TICKS) {
 			return false;
 		}
-		if (raidTick < 0)
-		{
-			if (active && this.source == source)
-			{
+		if (raidTick < 0) {
+			if (active && this.source == source) {
 				clear();
 			}
 			return false;
 		}
-		// A final value alone cannot anchor anything; only transition a running clock to stopped.
-		if (stopped && !active)
-		{
+		// A stopped-only sample cannot start a clock.
+		if (stopped && !active) {
 			return false;
 		}
-		if (active && this.source != source)
-		{
+		if (active && this.source != source) {
 			clear();
 		}
 		String nextDomain = domain(source, scopeKey);
 		int epochLength = generation > 0
-			? (":" + clientToken + ":g" + generation).length() : 0;
-		if (nextDomain.length() + epochLength > MAX_DOMAIN_LENGTH)
-		{
+				? (":" + clientToken + ":g" + generation).length()
+				: 0;
+		if (nextDomain.length() + epochLength > MAX_DOMAIN_LENGTH) {
 			return false;
 		}
-		if (!active)
-		{
-			// Keep any unresolved isolation across the scope change: a new scene is not
-			// evidence that the old mapping is safe to compare with immutable events.
+		if (!active) {
+			// Keep the current timing range separated.
 			establish(source, nextDomain, scopeKey, raidTick, stopped, localTick);
 			return true;
 		}
 
 		boolean scopeChanged = !Objects.equals(scopeKey, this.scopeKey);
-		if (scopeChanged)
-		{
-			// Follow the new scope but retain the generation/token. Walking between rooms
-			// (or switching from a scene fallback to a controller) does not certify the
-			// pre-correction mapping. Only clear() resets to a shared baseline.
+		if (scopeChanged) {
+			// Switch to the new instance id without trusting old timestamps.
 			int expected = anchorRaidTick + (localTick - anchorLocalTick);
-			if (raidTick < expected - RESET_BACKWARD_TOLERANCE)
-			{
-				// A new scene plus a large backwards mapping is a new epoch even without a
-				// prior correction; the scene alone is not evidence of compatibility.
+			if (raidTick < expected - RESET_BACKWARD_TOLERANCE) {
+				// A large backwards jump in a new scene starts a new range.
 				generation++;
 			}
 			establish(source, nextDomain, scopeKey, raidTick, stopped, localTick);
@@ -203,31 +143,24 @@ final class RaidTimerClock
 
 		boolean resumed = this.stopped && !stopped;
 		int expected = anchorRaidTick + (localTick - anchorLocalTick);
-		if (raidTick < expected)
-		{
-			if (resumed)
-			{
-				// A timer resuming after a stop is a new epoch. Bump the generation so
-				// events from before the stop cannot be ordered against the resumed mapping.
+		if (raidTick < expected) {
+			if (resumed) {
+				// Resuming a stopped timer starts a new range.
 				generation++;
 				establish(source, nextDomain, scopeKey, raidTick, stopped, localTick);
 				return true;
 			}
-			if (expected - raidTick > RESET_BACKWARD_TOLERANCE)
-			{
-				// Same identity but too large a backwards jump to distinguish a correction
-				// from a new epoch. Invalidate the exact clock without resetting the epoch
-				// counter; the next forward sample starts a distinct isolated generation.
+			if (expected - raidTick > RESET_BACKWARD_TOLERANCE) {
+				// Unknown backwards jump; disable the clock but keep the range counter.
 				invalidate();
 				return false;
 			}
-			// A small same-scope correction: keep the monotonic mapping. Timer domains carry
-			// an uncertainty radius that bounds the cross-client disagreement this creates.
+			// Small correction; keep the existing tick mapping.
 			this.stopped = stopped;
 			return true;
 		}
 
-		// Follow the current scope and preserve the isolated epoch on every normal update.
+		// Move the tick anchor and keep the range separated.
 		this.domain = domainWithGeneration(nextDomain);
 		this.scopeKey = scopeKey;
 		anchorLocalTick = localTick;
@@ -236,17 +169,14 @@ final class RaidTimerClock
 		return true;
 	}
 
-	/** Mark the current clock final (CoX progress complete) without extending it. */
-	void markStopped()
-	{
-		if (active)
-		{
+	// Stop the clock without extending it.
+	void markStopped() {
+		if (active) {
 			stopped = true;
 		}
 	}
 
-	void clear()
-	{
+	void clear() {
 		source = -1;
 		scopeKey = null;
 		domain = null;
@@ -257,12 +187,8 @@ final class RaidTimerClock
 		generation = 0;
 	}
 
-	/**
-	 * Deactivate after an ambiguous backwards jump without resetting the epoch counter.
-	 * Lifecycle clearing (leaving a raid, a new source, shutdown) uses {@link #clear()}.
-	 */
-	private void invalidate()
-	{
+	// Disable after an unknown jump; keep the range counter.
+	private void invalidate() {
 		source = -1;
 		domain = null;
 		anchorLocalTick = 0;
@@ -270,57 +196,47 @@ final class RaidTimerClock
 		stopped = false;
 		active = false;
 		generation++;
-		// Keep scopeKey so the next sample can tell whether the scope itself changed.
+		// Keep the instance id to detect a real change.
 	}
 
-	/** Shared elapsed tick for a local game tick, or {@link #NO_TICK} when not extrapolable. */
-	long tickAt(int localTick)
-	{
-		if (!active || localTick < 0)
-		{
+	// Convert a local tick to elapsed raid ticks.
+	long tickAt(int localTick) {
+		if (!active || localTick < 0) {
 			return NO_TICK;
 		}
-		if (stopped && localTick != anchorLocalTick)
-		{
+		if (stopped && localTick != anchorLocalTick) {
 			return NO_TICK;
 		}
 		long tick = (long) anchorRaidTick + ((long) localTick - anchorLocalTick);
 		return tick >= 0 ? tick : NO_TICK;
 	}
 
-	boolean isActive()
-	{
+	boolean isActive() {
 		return active;
 	}
 
-	boolean isActiveFor(int source)
-	{
+	boolean isActiveFor(int source) {
 		return active && this.source == source;
 	}
 
-	boolean isStopped()
-	{
+	boolean isStopped() {
 		return active && stopped;
 	}
 
-	String domain()
-	{
+	String domain() {
 		return active ? domain : null;
 	}
 
-	int anchorLocalTick()
-	{
+	int anchorLocalTick() {
 		return anchorLocalTick;
 	}
 
-	int anchorRaidTick()
-	{
+	int anchorRaidTick() {
 		return anchorRaidTick;
 	}
 
 	private void establish(int source, String domain, String scopeKey, int raidTick,
-		boolean stopped, int localTick)
-	{
+			boolean stopped, int localTick) {
 		this.source = source;
 		this.domain = domainWithGeneration(domain);
 		this.scopeKey = scopeKey;
@@ -330,23 +246,16 @@ final class RaidTimerClock
 		this.active = true;
 	}
 
-	/**
-	 * Isolated epochs end in {@code :gN} but keep the uncertainty segment before the
-	 * per-client token, so both the uncertainty parser and the epoch identity remain valid.
-	 */
-	private String domainWithGeneration(String base)
-	{
+	// Add the client token only to corrected timing ranges.
+	private String domainWithGeneration(String base) {
 		return generation == 0 ? base : base + ":" + clientToken + ":g" + generation;
 	}
 
-	private static String domain(int source, String scopeKey)
-	{
+	private static String domain(int source, String scopeKey) {
 		return "raid-time:v1:" + sourceName(source) + ":" + scopeKey + TIMER_UNCERTAINTY_SUFFIX;
 	}
 
-	/** Reject arbitrary source ints passed by a future caller. */
-	private static boolean isKnownSource(int source)
-	{
+	private static boolean isKnownSource(int source) {
 		return source == SOURCE_TOA || source == SOURCE_TFA || source == SOURCE_COX;
 	}
 }

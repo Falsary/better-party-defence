@@ -40,14 +40,12 @@ import net.runelite.client.plugins.specialcounter.SpecialWeapon;
 import org.junit.Test;
 
 /**
- * Regression coverage for the local DWH capture path. These tests call the detector's real
- * VarbitChanged, HitsplatApplied, and tick methods rather than queueing tracker events directly.
+ * Regression coverage for the local DWH capture path. These tests call the detector's real VarbitChanged,
+ * HitsplatApplied, and tick methods rather than queueing tracker events directly.
  */
-public class LocalDefenceSpecDetectorRegressionTest
-{
+public class LocalDefenceSpecDetectorRegressionTest {
 	@Test
-	public void landedDwhQueuesThroughTheDetector()
-	{
+	public void landedDwhQueuesThroughTheDetector() {
 		Harness h = new Harness();
 		h.armDwh();
 		h.tick = 101;
@@ -60,8 +58,7 @@ public class LocalDefenceSpecDetectorRegressionTest
 	}
 
 	@Test
-	public void hitsplatArrivingAfterTheExpectedGameTickStillQueues()
-	{
+	public void hitsplatArrivingAfterTheExpectedGameTickStillQueues() {
 		Harness h = new Harness();
 		h.armDwh();
 		h.tick = 101;
@@ -72,12 +69,11 @@ public class LocalDefenceSpecDetectorRegressionTest
 		h.tracker.onGameTick();
 
 		assertEquals("the DWH must not be lost when the callback follows GameTick",
-			1, h.tracker.specHistory().size());
+				1, h.tracker.specHistory().size());
 	}
 
 	@Test
-	public void incompleteRalosPairDoesNotQueueOnTheNextTick()
-	{
+	public void incompleteRalosPairDoesNotQueueOnTheNextTick() {
 		Harness h = new Harness();
 		h.armSpec(SpecialWeapon.TONALZTICS_OF_RALOS);
 		h.tick = h.expectedHitsplatTick();
@@ -91,8 +87,7 @@ public class LocalDefenceSpecDetectorRegressionTest
 	}
 
 	@Test
-	public void completeRalosPairAfterTheExpectedGameTickQueuesOnce()
-	{
+	public void completeRalosPairAfterTheExpectedGameTickQueuesOnce() {
 		Harness h = new Harness();
 		h.armSpec(SpecialWeapon.TONALZTICS_OF_RALOS);
 		h.tick = h.expectedHitsplatTick();
@@ -113,23 +108,22 @@ public class LocalDefenceSpecDetectorRegressionTest
 	}
 
 	@Test
-	public void replacementMoleActorWithSameLogicalIdentityKeepsTheDwh()
-	{
+	public void replacementMoleActorWithSameLogicalIdentityKeepsTheDwh() {
 		Harness h = new Harness();
 		h.armDwh();
 		NPC replacement = h.replacementMole();
+		when(replacement.getWorldLocation()).thenReturn(new WorldPoint(3030, 3030, 0));
 		h.tick = 101;
 		h.hitsplat(replacement, 1, true);
 		h.detector.onGameTick();
 		h.tracker.onGameTick();
 
 		assertEquals("a burrow actor replacement must not discard the armed DWH",
-			1, h.tracker.specHistory().size());
+				1, h.tracker.specHistory().size());
 	}
 
 	@Test
-	public void confirmedDeadReplacementDoesNotQueueTheDwh()
-	{
+	public void confirmedDeadReplacementDoesNotQueueTheDwh() {
 		Harness h = new Harness();
 		h.armDwh();
 		NPC replacement = h.replacementMole();
@@ -143,8 +137,7 @@ public class LocalDefenceSpecDetectorRegressionTest
 	}
 
 	@Test
-	public void localMissDoesNotDrainDefence()
-	{
+	public void localMissDoesNotDrainDefence() {
 		Harness h = new Harness();
 		h.armDwh();
 		h.tick = 101;
@@ -156,8 +149,7 @@ public class LocalDefenceSpecDetectorRegressionTest
 	}
 
 	@Test
-	public void teammateHitDoesNotQueueTheLocalDwh()
-	{
+	public void teammateHitDoesNotQueueTheLocalDwh() {
 		Harness h = new Harness();
 		h.armDwh();
 		h.tick = 101;
@@ -169,8 +161,7 @@ public class LocalDefenceSpecDetectorRegressionTest
 	}
 
 	@Test
-	public void thrallActorCannotSubstituteForTheArmedMoleHit()
-	{
+	public void thrallActorCannotSubstituteForTheArmedMoleHit() {
 		Harness h = new Harness();
 		h.armDwh();
 		NPC thrall = mock(NPC.class);
@@ -186,8 +177,7 @@ public class LocalDefenceSpecDetectorRegressionTest
 	}
 
 	@Test
-	public void sacActiveDoesNotPreventLocalDwhCaptureWithoutAnSacUpdate()
-	{
+	public void sacActiveDoesNotPreventLocalDwhCaptureWithoutAnSacUpdate() {
 		Harness h = new Harness();
 		h.activateSac();
 		h.armDwh();
@@ -200,8 +190,7 @@ public class LocalDefenceSpecDetectorRegressionTest
 	}
 
 	@Test
-	public void twoDwhsAfterReturnProduceTheExpectedHistoryAndDefence()
-	{
+	public void twoDwhsAfterReturnProduceTheExpectedHistoryAndDefence() {
 		Harness h = new Harness();
 		SyncState prior = moleState(64);
 		h.tracker.applySyncState(prior, h.target);
@@ -220,21 +209,19 @@ public class LocalDefenceSpecDetectorRegressionTest
 		h.tracker.onGameTick();
 
 		assertEquals("two returned-client DWHs must both be recorded",
-			3, h.tracker.specHistory().size());
+				3, h.tracker.specHistory().size());
 		assertEquals(32L, h.tracker.state().getCurrent());
 	}
 
-	private static SyncState moleState(long current)
-	{
+	private static SyncState moleState(long current) {
 		SpecHistoryEntry event = new SpecHistoryEntry(
-			"Alice", SpecialWeapon.DRAGON_WARHAMMER, 1);
+				"Alice", SpecialWeapon.DRAGON_WARHAMMER, 1);
 		return new SyncState("Giant Mole", BossDefence.GIANT_MOLE, current, 0, 200,
-			200, 200, 100, 100, 0, 0, false, false, false, true,
-			Collections.singletonList(event));
+				200, 200, 100, 100, 0, 0, false, false, false, true,
+				Collections.singletonList(event));
 	}
 
-	private static final class Harness
-	{
+	private static final class Harness {
 		private final Map<Integer, NPC> npcsByIndex = new LinkedHashMap<>();
 		private final Client client = mock(Client.class);
 		private final WorldView worldView = mock(WorldView.class);
@@ -253,8 +240,7 @@ public class LocalDefenceSpecDetectorRegressionTest
 		private int tick = 100;
 
 		@SuppressWarnings("unchecked")
-		private Harness()
-		{
+		private Harness() {
 			when(client.getWorld()).thenReturn(301);
 			when(client.getTickCount()).thenAnswer(invocation -> tick);
 			when(client.getGameCycle()).thenReturn(1);
@@ -271,9 +257,9 @@ public class LocalDefenceSpecDetectorRegressionTest
 			doReturn(npcs).when(worldView).npcs();
 			when(worldView.isInstance()).thenReturn(false);
 			when(npcs.byIndex(anyInt())).thenAnswer(
-				invocation -> npcsByIndex.get(invocation.<Integer>getArgument(0)));
+					invocation -> npcsByIndex.get(invocation.<Integer>getArgument(0)));
 			when(npcs.iterator()).thenAnswer(
-				invocation -> new ArrayList<>(npcsByIndex.values()).iterator());
+					invocation -> new ArrayList<>(npcsByIndex.values()).iterator());
 			doAnswer(invocation -> {
 				queued.add(invocation.getArgument(0));
 				return null;
@@ -283,13 +269,12 @@ public class LocalDefenceSpecDetectorRegressionTest
 			target = addMole();
 			when(localPlayer.getInteracting()).thenReturn(target);
 			detector = new LocalDefenceSpecDetector(
-				client, clientThread, party, pluginManager, tracker);
+					client, clientThread, party, pluginManager, tracker);
 		}
 
 		private final LocalDefenceSpecDetector detector;
 
-		private NPC addMole()
-		{
+		private NPC addMole() {
 			NPC mole = mock(NPC.class);
 			when(mole.getName()).thenReturn("Giant Mole");
 			when(mole.getIndex()).thenReturn(81);
@@ -302,20 +287,17 @@ public class LocalDefenceSpecDetectorRegressionTest
 			return mole;
 		}
 
-		private NPC replacementMole()
-		{
+		private NPC replacementMole() {
 			NPC replacement = addMole();
 			when(localPlayer.getInteracting()).thenReturn(replacement);
 			return replacement;
 		}
 
-		private void armDwh()
-		{
+		private void armDwh() {
 			armSpec(SpecialWeapon.DRAGON_WARHAMMER);
 		}
 
-		private void armSpec(SpecialWeapon weapon)
-		{
+		private void armSpec(SpecialWeapon weapon) {
 			when(weaponItem.getId()).thenReturn(weapon.getItemID()[0]);
 			VarbitChanged energy = mock(VarbitChanged.class);
 			when(energy.getVarpId()).thenReturn(VarPlayerID.SA_ENERGY);
@@ -327,8 +309,7 @@ public class LocalDefenceSpecDetectorRegressionTest
 			queued.remove(0).run();
 		}
 
-		private void hitsplat(NPC actor, int amount, boolean mine)
-		{
+		private void hitsplat(NPC actor, int amount, boolean mine) {
 			Hitsplat splat = mock(Hitsplat.class);
 			when(splat.isMine()).thenReturn(mine);
 			when(splat.getAmount()).thenReturn(amount);
@@ -339,23 +320,18 @@ public class LocalDefenceSpecDetectorRegressionTest
 			detector.onHitsplatApplied(event);
 		}
 
-		private void activateSac()
-		{
+		private void activateSac() {
 			SpecialCounterPlugin sac = mock(SpecialCounterPlugin.class);
 			when(pluginManager.getPlugins()).thenReturn(Collections.singletonList(sac));
 			when(pluginManager.isPluginActive(sac)).thenReturn(true);
 		}
 
-		private int expectedHitsplatTick()
-		{
-			try
-			{
+		private int expectedHitsplatTick() {
+			try {
 				Field field = LocalDefenceSpecDetector.class.getDeclaredField("hitsplatTick");
 				field.setAccessible(true);
 				return (int) field.get(detector);
-			}
-			catch (ReflectiveOperationException ex)
-			{
+			} catch (ReflectiveOperationException ex) {
 				throw new AssertionError(ex);
 			}
 		}

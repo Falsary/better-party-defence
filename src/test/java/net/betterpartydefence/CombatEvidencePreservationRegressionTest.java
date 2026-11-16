@@ -23,7 +23,6 @@ import java.util.Map;
 import net.betterpartydefence.DefenceTracker.DefenceState;
 import net.betterpartydefence.DefenceTracker.SpecHistoryEntry;
 import net.betterpartydefence.DefenceTracker.SyncState;
-import net.betterpartydefence.DefenceTracker.SyncTarget;
 import net.runelite.api.Client;
 import net.runelite.api.IndexedObjectSet;
 import net.runelite.api.NPC;
@@ -40,12 +39,12 @@ import org.junit.Test;
 /**
  * Production-path regressions for combat evidence retention and display selection.
  *
- * <p>These tests deliberately use the real plugin reception method and DefenceTracker rather than
- * a separate test reducer. They distinguish evidence that was never received, rejected, deferred,
- * applied, or applied but not selected for the active display.
+ * <p>
+ * These tests deliberately use the real plugin reception method and DefenceTracker rather than a separate test reducer.
+ * They distinguish evidence that was never received, rejected, deferred, applied, or applied but not selected for the
+ * active display.
  */
-public class CombatEvidencePreservationRegressionTest
-{
+public class CombatEvidencePreservationRegressionTest {
 	private static final int WORLD = 301;
 	private static final int CHAOS_INDEX = 41;
 	private static final int CORP_INDEX = 42;
@@ -62,8 +61,7 @@ public class CombatEvidencePreservationRegressionTest
 	private static final int EVE_PLAYER_ID = 1005;
 
 	@Test
-	public void twoPlayersSameTickIdenticalDwhAttacksRemainDistinct() throws Exception
-	{
+	public void twoPlayersSameTickIdenticalDwhAttacksRemainDistinct() throws Exception {
 		Harness h = new Harness();
 		h.addNpc(CHAOS_INDEX, "Chaos Elemental");
 		h.addPartyMember(ALICE_MEMBER_ID, "Alice", ALICE_PLAYER_ID, false);
@@ -84,8 +82,7 @@ public class CombatEvidencePreservationRegressionTest
 	}
 
 	@Test
-	public void threePlayersSameTickIdenticalDwhAttacksRemainDistinct() throws Exception
-	{
+	public void threePlayersSameTickIdenticalDwhAttacksRemainDistinct() throws Exception {
 		Harness h = new Harness();
 		h.addNpc(CHAOS_INDEX, "Chaos Elemental");
 		h.addPartyMember(ALICE_MEMBER_ID, "Alice", ALICE_PLAYER_ID, false);
@@ -106,8 +103,7 @@ public class CombatEvidencePreservationRegressionTest
 	}
 
 	@Test
-	public void fivePlayersSameTickIdenticalDwhAttacksRemainDistinct() throws Exception
-	{
+	public void fivePlayersSameTickIdenticalDwhAttacksRemainDistinct() throws Exception {
 		Harness h = new Harness();
 		h.addNpc(CHAOS_INDEX, "Chaos Elemental");
 		h.addPartyMember(ALICE_MEMBER_ID, "Alice", ALICE_PLAYER_ID, false);
@@ -139,8 +135,7 @@ public class CombatEvidencePreservationRegressionTest
 	}
 
 	@Test
-	public void differentArrivalOrdersRetainTheSameDwhEvidence() throws Exception
-	{
+	public void differentArrivalOrdersRetainTheSameDwhEvidence() throws Exception {
 		Harness first = new Harness();
 		first.addNpc(CHAOS_INDEX, "Chaos Elemental");
 		first.addPartyMember(ALICE_MEMBER_ID, "Alice", ALICE_PLAYER_ID, false);
@@ -169,8 +164,7 @@ public class CombatEvidencePreservationRegressionTest
 	}
 
 	@Test
-	public void retransmissionOfOneStandardObservationIsAppliedOnce() throws Exception
-	{
+	public void retransmissionOfOneStandardObservationIsAppliedOnce() throws Exception {
 		Harness h = new Harness();
 		h.addNpc(CHAOS_INDEX, "Chaos Elemental");
 		h.addPartyMember(ALICE_MEMBER_ID, "Alice", ALICE_PLAYER_ID, false);
@@ -182,13 +176,12 @@ public class CombatEvidencePreservationRegressionTest
 		h.tracker.onGameTick();
 
 		assertEquals("the standard message has no event id, so its bounded retransmission key is used",
-			1, h.historyFor(CHAOS_INDEX).size());
+				1, h.historyFor(CHAOS_INDEX).size());
 		assertEquals(189L, h.stateFor(CHAOS_INDEX).getCurrent());
 	}
 
 	@Test
-	public void scopeMismatchWithUniqueTargetIsAcceptedWhenSenderIsNotRendered() throws Exception
-	{
+	public void scopeMismatchWithUniqueTargetIsAcceptedWhenSenderIsNotRendered() throws Exception {
 		Harness h = new Harness();
 		h.addNpc(CHAOS_INDEX, "Chaos Elemental");
 		h.addPartyMember(ALICE_MEMBER_ID, "Alice", ALICE_PLAYER_ID, false);
@@ -203,8 +196,7 @@ public class CombatEvidencePreservationRegressionTest
 	}
 
 	@Test
-	public void scopeMismatchWithoutIdentifiedTargetIsStillRejected() throws Exception
-	{
+	public void scopeMismatchWithoutIdentifiedTargetIsStillRejected() throws Exception {
 		Harness h = new Harness();
 		h.addPartyMember(ALICE_MEMBER_ID, "Alice", ALICE_PLAYER_ID, true);
 		h.rememberSenderScope(ALICE_MEMBER_ID, BpdDefenceSync.SCOPE_INSTANCE, 123456);
@@ -218,8 +210,7 @@ public class CombatEvidencePreservationRegressionTest
 	}
 
 	@Test
-	public void scopeMismatchWithAmbiguousTargetIsStillRejected() throws Exception
-	{
+	public void scopeMismatchWithAmbiguousTargetIsStillRejected() throws Exception {
 		Harness h = new Harness();
 		h.addNpc(CHAOS_INDEX, "Chaos Elemental");
 		h.addNpc(CHAOS_INDEX + 1, "Chaos Elemental");
@@ -235,8 +226,7 @@ public class CombatEvidencePreservationRegressionTest
 	}
 
 	@Test
-	public void outOfRenderTargetRetainsMatchingScopeEvidenceUntilItAppears() throws Exception
-	{
+	public void outOfRenderTargetRetainsMatchingScopeEvidenceUntilItAppears() throws Exception {
 		Harness h = new Harness();
 		h.addNpc(CORP_INDEX, "Corporeal Beast");
 		h.addPartyMember(ALICE_MEMBER_ID, "Alice", ALICE_PLAYER_ID, false);
@@ -248,7 +238,7 @@ public class CombatEvidencePreservationRegressionTest
 		h.tracker.onGameTick();
 
 		assertTrue("matching-scope evidence is retained while its target is unresolved",
-			h.tracker.hasUnprocessedSpecs());
+				h.tracker.hasUnprocessedSpecs());
 		assertNull(h.stateFor(CHAOS_INDEX));
 
 		h.addNpc(CHAOS_INDEX, "Chaos Elemental");
@@ -261,8 +251,7 @@ public class CombatEvidencePreservationRegressionTest
 	}
 
 	@Test
-	public void teammateSpecOnBossAIsAppliedButBossBRemainsTheSelectedDisplayTarget() throws Exception
-	{
+	public void teammateSpecOnBossAIsAppliedButBossBRemainsTheSelectedDisplayTarget() throws Exception {
 		Harness h = new Harness();
 		NPC bossA = h.addNpc(CHAOS_INDEX, "Chaos Elemental");
 		NPC bossB = h.addNpc(CORP_INDEX, "Corporeal Beast");
@@ -275,27 +264,26 @@ public class CombatEvidencePreservationRegressionTest
 		h.rememberSenderScope(ALICE_MEMBER_ID, BpdDefenceSync.SCOPE_WORLD, 0);
 		h.tick = 101;
 		h.sendSpecial(ALICE_MEMBER_ID, ALICE_PLAYER_ID, bossA.getIndex(),
-			SpecialWeapon.DRAGON_WARHAMMER, 1);
+				SpecialWeapon.DRAGON_WARHAMMER, 1);
 		h.tracker.onGameTick();
 
 		assertEquals("combat evidence was applied to Boss A", 189L, h.stateFor(CHAOS_INDEX).getCurrent());
 		assertEquals(1, h.historyFor(CHAOS_INDEX).size());
 		assertEquals("the existing interacting-target policy keeps Boss B selected",
-			CORP_INDEX, h.tracker.state().getNpcIndex());
+				CORP_INDEX, h.tracker.state().getNpcIndex());
 
 		h.interacting = bossA;
 		h.tick = 102;
 		h.tracker.onGameTick();
 
 		assertEquals("clicking only changes the display selection", CHAOS_INDEX,
-			h.tracker.state().getNpcIndex());
+				h.tracker.state().getNpcIndex());
 		assertEquals(189L, h.tracker.state().getCurrent());
 		assertEquals(1, h.historyFor(CHAOS_INDEX).size());
 	}
 
 	@Test
-	public void teammateSpecOnBossAWithExistingHistoryIsAppliedWithoutStealingSelection() throws Exception
-	{
+	public void teammateSpecOnBossAWithExistingHistoryIsAppliedWithoutStealingSelection() throws Exception {
 		Harness h = new Harness();
 		NPC bossA = h.addNpc(CHAOS_INDEX, "Chaos Elemental");
 		NPC bossB = h.addNpc(CORP_INDEX, "Corporeal Beast");
@@ -310,7 +298,7 @@ public class CombatEvidencePreservationRegressionTest
 		h.rememberSenderScope(ALICE_MEMBER_ID, BpdDefenceSync.SCOPE_WORLD, 0);
 		h.tick = 101;
 		h.sendSpecial(ALICE_MEMBER_ID, ALICE_PLAYER_ID, bossA.getIndex(),
-			SpecialWeapon.DRAGON_WARHAMMER, 1);
+				SpecialWeapon.DRAGON_WARHAMMER, 1);
 		h.tracker.onGameTick();
 
 		assertEquals(2, h.historyFor(CHAOS_INDEX).size());
@@ -319,8 +307,7 @@ public class CombatEvidencePreservationRegressionTest
 	}
 
 	@Test
-	public void dwhWithoutHeartbeatIsAcceptedForKnownBpdPeer() throws Exception
-	{
+	public void dwhWithoutHeartbeatIsAcceptedForKnownBpdPeer() throws Exception {
 		Harness h = new Harness();
 		h.addNpc(CHAOS_INDEX, "Chaos Elemental");
 		h.addPartyMember(ALICE_MEMBER_ID, "Alice", ALICE_PLAYER_ID, false);
@@ -328,17 +315,16 @@ public class CombatEvidencePreservationRegressionTest
 
 		h.tick = 100;
 		h.sendSpecial(ALICE_MEMBER_ID, ALICE_PLAYER_ID, CHAOS_INDEX,
-			SpecialWeapon.DRAGON_WARHAMMER, 1);
+				SpecialWeapon.DRAGON_WARHAMMER, 1);
 		h.tracker.onGameTick();
 
 		assertEquals("missing presence metadata must not erase a valid DWH",
-			1, h.historyFor(CHAOS_INDEX).size());
+				1, h.historyFor(CHAOS_INDEX).size());
 		assertEquals(189L, h.stateFor(CHAOS_INDEX).getCurrent());
 	}
 
 	@Test
-	public void dwhWithStaleHeartbeatIsAcceptedForKnownBpdPeer() throws Exception
-	{
+	public void dwhWithStaleHeartbeatIsAcceptedForKnownBpdPeer() throws Exception {
 		Harness h = new Harness();
 		h.addNpc(CHAOS_INDEX, "Chaos Elemental");
 		h.addPartyMember(ALICE_MEMBER_ID, "Alice", ALICE_PLAYER_ID, false);
@@ -347,17 +333,16 @@ public class CombatEvidencePreservationRegressionTest
 
 		h.tick = 100;
 		h.sendSpecial(ALICE_MEMBER_ID, ALICE_PLAYER_ID, CHAOS_INDEX,
-			SpecialWeapon.DRAGON_WARHAMMER, 1);
+				SpecialWeapon.DRAGON_WARHAMMER, 1);
 		h.tracker.onGameTick();
 
 		assertEquals("a stale heartbeat must not erase a valid DWH",
-			1, h.historyFor(CHAOS_INDEX).size());
+				1, h.historyFor(CHAOS_INDEX).size());
 		assertEquals(189L, h.stateFor(CHAOS_INDEX).getCurrent());
 	}
 
 	@Test
-	public void ralosWithoutHeartbeatIsAcceptedForKnownBpdPeer() throws Exception
-	{
+	public void ralosWithoutHeartbeatIsAcceptedForKnownBpdPeer() throws Exception {
 		Harness h = new Harness();
 		h.addNpc(CHAOS_INDEX, "Chaos Elemental");
 		h.addPartyMember(ALICE_MEMBER_ID, "Alice", ALICE_PLAYER_ID, false);
@@ -365,17 +350,16 @@ public class CombatEvidencePreservationRegressionTest
 
 		h.tick = 100;
 		h.sendSpecial(ALICE_MEMBER_ID, ALICE_PLAYER_ID, CHAOS_INDEX,
-			SpecialWeapon.TONALZTICS_OF_RALOS, 2);
+				SpecialWeapon.TONALZTICS_OF_RALOS, 2);
 		h.tracker.onGameTick();
 
 		assertEquals("missing presence metadata must not erase a valid Ralos hit",
-			1, h.historyFor(CHAOS_INDEX).size());
+				1, h.historyFor(CHAOS_INDEX).size());
 		assertNotNull(h.stateFor(CHAOS_INDEX));
 	}
 
 	@Test
-	public void staleHeartbeatRalosOnArchiveGuardianResolvesAfterTargetAppears() throws Exception
-	{
+	public void staleHeartbeatRalosOnArchiveGuardianResolvesAfterTargetAppears() throws Exception {
 		Harness h = new Harness();
 		h.addPartyMember(ALICE_MEMBER_ID, "Alice", ALICE_PLAYER_ID, false);
 		h.rememberSenderScope(ALICE_MEMBER_ID, BpdDefenceSync.SCOPE_INSTANCE, 123456);
@@ -383,7 +367,7 @@ public class CombatEvidencePreservationRegressionTest
 
 		h.tick = 100;
 		h.sendSpecial(ALICE_MEMBER_ID, ALICE_PLAYER_ID, ARCHIVE_GUARDIAN_INDEX,
-			SpecialWeapon.TONALZTICS_OF_RALOS, 2);
+				SpecialWeapon.TONALZTICS_OF_RALOS, 2);
 		h.tracker.onGameTick();
 
 		assertTrue(h.tracker.hasUnprocessedSpecs());
@@ -398,15 +382,14 @@ public class CombatEvidencePreservationRegressionTest
 	}
 
 	@Test
-	public void sacOnlySenderWithoutPresenceMetadataRemainsSupported() throws Exception
-	{
+	public void sacOnlySenderWithoutPresenceMetadataRemainsSupported() throws Exception {
 		Harness h = new Harness();
 		h.addNpc(CHAOS_INDEX, "Chaos Elemental");
 		h.addPartyMember(ALICE_MEMBER_ID, "Alice", ALICE_PLAYER_ID, false);
 
 		h.tick = 100;
 		h.sendSpecial(ALICE_MEMBER_ID, ALICE_PLAYER_ID, CHAOS_INDEX,
-			SpecialWeapon.DRAGON_WARHAMMER, 1);
+				SpecialWeapon.DRAGON_WARHAMMER, 1);
 		h.tracker.onGameTick();
 
 		assertEquals(1, h.historyFor(CHAOS_INDEX).size());
@@ -414,8 +397,7 @@ public class CombatEvidencePreservationRegressionTest
 	}
 
 	@Test
-	public void olderBpdSenderWithIncompleteMetadataRemainsSupported() throws Exception
-	{
+	public void olderBpdSenderWithIncompleteMetadataRemainsSupported() throws Exception {
 		Harness h = new Harness();
 		h.addNpc(CHAOS_INDEX, "Chaos Elemental");
 		h.addPartyMember(ALICE_MEMBER_ID, "Alice", ALICE_PLAYER_ID, false);
@@ -423,27 +405,26 @@ public class CombatEvidencePreservationRegressionTest
 
 		h.tick = 100;
 		h.sendSpecial(ALICE_MEMBER_ID, ALICE_PLAYER_ID, CHAOS_INDEX,
-			SpecialWeapon.DRAGON_WARHAMMER, 1);
+				SpecialWeapon.DRAGON_WARHAMMER, 1);
 		h.tracker.onGameTick();
 
 		assertEquals("a recognized BPD peer without the current heartbeat message is legacy-compatible",
-			1, h.historyFor(CHAOS_INDEX).size());
+				1, h.historyFor(CHAOS_INDEX).size());
 	}
 
 	@Test
-	public void missingHeartbeatRetainsUnrenderedTargetForLaterAssociation() throws Exception
-	{
+	public void missingHeartbeatRetainsUnrenderedTargetForLaterAssociation() throws Exception {
 		Harness h = new Harness();
 		h.addPartyMember(ALICE_MEMBER_ID, "Alice", ALICE_PLAYER_ID, false);
 		h.markKnownBpd(ALICE_MEMBER_ID);
 
 		h.tick = 100;
 		h.sendSpecial(ALICE_MEMBER_ID, ALICE_PLAYER_ID, CHAOS_INDEX,
-			SpecialWeapon.DRAGON_WARHAMMER, 1);
+				SpecialWeapon.DRAGON_WARHAMMER, 1);
 		h.tracker.onGameTick();
 
 		assertTrue("the existing bounded deferred-event path must retain the observation",
-			h.tracker.hasUnprocessedSpecs());
+				h.tracker.hasUnprocessedSpecs());
 		assertNull(h.stateFor(CHAOS_INDEX));
 
 		h.addNpc(CHAOS_INDEX, "Chaos Elemental");
@@ -456,8 +437,7 @@ public class CombatEvidencePreservationRegressionTest
 	}
 
 	@Test
-	public void missingHeartbeatDoesNotGuessBetweenAmbiguousTargets() throws Exception
-	{
+	public void missingHeartbeatDoesNotGuessBetweenAmbiguousTargets() throws Exception {
 		Harness h = new Harness();
 		h.addNpc(CHAOS_INDEX, "Chaos Elemental");
 		h.addNpc(CHAOS_INDEX + 2, "Chaos Elemental");
@@ -466,7 +446,7 @@ public class CombatEvidencePreservationRegressionTest
 
 		h.tick = 100;
 		h.sendSpecial(ALICE_MEMBER_ID, ALICE_PLAYER_ID, CHAOS_INDEX,
-			SpecialWeapon.DRAGON_WARHAMMER, 1);
+				SpecialWeapon.DRAGON_WARHAMMER, 1);
 		h.tracker.onGameTick();
 
 		assertTrue(h.tracker.hasUnprocessedSpecs());
@@ -475,8 +455,7 @@ public class CombatEvidencePreservationRegressionTest
 	}
 
 	@Test
-	public void twoPlayersWithoutHeartbeatsRemainDistinctOnTheSameTick() throws Exception
-	{
+	public void twoPlayersWithoutHeartbeatsRemainDistinctOnTheSameTick() throws Exception {
 		Harness h = new Harness();
 		h.addNpc(CHAOS_INDEX, "Chaos Elemental");
 		h.addPartyMember(ALICE_MEMBER_ID, "Alice", ALICE_PLAYER_ID, false);
@@ -486,9 +465,9 @@ public class CombatEvidencePreservationRegressionTest
 
 		h.tick = 100;
 		h.sendSpecial(ALICE_MEMBER_ID, ALICE_PLAYER_ID, CHAOS_INDEX,
-			SpecialWeapon.DRAGON_WARHAMMER, 1);
+				SpecialWeapon.DRAGON_WARHAMMER, 1);
 		h.sendSpecial(BOB_MEMBER_ID, BOB_PLAYER_ID, CHAOS_INDEX,
-			SpecialWeapon.DRAGON_WARHAMMER, 1);
+				SpecialWeapon.DRAGON_WARHAMMER, 1);
 		h.tracker.onGameTick();
 
 		List<SpecHistoryEntry> history = h.historyFor(CHAOS_INDEX);
@@ -499,8 +478,7 @@ public class CombatEvidencePreservationRegressionTest
 	}
 
 	@Test
-	public void missingHeartbeatDoesNotBypassWorldValidation() throws Exception
-	{
+	public void missingHeartbeatDoesNotBypassWorldValidation() throws Exception {
 		Harness h = new Harness();
 		h.addNpc(CHAOS_INDEX, "Chaos Elemental");
 		h.addPartyMember(ALICE_MEMBER_ID, "Alice", ALICE_PLAYER_ID, false);
@@ -508,15 +486,14 @@ public class CombatEvidencePreservationRegressionTest
 
 		h.tick = 100;
 		h.sendSpecialInWorld(ALICE_MEMBER_ID, ALICE_PLAYER_ID, CHAOS_INDEX,
-			SpecialWeapon.DRAGON_WARHAMMER, 1, WORLD + 1);
+				SpecialWeapon.DRAGON_WARHAMMER, 1, WORLD + 1);
 		h.tracker.onGameTick();
 
 		assertNull(h.stateFor(CHAOS_INDEX));
 		assertFalse(h.tracker.hasUnprocessedSpecs());
 	}
 
-	private static final class Harness
-	{
+	private static final class Harness {
 		private final Map<Integer, NPC> npcsByIndex = new LinkedHashMap<>();
 		private final Map<Integer, Player> playersById = new LinkedHashMap<>();
 		private final Map<Long, PartyMember> membersById = new LinkedHashMap<>();
@@ -536,8 +513,7 @@ public class CombatEvidencePreservationRegressionTest
 		private NPC interacting;
 
 		@SuppressWarnings("unchecked")
-		private Harness() throws Exception
-		{
+		private Harness() throws Exception {
 			when(client.getWorld()).thenReturn(WORLD);
 			when(client.getTickCount()).thenAnswer(invocation -> tick);
 			when(client.getTopLevelWorldView()).thenReturn(worldView);
@@ -574,8 +550,7 @@ public class CombatEvidencePreservationRegressionTest
 			setPluginField("clientThread", clientThread);
 		}
 
-		private NPC addNpc(int index, String name)
-		{
+		private NPC addNpc(int index, String name) {
 			NPC npc = mock(NPC.class);
 			when(npc.getName()).thenReturn(name);
 			when(npc.getIndex()).thenReturn(index);
@@ -588,19 +563,16 @@ public class CombatEvidencePreservationRegressionTest
 			return npc;
 		}
 
-		private NPC npc(int index)
-		{
+		private NPC npc(int index) {
 			return npcsByIndex.get(index);
 		}
 
-		private void addPartyMember(long memberId, String name, int playerId, boolean rendered)
-		{
+		private void addPartyMember(long memberId, String name, int playerId, boolean rendered) {
 			PartyMember member = mock(PartyMember.class);
 			when(member.getMemberId()).thenReturn(memberId);
 			when(member.getDisplayName()).thenReturn(name);
 			membersById.put(memberId, member);
-			if (rendered)
-			{
+			if (rendered) {
 				Player player = mock(Player.class);
 				when(player.getId()).thenReturn(playerId);
 				when(player.getName()).thenReturn(name);
@@ -609,14 +581,12 @@ public class CombatEvidencePreservationRegressionTest
 		}
 
 		private void sendSpecial(long memberId, int playerId, int npcIndex,
-			SpecialWeapon weapon, int hit)
-		{
+				SpecialWeapon weapon, int hit) {
 			sendSpecialInWorld(memberId, playerId, npcIndex, weapon, hit, WORLD);
 		}
 
 		private void sendSpecialInWorld(long memberId, int playerId, int npcIndex,
-			SpecialWeapon weapon, int hit, int world)
-		{
+				SpecialWeapon weapon, int hit, int world) {
 			assertNotNull(membersById.get(memberId));
 			SpecialCounterUpdate packet = new SpecialCounterUpdate(npcIndex, weapon, hit, world, playerId);
 			packet.setMemberId(memberId);
@@ -624,8 +594,7 @@ public class CombatEvidencePreservationRegressionTest
 		}
 
 		@SuppressWarnings("unchecked")
-		private void markKnownBpd(long memberId) throws Exception
-		{
+		private void markKnownBpd(long memberId) throws Exception {
 			Field known = BetterPartyDefencePlugin.class.getDeclaredField("knownBpdPartyMembers");
 			known.setAccessible(true);
 			((java.util.Set<Long>) known.get(plugin)).add(memberId);
@@ -633,8 +602,7 @@ public class CombatEvidencePreservationRegressionTest
 
 		@SuppressWarnings("unchecked")
 		private void ageSenderHeartbeat(long memberId, int scopeType, int scopeId, long ageMillis)
-			throws Exception
-		{
+				throws Exception {
 			Field field = BetterPartyDefencePlugin.class.getDeclaredField("senderEncounterPresence");
 			field.setAccessible(true);
 			Map<Long, Object> presence = (Map<Long, Object>) field.get(plugin);
@@ -642,62 +610,49 @@ public class CombatEvidencePreservationRegressionTest
 			assertNotNull("test requires a stored heartbeat", current);
 
 			Constructor<?> constructor = current.getClass().getDeclaredConstructor(
-				int.class, int.class, int.class, long.class, long.class);
+					int.class, int.class, int.class, long.class, long.class);
 			constructor.setAccessible(true);
 			long oldTimestamp = System.currentTimeMillis() - ageMillis;
 			presence.put(memberId, constructor.newInstance(
-				WORLD, scopeType, scopeId, oldTimestamp, oldTimestamp));
+					WORLD, scopeType, scopeId, oldTimestamp, oldTimestamp));
 		}
 
-		private void rememberSenderScope(long memberId, int scopeType, int scopeId) throws Exception
-		{
+		private void rememberSenderScope(long memberId, int scopeType, int scopeId) throws Exception {
 			Method method = BetterPartyDefencePlugin.class.getDeclaredMethod(
-				"rememberSenderEncounterPresence",
-				long.class, int.class, int.class, int.class, long.class);
+					"rememberSenderEncounterPresence",
+					long.class, int.class, int.class, int.class, long.class);
 			method.setAccessible(true);
 			method.invoke(plugin, memberId, WORLD, scopeType, scopeId, System.currentTimeMillis());
 		}
 
-		private void localSpec(NPC npc, String playerName, SpecialWeapon weapon, int hit)
-		{
+		private void localSpec(NPC npc, String playerName, SpecialWeapon weapon, int hit) {
 			tracker.queueLocal(weapon, npc.getIndex(), hit, WORLD, playerName, npc);
 		}
 
-		private DefenceState stateFor(int npcIndex)
-		{
-			for (DefenceState state : tracker.states())
-			{
-				if (state.getNpcIndex() == npcIndex)
-				{
+		private DefenceState stateFor(int npcIndex) {
+			for (DefenceState state : tracker.states()) {
+				if (state.getNpcIndex() == npcIndex) {
 					return state;
 				}
 			}
 			return null;
 		}
 
-		private List<SpecHistoryEntry> historyFor(int npcIndex)
-		{
-			for (SyncTarget target : tracker.syncTargets())
-			{
-				if (target.getNpcIndex() == npcIndex && target.getState() != null)
-				{
-					SyncState state = target.getState();
-					return state.getHistory() == null ? new ArrayList<>() : state.getHistory();
-				}
-			}
-			return new ArrayList<>();
+		private List<SpecHistoryEntry> historyFor(int npcIndex) {
+			NPC npc = npcsByIndex.get(npcIndex);
+			BossDefence boss = npc == null ? null : BossDefence.matchingNpc(npc);
+			SyncState state = boss == null ? null : tracker.syncStateForBoss(boss);
+			return state == null || state.getHistory() == null
+					? new ArrayList<>()
+					: state.getHistory();
 		}
 
-		private void setPluginField(String name, Object value)
-		{
-			try
-			{
+		private void setPluginField(String name, Object value) {
+			try {
 				Field field = BetterPartyDefencePlugin.class.getDeclaredField(name);
 				field.setAccessible(true);
 				field.set(plugin, value);
-			}
-			catch (ReflectiveOperationException ex)
-			{
+			} catch (ReflectiveOperationException ex) {
 				throw new AssertionError(ex);
 			}
 		}

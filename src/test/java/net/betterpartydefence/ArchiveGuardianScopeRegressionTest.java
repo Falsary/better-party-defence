@@ -28,12 +28,11 @@ import org.junit.Before;
 import org.junit.Test;
 
 /**
- * Regression coverage for the observed TFA Archive Guardian Ralos rejection. The test models a
- * fresh sender heartbeat whose scope differs from the receiver's while both players and one
- * unambiguous opponent are present in the local world view.
+ * Regression coverage for the observed TFA Archive Guardian Ralos rejection. The test models a fresh sender heartbeat
+ * whose scope differs from the receiver's while both players and one unambiguous opponent are present in the local
+ * world view.
  */
-public class ArchiveGuardianScopeRegressionTest
-{
+public class ArchiveGuardianScopeRegressionTest {
 	private static final int WORLD = 474;
 	private static final int NPC_INDEX = 55828;
 	private static final int SENDER_PLAYER_ID = 1733;
@@ -52,8 +51,7 @@ public class ArchiveGuardianScopeRegressionTest
 
 	@Before
 	@SuppressWarnings("unchecked")
-	public void setUp() throws Exception
-	{
+	public void setUp() throws Exception {
 		client = mock(Client.class);
 		worldView = mock(WorldView.class);
 		npcs = mock(IndexedObjectSet.class);
@@ -104,23 +102,21 @@ public class ArchiveGuardianScopeRegressionTest
 	}
 
 	@Test
-	public void archiveGuardianRalosAcceptedDespiteDifferentScopeWhenTargetEvidenceMatches() throws Exception
-	{
+	public void archiveGuardianRalosAcceptedDespiteDifferentScopeWhenTargetEvidenceMatches() throws Exception {
 		rememberSenderScope(instanceFingerprint() + 1);
 
 		deliverRalos();
 		tracker.onGameTick();
 
 		assertEquals("the current encounter target must not be discarded solely on scope mismatch",
-			1, tracker.specHistory().size());
+				1, tracker.specHistory().size());
 		assertEquals(SpecialWeapon.TONALZTICS_OF_RALOS,
-			tracker.specHistory().get(0).getWeapon());
+				tracker.specHistory().get(0).getWeapon());
 		assertEquals(BossDefence.TFA_ARCHIVE_GUARDIAN, tracker.trackedBossType());
 	}
 
 	@Test
-	public void scopeMismatchAcceptedWhenSenderIsNotRenderedButTargetIsUnique() throws Exception
-	{
+	public void scopeMismatchAcceptedWhenSenderIsNotRenderedButTargetIsUnique() throws Exception {
 		when(players.iterator()).thenAnswer(invocation -> Collections.emptyIterator());
 		rememberSenderScope(instanceFingerprint() + 1);
 
@@ -128,32 +124,29 @@ public class ArchiveGuardianScopeRegressionTest
 		tracker.onGameTick();
 
 		assertEquals("sender rendering is not evidence about the combat target",
-			1, tracker.specHistory().size());
+				1, tracker.specHistory().size());
 		assertEquals(BossDefence.TFA_ARCHIVE_GUARDIAN, tracker.trackedBossType());
 	}
 
 	@Test
-	public void scopeMismatchStillRejectedWhenTargetIsAmbiguous() throws Exception
-	{
+	public void scopeMismatchStillRejectedWhenTargetIsAmbiguous() throws Exception {
 		NPC secondGuardian = mock(NPC.class);
 		when(secondGuardian.getName()).thenReturn("Archive Guardian");
 		when(secondGuardian.getIndex()).thenReturn(NPC_INDEX + 1);
 		when(secondGuardian.getHealthRatio()).thenReturn(1);
-		when(npcs.iterator()).thenAnswer(invocation ->
-			Arrays.asList(guardian, secondGuardian).iterator());
+		when(npcs.iterator()).thenAnswer(invocation -> Arrays.asList(guardian, secondGuardian).iterator());
 		rememberSenderScope(instanceFingerprint() + 1);
 
 		deliverRalos();
 		tracker.onGameTick();
 
 		assertTrue("two live same-type targets cannot be resolved by the sender hint",
-			tracker.specHistory().isEmpty());
+				tracker.specHistory().isEmpty());
 		assertNull(tracker.state());
 	}
 
 	@Test
-	public void scopeMismatchStillRejectedWhenEventTargetIsUnidentified() throws Exception
-	{
+	public void scopeMismatchStillRejectedWhenEventTargetIsUnidentified() throws Exception {
 		when(npcs.byIndex(NPC_INDEX)).thenReturn(null);
 		rememberSenderScope(instanceFingerprint() + 1);
 
@@ -161,38 +154,34 @@ public class ArchiveGuardianScopeRegressionTest
 		tracker.onGameTick();
 
 		assertTrue("an unknown local NPC index is not sufficient target evidence",
-			tracker.specHistory().isEmpty());
+				tracker.specHistory().isEmpty());
 		assertNull(tracker.state());
 	}
 
-	private void deliverRalos()
-	{
+	private void deliverRalos() {
 		SpecialCounterUpdate packet = new SpecialCounterUpdate(
-			NPC_INDEX, SpecialWeapon.TONALZTICS_OF_RALOS, 2, WORLD, SENDER_PLAYER_ID);
+				NPC_INDEX, SpecialWeapon.TONALZTICS_OF_RALOS, 2, WORLD, SENDER_PLAYER_ID);
 		packet.setMemberId(SENDER_MEMBER_ID);
 		plugin.onSpecialCounterUpdate(packet);
 	}
 
-	private void rememberSenderScope(int scopeId) throws Exception
-	{
+	private void rememberSenderScope(int scopeId) throws Exception {
 		Method remember = BetterPartyDefencePlugin.class.getDeclaredMethod(
-			"rememberSenderEncounterPresence",
-			long.class, int.class, int.class, int.class, long.class);
+				"rememberSenderEncounterPresence",
+				long.class, int.class, int.class, int.class, long.class);
 		remember.setAccessible(true);
 		remember.invoke(plugin, SENDER_MEMBER_ID, WORLD,
-			BpdDefenceSync.SCOPE_INSTANCE, scopeId, System.currentTimeMillis());
+				BpdDefenceSync.SCOPE_INSTANCE, scopeId, System.currentTimeMillis());
 	}
 
-	private int instanceFingerprint() throws Exception
-	{
+	private int instanceFingerprint() throws Exception {
 		Method method = BetterPartyDefencePlugin.class.getDeclaredMethod(
-			"instanceFingerprint", WorldView.class);
+				"instanceFingerprint", WorldView.class);
 		method.setAccessible(true);
 		return (int) method.invoke(null, worldView);
 	}
 
-	private void setPluginField(String name, Object value) throws Exception
-	{
+	private void setPluginField(String name, Object value) throws Exception {
 		Field field = BetterPartyDefencePlugin.class.getDeclaredField(name);
 		field.setAccessible(true);
 		field.set(plugin, value);

@@ -1,15 +1,17 @@
 package net.betterpartydefence;
 
+import lombok.ToString;
 import net.runelite.api.coords.WorldPoint;
 import net.runelite.client.party.messages.PartyMemberMessage;
 
-/** A landed Red Keris effect. It carries its original impact time and no Defence state. */
-public class BpdKerisTimer extends PartyMemberMessage
-{
+// Red Keris effect with original impact timing.
+@ToString(doNotUseGetters = true)
+public class BpdKerisTimer extends PartyMemberMessage {
 	static final int PROTOCOL_VERSION = 1;
 	private static final int TICK_MILLIS = 600;
 
 	private int protocolVersion;
+	@ToString.Exclude
 	private long partyId;
 	private int world;
 	private BossDefence boss;
@@ -23,13 +25,11 @@ public class BpdKerisTimer extends PartyMemberMessage
 	private String clockScope;
 	private long hitRaidTick;
 
-	public BpdKerisTimer()
-	{
+	public BpdKerisTimer() {
 	}
 
 	BpdKerisTimer(long partyId, int world, BossDefence boss, int scopeType, int scopeId,
-		int npcId, WorldPoint point, long hitAtMillis, String clockScope, long hitRaidTick)
-	{
+			int npcId, WorldPoint point, long hitAtMillis, String clockScope, long hitRaidTick) {
 		protocolVersion = PROTOCOL_VERSION;
 		this.partyId = partyId;
 		this.world = world;
@@ -45,31 +45,50 @@ public class BpdKerisTimer extends PartyMemberMessage
 		this.hitRaidTick = hitRaidTick;
 	}
 
-	int remainingTicks(long now, String localClockScope, long raidTick)
-	{
-		int duration = BossEffectDisplay.KERIS_EFFECT_TICKS;
+	int remainingTicks(long now, String localClockScope, long raidTick) {
+		int duration = BossEffectTracker.KERIS_EFFECT_TICKS;
 		long age = now - hitAtMillis;
-		if (hitAtMillis <= 0 || age < -TICK_MILLIS || age >= duration * TICK_MILLIS)
-		{
+		if (hitAtMillis <= 0 || age < -TICK_MILLIS || age >= duration * TICK_MILLIS) {
 			return 0;
 		}
-		if (clockScope != null && clockScope.equals(localClockScope) && hitRaidTick >= 0 && raidTick >= 0)
-		{
+		if (clockScope != null && clockScope.equals(localClockScope) && hitRaidTick >= 0 && raidTick >= 0) {
 			long elapsed = raidTick - hitRaidTick;
 			return elapsed < 0 || elapsed >= duration ? 0 : duration - (int) elapsed;
 		}
 		return duration - (int) (Math.max(0, age) / TICK_MILLIS);
 	}
 
-	int getProtocolVersion() { return protocolVersion; }
-	long getPartyId() { return partyId; }
-	int getWorld() { return world; }
-	BossDefence getBoss() { return boss; }
-	int getScopeType() { return scopeType; }
-	int getScopeId() { return scopeId; }
-	int getNpcId() { return npcId; }
-	int getBossX() { return bossX; }
-	int getBossY() { return bossY; }
-	int getBossPlane() { return bossPlane; }
-	long getHitAtMillis() { return hitAtMillis; }
+	int getProtocolVersion() {
+		return protocolVersion;
+	}
+	long getPartyId() {
+		return partyId;
+	}
+	int getWorld() {
+		return world;
+	}
+	BossDefence getBoss() {
+		return boss == null ? null : boss.trackingType();
+	}
+	int getScopeType() {
+		return scopeType;
+	}
+	int getScopeId() {
+		return scopeId;
+	}
+	int getNpcId() {
+		return npcId;
+	}
+	int getBossX() {
+		return bossX;
+	}
+	int getBossY() {
+		return bossY;
+	}
+	int getBossPlane() {
+		return bossPlane;
+	}
+	long getHitAtMillis() {
+		return hitAtMillis;
+	}
 }

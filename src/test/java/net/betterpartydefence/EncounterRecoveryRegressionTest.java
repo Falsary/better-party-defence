@@ -2,6 +2,7 @@ package net.betterpartydefence;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
@@ -33,23 +34,22 @@ import net.runelite.client.eventbus.EventBus;
 import net.runelite.client.events.PartyChanged;
 import net.runelite.client.party.PartyMember;
 import net.runelite.client.party.PartyService;
+import net.runelite.client.party.events.UserJoin;
 import net.runelite.client.plugins.specialcounter.SpecialCounterUpdate;
 import net.runelite.client.plugins.specialcounter.SpecialWeapon;
 import org.junit.Test;
 
 /**
- * Two-client recovery regressions for a temporary NPC absence. The tests use the actual plugin
- * handlers and DefenceTracker; only the RuneLite client and party transport are mocked.
+ * Two-client recovery regressions for a temporary NPC absence. The tests use the actual plugin handlers and
+ * DefenceTracker; only the RuneLite client and party transport are mocked.
  */
-public class EncounterRecoveryRegressionTest
-{
+public class EncounterRecoveryRegressionTest {
 	private static final int WORLD = 301;
 	private static final int MOLE_INDEX = 81;
 	private static final long REMOTE_MEMBER_ID = 7L;
 
 	@Test
-	public void encounterPresenceAnnouncesScopeChangesAndStaysSilentInIdleWorld()
-	{
+	public void encounterPresenceAnnouncesScopeChangesAndStaysSilentInIdleWorld() {
 		Node node = new Node();
 		node.tick();
 		assertTrue(node.sentEncounterScopes.isEmpty());
@@ -62,12 +62,11 @@ public class EncounterRecoveryRegressionTest
 		node.tick();
 		node.tick();
 		assertEquals(List.of(BpdDefenceSync.SCOPE_INSTANCE, BpdDefenceSync.SCOPE_WORLD),
-			node.sentEncounterScopes);
+				node.sentEncounterScopes);
 	}
 
 	@Test
-	public void teleportAndReturnRecoversPeerState()
-	{
+	public void teleportAndReturnRecoversPeerState() {
 		Node alice = new Node();
 		Node bob = new Node();
 		alice.addMole();
@@ -81,7 +80,7 @@ public class EncounterRecoveryRegressionTest
 		bob.tick();
 
 		assertTrue("active peer evidence must keep the absent target remembered",
-			bob.tracker.hasRememberedState(BossDefence.GIANT_MOLE));
+				bob.tracker.hasRememberedState(BossDefence.GIANT_MOLE));
 
 		bob.addMole();
 		bob.tick();
@@ -89,8 +88,7 @@ public class EncounterRecoveryRegressionTest
 	}
 
 	@Test
-	public void absenceBeyondTwentySecondsRecoversWhilePeerRemainsActive()
-	{
+	public void absenceBeyondTwentySecondsRecoversWhilePeerRemainsActive() {
 		Node alice = new Node();
 		Node bob = new Node();
 		alice.addMole();
@@ -104,7 +102,7 @@ public class EncounterRecoveryRegressionTest
 		bob.tick();
 
 		assertTrue("a fresh peer sync must renew presence beyond the local absence timer",
-			bob.tracker.hasRememberedState(BossDefence.GIANT_MOLE));
+				bob.tracker.hasRememberedState(BossDefence.GIANT_MOLE));
 
 		bob.addMole();
 		bob.tick();
@@ -112,8 +110,7 @@ public class EncounterRecoveryRegressionTest
 	}
 
 	@Test
-	public void missingPeerMessagesDoNotInvalidateRememberedState()
-	{
+	public void missingPeerMessagesDoNotInvalidateRememberedState() {
 		Node bob = new Node();
 		bob.addMole();
 		bob.apply(moleState(120));
@@ -122,12 +119,212 @@ public class EncounterRecoveryRegressionTest
 		bob.tick();
 
 		assertTrue("missing snapshots are not authoritative evidence of encounter termination",
-			bob.tracker.hasRememberedState(BossDefence.GIANT_MOLE));
+				bob.tracker.hasRememberedState(BossDefence.GIANT_MOLE));
 	}
 
 	@Test
-	public void partyRejoinCanRecoverActivePeerState()
-	{
+	public void partyJoinDoesNotRestoreSpecsFromBeforeAnObservedSoloKill() {
+		Node node = new Node();
+		node.addMole();
+		when(node.party.isInParty()).thenReturn(false);
+		node.tracker.queueLocal(SpecialWeapon.DRAGON_WARHAMMER, MOLE_INDEX, 13, WORLD,
+				"Alice", node.mole, System.currentTimeMillis() - 30_000);
+		node.tick();
+		SyncState stale = node.tracker.syncStateForBoss(BossDefence.GIANT_MOLE);
+		when(node.mole.isDead()).thenReturn(true);
+		node.tick();
+		assertNull(node.tracker.state());
+
+		when(node.party.isInParty()).thenReturn(true);
+		node.plugin.onPartyChanged(new PartyChanged("test-party", 0L));
+		node.addMole();
+		node.receiveSync(stale, 1L, 0L);
+		node.tick();
+		assertNull(node.tracker.state());
+	}
+
+	@Test
+	public void rejoinCombinesTwoIndependentLandedSpecsWhenBothSeeTheSameBoss() {
+		Node holder = new Node();
+		Node joiner = new Node();
+		holder.addMole();
+		joiner.addMole();
+		holder.localSpec(SpecialWeapon.DRAGON_WARHAMMER, 42);
+		holder.tick();
+		when(joiner.party.isInParty()).thenReturn(false);
+		joiner.localSpec(SpecialWeapon.DRAGON_WARHAMMER, 6);
+		joiner.tick();
+		assertEquals(140L, holder.tracker.state().getCurrent());
+		assertEquals(140L, joiner.tracker.state().getCurrent());
+
+		holder.setPeer(joiner);
+		joiner.setPeer(holder);
+		when(joiner.party.isInParty()).thenReturn(true);
+		joiner.eventBus.post(new UserJoin(0L, joiner.localMember.getMemberId()));
+		joiner.tick();
+		holder.tick();
+		joiner.tick();
+		holder.tick();
+		assertEquals(98L, holder.tracker.state().getCurrent());
+		assertEquals(98L, joiner.tracker.state().getCurrent());
+		assertEquals(2, joiner.tracker.specHistory().size());
+		assertEquals(holder.tracker.specHistory(), joiner.tracker.specHistory());
+		assertEquals(1, joiner.sentBossPresenceRequests);
+		assertEquals(1, holder.sentDefenceSyncs);
+		assertTrue(joiner.sentSpecs.isEmpty());
+	}
+
+	@Test
+	public void returningToTheBossReoffersHistoryWhenTheJoinerSpeccedWhilePeerWasAway() {
+		Node holder = new Node();
+		Node joiner = new Node();
+		holder.addMole();
+		joiner.addMole();
+		holder.localSpec(SpecialWeapon.DRAGON_WARHAMMER, 42);
+		holder.tick();
+		holder.removeMole();
+		holder.tick();
+		when(joiner.party.isInParty()).thenReturn(false);
+		joiner.localSpec(SpecialWeapon.DRAGON_WARHAMMER, 6);
+		joiner.tick();
+
+		holder.setPeer(joiner);
+		joiner.setPeer(holder);
+		when(joiner.party.isInParty()).thenReturn(true);
+		joiner.eventBus.post(new UserJoin(0L, joiner.localMember.getMemberId()));
+		joiner.tick();
+		holder.tick();
+		joiner.tick();
+		assertEquals(98L, joiner.tracker.state().getCurrent());
+		assertEquals(140L, holder.tracker.state().getCurrent());
+
+		holder.addMole();
+		holder.tick();
+		joiner.tick();
+		holder.tick();
+		assertEquals(98L, holder.tracker.state().getCurrent());
+		assertEquals(joiner.tracker.specHistory(), holder.tracker.specHistory());
+		assertEquals(1, holder.sentBossPresenceRequests);
+		assertEquals(1, joiner.sentBossPresenceRequests);
+	}
+
+	@Test
+	public void rejoinCombinesDisjointWarhammerMissesWithTheMatchedBossHit() {
+		Node holder = new Node();
+		Node joiner = new Node();
+		holder.addMole();
+		joiner.addMole();
+		holder.localSpec(SpecialWeapon.DRAGON_WARHAMMER, 13);
+		holder.tick();
+		when(joiner.party.isInParty()).thenReturn(false);
+		joiner.localSpec(SpecialWeapon.DRAGON_WARHAMMER, 0);
+		joiner.tick();
+		joiner.localSpec(SpecialWeapon.DRAGON_WARHAMMER, 0);
+		joiner.tick();
+		assertEquals(200L, joiner.tracker.state().getCurrent());
+
+		holder.setPeer(joiner);
+		joiner.setPeer(holder);
+		when(joiner.party.isInParty()).thenReturn(true);
+		joiner.eventBus.post(new UserJoin(0L, joiner.localMember.getMemberId()));
+		joiner.tick();
+		holder.tick();
+		joiner.tick();
+		assertEquals(140L, holder.tracker.state().getCurrent());
+		assertEquals(140L, joiner.tracker.state().getCurrent());
+		assertEquals(3, joiner.tracker.specHistory().size());
+		assertEquals(joiner.tracker.specHistory(), holder.tracker.specHistory());
+		assertEquals(1, joiner.sentBossPresenceRequests);
+		assertEquals(1, holder.sentDefenceSyncs);
+	}
+
+	@Test
+	public void rejoiningWithNewerHistoryOffersItOnceWithoutASnapshotReply() {
+		Node holder = new Node();
+		Node joiner = new Node();
+		holder.addMole();
+		joiner.addMole();
+		holder.localSpec(SpecialWeapon.DRAGON_WARHAMMER, 1);
+		holder.tick();
+		joiner.apply(holder.tracker.syncStateForBoss(BossDefence.GIANT_MOLE));
+		when(joiner.party.isInParty()).thenReturn(false);
+		joiner.localSpec(SpecialWeapon.DRAGON_WARHAMMER, 17);
+		joiner.tick();
+		assertEquals(140L, holder.tracker.state().getCurrent());
+		assertEquals(98L, joiner.tracker.state().getCurrent());
+
+		holder.setPeer(joiner);
+		joiner.setPeer(holder);
+		when(joiner.party.isInParty()).thenReturn(true);
+		joiner.eventBus.post(new UserJoin(0L, joiner.localMember.getMemberId()));
+		joiner.tick();
+		holder.tick();
+		joiner.tick();
+		holder.tick();
+		assertEquals(98L, holder.tracker.state().getCurrent());
+		assertEquals(joiner.tracker.specHistory(), holder.tracker.specHistory());
+		assertEquals(1, joiner.sentBossPresenceRequests);
+		assertEquals(0, holder.sentDefenceSyncs + joiner.sentDefenceSyncs);
+		assertTrue(joiner.sentSpecs.isEmpty());
+	}
+
+	@Test
+	public void rejoinWithDifferentNewSpecsReconcilesBothHistoriesWithOneReply() {
+		Node holder = new Node();
+		Node joiner = new Node();
+		holder.addMole();
+		joiner.addMole();
+		holder.localSpec(SpecialWeapon.DRAGON_WARHAMMER, 1);
+		holder.tick();
+		joiner.apply(holder.tracker.syncStateForBoss(BossDefence.GIANT_MOLE));
+		holder.localSpec(SpecialWeapon.DRAGON_WARHAMMER, 12);
+		holder.tick();
+		when(joiner.party.isInParty()).thenReturn(false);
+		joiner.localSpec(SpecialWeapon.DRAGON_WARHAMMER, 17);
+		joiner.tick();
+
+		holder.setPeer(joiner);
+		joiner.setPeer(holder);
+		when(joiner.party.isInParty()).thenReturn(true);
+		joiner.eventBus.post(new UserJoin(0L, joiner.localMember.getMemberId()));
+		joiner.tick();
+		holder.tick();
+		joiner.tick();
+		holder.tick();
+		assertEquals(69L, holder.tracker.state().getCurrent());
+		assertEquals(holder.tracker.state(), joiner.tracker.state());
+		assertEquals(holder.tracker.specHistory(), joiner.tracker.specHistory());
+		assertEquals(1, joiner.sentBossPresenceRequests);
+		assertEquals(1, holder.sentDefenceSyncs);
+		assertEquals(0, joiner.sentDefenceSyncs);
+	}
+
+	@Test
+	public void moleSpecDuringBurrowSendsOnceAndDeathClearsTheEncounter() {
+		Node node = new Node();
+		node.addMole();
+		node.localSpec(SpecialWeapon.DRAGON_WARHAMMER, 17);
+		node.removeMole();
+		node.tick();
+		assertEquals(1, node.sentSpecs.size());
+		assertEquals(140L, node.tracker.state().getCurrent());
+
+		node.addMole();
+		node.tick();
+		assertEquals(140L, node.tracker.state().getCurrent());
+		assertEquals(1, node.sentSpecs.size());
+
+		node.localSpec(SpecialWeapon.DRAGON_WARHAMMER, 17);
+		when(node.mole.isDead()).thenReturn(true);
+		node.removeMole();
+		node.tick();
+		assertNull(node.tracker.state());
+		assertEquals(1, node.sentEncounterResets);
+		assertEquals(1, node.sentSpecs.size());
+	}
+
+	@Test
+	public void partyRejoinCanRecoverActivePeerState() {
 		Node alice = new Node();
 		Node bob = new Node();
 		alice.addMole();
@@ -148,8 +345,7 @@ public class EncounterRecoveryRegressionTest
 	}
 
 	@Test
-	public void formerPartyMemberRetainsStateWithoutElapsedTimeCleanup()
-	{
+	public void formerPartyMemberRetainsStateWithoutElapsedTimeCleanup() {
 		Node bob = new Node();
 		bob.addMole();
 		bob.apply(moleState(120));
@@ -159,15 +355,14 @@ public class EncounterRecoveryRegressionTest
 		bob.tick();
 
 		assertTrue("leaving PartyService is not evidence that the encounter ended",
-			bob.tracker.hasRememberedState(BossDefence.GIANT_MOLE));
+				bob.tracker.hasRememberedState(BossDefence.GIANT_MOLE));
 		bob.addMole();
 		bob.tick();
 		assertEquals(120L, bob.tracker.state().getCurrent());
 	}
 
 	@Test
-	public void returningClientRequestsFullSnapshot()
-	{
+	public void returningClientRequestsFullSnapshot() {
 		Node alice = new Node();
 		Node bob = new Node();
 		alice.addMole();
@@ -187,8 +382,196 @@ public class EncounterRecoveryRegressionTest
 	}
 
 	@Test
-	public void eachLocalSpecSendsOneDeltaAndNoHistoryBroadcast()
-	{
+	public void publicBossRebindsBeyondEightTilesWithoutNetworkTraffic() {
+		for (String boss : List.of("Giant Mole", "Corporeal Beast", "Chaos Elemental")) {
+			Node node = new Node();
+			NPC original = node.addNpc(MOLE_INDEX, boss);
+			node.tracker.queueLocal(SpecialWeapon.DRAGON_WARHAMMER, MOLE_INDEX, 1, WORLD, "Alice", original);
+			node.tick();
+			SyncState before = node.tracker.syncState();
+			int requests = node.sentBossPresenceRequests;
+			int specs = node.sentSpecs.size();
+
+			NPC replacement = node.addNpc(MOLE_INDEX, boss);
+			when(replacement.getWorldLocation()).thenReturn(new WorldPoint(3040, 3000, 0));
+			node.tick();
+			node.tick();
+
+			assertTrue(node.tracker.hasBoundNpc());
+			assertEquals(before, node.tracker.syncState());
+			assertEquals(requests, node.sentBossPresenceRequests);
+			assertEquals(specs, node.sentSpecs.size());
+			assertEquals(0, node.sentDefenceSyncs);
+		}
+	}
+
+	@Test
+	public void publicBossCacheSurvivesUnrelatedIndexReuseAndClearsOnObservedKill() {
+		Node node = new Node();
+		node.addMole();
+		node.localSpec(SpecialWeapon.DRAGON_WARHAMMER, 1);
+		node.tick();
+		SyncState before = node.tracker.syncState();
+
+		node.addNpc(MOLE_INDEX, "Goblin");
+		node.tick();
+		assertFalse(node.tracker.hasBoundNpc());
+		assertTrue(node.tracker.states().isEmpty());
+		assertTrue(node.tracker.hasRememberedState(BossDefence.GIANT_MOLE));
+
+		int replacementIndex = MOLE_INDEX + 1;
+		NPC replacement = node.addNpc(replacementIndex, "Giant Mole");
+		when(replacement.getWorldLocation()).thenReturn(new WorldPoint(3040, 3000, 0));
+		node.tick();
+		assertTrue(node.tracker.hasBoundNpc());
+		assertEquals(replacementIndex, node.tracker.state().getNpcIndex());
+		assertEquals(before, node.tracker.syncState());
+
+		when(replacement.isDead()).thenReturn(true);
+		node.tick();
+		assertFalse(node.tracker.hasRememberedState(BossDefence.GIANT_MOLE));
+	}
+
+	@Test
+	public void publicBossCacheDoesNotAttachToPrivateCopyOrSurviveAWorldChange() {
+		Node node = new Node();
+		node.addMole();
+		node.localSpec(SpecialWeapon.DRAGON_WARHAMMER, 1);
+		node.tick();
+		SyncState before = node.tracker.syncState();
+
+		when(node.worldView.isInstance()).thenReturn(true);
+		node.addMole();
+		node.tick();
+		assertFalse(node.tracker.hasBoundNpc());
+		assertNull(node.tracker.syncStateForBoss(BossDefence.GIANT_MOLE));
+		node.apply(moleState(123));
+		node.tick();
+		assertEquals(123L, node.tracker.state().getCurrent());
+
+		when(node.worldView.isInstance()).thenReturn(false);
+		node.addMole();
+		node.tick();
+		assertEquals(before, node.tracker.syncState());
+
+		when(node.client.getWorld()).thenReturn(WORLD + 1);
+		node.tick();
+		assertFalse(node.tracker.hasRememberedState(BossDefence.GIANT_MOLE));
+	}
+
+	@Test
+	public void ambiguousPublicBossesDoNotInheritAStoredDrain() {
+		Node node = new Node();
+		node.addMole();
+		node.localSpec(SpecialWeapon.DRAGON_WARHAMMER, 1);
+		node.tick();
+		SyncState before = node.tracker.syncState();
+		node.removeMole();
+		node.addNpc(MOLE_INDEX + 1, "Giant Mole");
+		node.addNpc(MOLE_INDEX + 2, "Giant Mole");
+
+		node.tick();
+		assertFalse(node.tracker.hasBoundNpc());
+		assertTrue(node.tracker.states().isEmpty());
+		assertEquals(before, node.tracker.syncState());
+	}
+
+	@Test
+	public void corpCatchUpAddsOneReplyFromAnInstancedPeerAndKillClearsItsCache() {
+		Node holder = new Node();
+		Node returning = new Node();
+		NPC corp = holder.addNpc(MOLE_INDEX, "Corporeal Beast");
+		holder.tracker.queueLocal(SpecialWeapon.DRAGON_WARHAMMER, MOLE_INDEX, 1, WORLD, "Alice", corp);
+		holder.tick();
+		SyncState before = holder.tracker.syncState();
+		holder.removeMole();
+		when(holder.worldView.isInstance()).thenReturn(true);
+		holder.tick();
+		holder.setPeer(returning);
+		returning.setPeer(holder);
+		NPC visibleCorp = returning.addNpc(MOLE_INDEX, "Corporeal Beast");
+		returning.tick();
+		for (int i = 0; i < 12; i++) {
+			returning.tick();
+			holder.tick();
+		}
+		assertEquals(1, returning.sentBossPresenceRequests);
+		assertEquals(1, holder.sentDefenceSyncs);
+		assertEquals(before, returning.tracker.syncState());
+
+		when(visibleCorp.isDead()).thenReturn(true);
+		returning.tick();
+		assertEquals(1, returning.sentEncounterResets);
+		assertFalse(holder.tracker.hasRememberedState(BossDefence.CORPOREAL_BEAST));
+	}
+
+	@Test
+	public void onlyOneInstancedPeerCanSendTheAdditionalReply() {
+		Node first = new Node();
+		Node second = new Node();
+		when(second.localMember.getMemberId()).thenReturn(2L);
+		when(first.party.getMembers()).thenReturn(List.of(first.localMember, second.localMember));
+		when(second.party.getMembers()).thenReturn(List.of(first.localMember, second.localMember));
+		for (Node holder : List.of(first, second)) {
+			holder.addMole();
+			holder.apply(moleState(94));
+			holder.removeMole();
+			when(holder.worldView.isInstance()).thenReturn(true);
+			holder.tick();
+		}
+
+		BpdBossPresence request = new BpdBossPresence(WORLD, BossDefence.GIANT_MOLE,
+				BpdDefenceSync.SCOPE_WORLD, 0, 3000, 3000, 0, -1);
+		request.setMemberId(REMOTE_MEMBER_ID);
+		first.plugin.onBpdBossPresence(request);
+		second.plugin.onBpdBossPresence(request);
+		assertEquals(1, first.sentDefenceSyncs);
+		assertEquals(0, second.sentDefenceSyncs);
+	}
+
+	@Test
+	public void visibleBossWaitsForLocalPartyJoinAndRequestsOnce() {
+		Node bob = new Node();
+		bob.addMole();
+		bob.apply(moleState(180));
+		when(bob.party.getPartyId()).thenReturn(2L);
+		when(bob.party.getLocalMember()).thenReturn(null);
+		bob.plugin.onPartyChanged(new PartyChanged("test-party", 2L));
+		bob.tick();
+		assertEquals(0, bob.sentBossPresenceRequests);
+
+		when(bob.party.getLocalMember()).thenReturn(bob.localMember);
+		bob.eventBus.post(new UserJoin(2L, REMOTE_MEMBER_ID));
+		bob.tick();
+		assertEquals(0, bob.sentBossPresenceRequests);
+
+		bob.eventBus.post(new UserJoin(2L, bob.localMember.getMemberId()));
+		bob.tick();
+		bob.tick();
+		assertEquals(1, bob.sentBossPresenceRequests);
+	}
+
+	@Test
+	public void unansweredBossRequestWaitsForBossToReturnToView() {
+		Node bob = new Node();
+		bob.addMole();
+		bob.tick();
+		assertEquals(1, bob.sentBossPresenceRequests);
+
+		for (int i = 0; i < 100; i++) {
+			bob.tick();
+		}
+		assertEquals(1, bob.sentBossPresenceRequests);
+
+		bob.removeMole();
+		bob.tick();
+		bob.addMole();
+		bob.tick();
+		assertEquals(2, bob.sentBossPresenceRequests);
+	}
+
+	@Test
+	public void eachLocalSpecSendsOneDeltaAndNoHistoryBroadcast() {
 		Node alice = new Node();
 		Node bob = new Node();
 		alice.addMole();
@@ -217,8 +600,7 @@ public class EncounterRecoveryRegressionTest
 	}
 
 	@Test
-	public void newerDeltaDetectsMissedPredecessorAndRequestsIt()
-	{
+	public void newerDeltaDetectsMissedPredecessorAndRequestsIt() {
 		Node alice = new Node();
 		Node bob = new Node();
 		alice.addMole();
@@ -239,8 +621,7 @@ public class EncounterRecoveryRegressionTest
 	}
 
 	@Test
-	public void returningToRenderRequestsMissedSpecWithoutAnotherLiveEvent()
-	{
+	public void returningToRenderRequestsMissedSpecWithoutAnotherLiveEvent() {
 		Node alice = new Node();
 		Node bob = new Node();
 		alice.addMole();
@@ -270,8 +651,7 @@ public class EncounterRecoveryRegressionTest
 	}
 
 	@Test
-	public void delayedCompactSpecCannotRestoreAnEndedEncounter()
-	{
+	public void delayedCompactSpecCannotRestoreAnEndedEncounter() {
 		Node alice = new Node();
 		Node bob = new Node();
 		alice.addMole();
@@ -282,7 +662,7 @@ public class EncounterRecoveryRegressionTest
 		bob.tick();
 
 		BpdEncounterReset reset = new BpdEncounterReset(
-			WORLD, BossDefence.GIANT_MOLE, BpdDefenceSync.SCOPE_WORLD, 0);
+				WORLD, BossDefence.GIANT_MOLE, BpdDefenceSync.SCOPE_WORLD, 0);
 		reset.setMemberId(REMOTE_MEMBER_ID);
 		bob.plugin.onBpdEncounterReset(reset);
 		bob.addMole();
@@ -292,24 +672,19 @@ public class EncounterRecoveryRegressionTest
 	}
 
 	@Test
-	public void standardSpecAndCompactEventCountOnceInEitherOrder()
-	{
-		for (boolean standardFirst : new boolean[]{true, false})
-		{
+	public void standardSpecAndCompactEventCountOnceInEitherOrder() {
+		for (boolean standardFirst : new boolean[]{true, false}) {
 			Node alice = new Node();
 			Node bob = new Node();
 			alice.addMole();
 			bob.addMole();
 			alice.localSpec(SpecialWeapon.DRAGON_WARHAMMER, 1);
 			alice.tick();
-			if (standardFirst)
-			{
+			if (standardFirst) {
 				bob.standardSpec(SpecialWeapon.DRAGON_WARHAMMER, 1);
 				bob.tick();
 				bob.receiveSpec(alice.sentSpecs.get(0));
-			}
-			else
-			{
+			} else {
 				bob.receiveSpec(alice.sentSpecs.get(0));
 				bob.tick();
 				bob.standardSpec(SpecialWeapon.DRAGON_WARHAMMER, 1);
@@ -321,8 +696,7 @@ public class EncounterRecoveryRegressionTest
 	}
 
 	@Test
-	public void identifiedRalosEventCorrectsStandardHitCount()
-	{
+	public void identifiedRalosEventCorrectsStandardHitCount() {
 		Node alice = new Node();
 		Node bob = new Node();
 		alice.addMole();
@@ -338,15 +712,15 @@ public class EncounterRecoveryRegressionTest
 	}
 
 	@Test
-	public void clientsResolveSeparatedHitsLocallyDespiteOppositeArrivalOrder()
-	{
+	public void clientsResolveSeparatedHitsLocallyDespiteOppositeArrivalOrder() {
 		Node alice = new Node();
 		Node bob = new Node();
 		alice.addMole();
 		bob.addMole();
 		when(alice.remoteMember.getDisplayName()).thenReturn("Bob");
 		long hitTime = System.currentTimeMillis();
-		alice.tracker.queueLocal(SpecialWeapon.DRAGON_WARHAMMER, MOLE_INDEX, 1, WORLD, "Alice", alice.mole, hitTime - 30_000);
+		alice.tracker.queueLocal(SpecialWeapon.DRAGON_WARHAMMER, MOLE_INDEX, 1, WORLD, "Alice", alice.mole,
+				hitTime - 30_000);
 		bob.tracker.queueLocal(SpecialWeapon.ARCLIGHT, MOLE_INDEX, 1, WORLD, "Bob", bob.mole, hitTime);
 		alice.tick();
 		bob.tick();
@@ -361,25 +735,24 @@ public class EncounterRecoveryRegressionTest
 	}
 
 	@Test
-	public void moleClientsAgreeOnLateArclightAcrossDifferentTickAnchors()
-	{
+	public void moleClientsAgreeOnLateArclightAcrossDifferentTickAnchors() {
 		Node alice = new Node();
 		Node bob = new Node();
 		alice.addMole();
 		bob.addMole();
 		long start = 1_794_000_000_000L;
 		SpecHistoryEntry first = new SpecHistoryEntry("Alice", SpecialWeapon.ARCLIGHT, 4, "first", "a", 0)
-			.withObservedAtMillis(start);
+				.withObservedAtMillis(start);
 		SpecHistoryEntry second = new SpecHistoryEntry("Alice", SpecialWeapon.ARCLIGHT, 11, "second", "a", 20)
-			.withObservedAtMillis(start + 12_000);
+				.withObservedAtMillis(start + 12_000);
 		SpecHistoryEntry dwh = new SpecHistoryEntry("Bob", SpecialWeapon.DRAGON_WARHAMMER, 41, "dwh", "b", 0)
-			.withObservedAtMillis(start + 30_000);
+				.withObservedAtMillis(start + 30_000);
 		SpecHistoryEntry late = new SpecHistoryEntry("Alice", SpecialWeapon.ARCLIGHT, 6, "late", "a", 113)
-			.withObservedAtMillis(start + 68_000);
+				.withObservedAtMillis(start + 68_000);
 		SyncState aliceState = moleState(117, List.of(first, second,
-			new SpecHistoryEntry("Bob", SpecialWeapon.DRAGON_WARHAMMER, 41), late));
+				new SpecHistoryEntry("Bob", SpecialWeapon.DRAGON_WARHAMMER, 41), late));
 		SyncState bobState = moleState(114, List.of(first, second, dwh,
-			new SpecHistoryEntry("Alice", SpecialWeapon.ARCLIGHT, 6)));
+				new SpecHistoryEntry("Alice", SpecialWeapon.ARCLIGHT, 6)));
 		alice.apply(aliceState);
 		bob.apply(bobState);
 
@@ -396,8 +769,7 @@ public class EncounterRecoveryRegressionTest
 	}
 
 	@Test
-	public void standardMoleSpecCatchesUpOnReturnWithoutAnotherSnapshot()
-	{
+	public void standardMoleSpecCatchesUpOnReturnWithoutAnotherSnapshot() {
 		Node alice = new Node();
 		Node bob = new Node();
 		alice.addMole();
@@ -422,8 +794,7 @@ public class EncounterRecoveryRegressionTest
 	}
 
 	@Test
-	public void clearedReturningClientCanRequestRecoveryWithoutRepeatedTraffic()
-	{
+	public void clearedReturningClientCanRequestRecoveryWithoutRepeatedTraffic() {
 		Node alice = new Node();
 		Node bob = new Node();
 		alice.addMole();
@@ -440,12 +811,11 @@ public class EncounterRecoveryRegressionTest
 		assertEquals(120L, bob.tracker.state().getCurrent());
 		assertTrue("the empty client must request peer recovery", requestsAfterRecovery > 0);
 		assertEquals("a bound recovered state must not generate repeated requests",
-			requestsAfterRecovery, bob.sentBossPresenceRequests);
+				requestsAfterRecovery, bob.sentBossPresenceRequests);
 	}
 
 	@Test
-	public void specsWhileAbsentAreRecoveredFromLatestPeerState()
-	{
+	public void specsWhileAbsentAreRecoveredFromLatestPeerState() {
 		Node alice = new Node();
 		Node bob = new Node();
 		alice.addMole();
@@ -456,7 +826,7 @@ public class EncounterRecoveryRegressionTest
 
 		bob.removeMole();
 		alice.tracker.queueLocal(SpecialWeapon.DRAGON_WARHAMMER, MOLE_INDEX, 1, WORLD,
-			"Alice", alice.mole);
+				"Alice", alice.mole);
 		alice.tracker.onGameTick();
 		SyncState latest = alice.tracker.syncStateForBoss(BossDefence.GIANT_MOLE);
 
@@ -469,15 +839,88 @@ public class EncounterRecoveryRegressionTest
 	}
 
 	@Test
-	public void confirmedResetPreventsOldStateRestorationAfterRespawn()
-	{
+	public void delayedResetReplaysOnlySpecsLandedAfterIt() {
+		Node node = new Node();
+		node.addMole();
+		long resetAt = System.currentTimeMillis() - 500;
+		node.receiveSpec(moleSpec(timedWarhammer("before", resetAt - 1)));
+		node.tick();
+		node.receiveSpec(moleSpec(timedWarhammer("after", resetAt + 1)));
+		node.tick();
+		assertEquals(98L, node.tracker.state().getCurrent());
+
+		node.plugin.onBpdEncounterReset(resetAt(resetAt));
+		assertEquals(140L, node.tracker.state().getCurrent());
+		assertEquals(1, node.tracker.specHistory().size());
+		assertEquals("after", node.tracker.specHistory().get(0).getEventId());
+	}
+
+	@Test
+	public void timestampedUpdatesApplyImmediatelyAfterResetAndSurviveLateResetDelivery() {
+		Node specReceiver = new Node();
+		Node snapshotReceiver = new Node();
+		Node sender = new Node();
+		specReceiver.addMole();
+		snapshotReceiver.addMole();
+		sender.addMole();
+		long resetAt = System.currentTimeMillis() - 500;
+		BpdEncounterReset reset = resetAt(resetAt);
+		specReceiver.plugin.onBpdEncounterReset(reset);
+		snapshotReceiver.plugin.onBpdEncounterReset(reset);
+
+		SpecHistoryEntry stale = timedWarhammer("stale", resetAt - 1);
+		specReceiver.receiveSpec(moleSpec(stale));
+		specReceiver.receiveSpec(moleSpec(timedWarhammer("untimestamped", 0)));
+		snapshotReceiver.sendSyncToSelf(moleState(140, List.of(stale)), 1L);
+		specReceiver.tick();
+		snapshotReceiver.tick();
+		assertNull(specReceiver.tracker.state());
+		assertNull(snapshotReceiver.tracker.state());
+
+		SpecHistoryEntry fresh = timedWarhammer("fresh", resetAt + 1);
+		specReceiver.receiveSpec(moleSpec(fresh));
+		snapshotReceiver.sendSyncToSelf(moleState(140, List.of(fresh)), 2L);
+		specReceiver.tick();
+		snapshotReceiver.tick();
+		assertEquals(140L, specReceiver.tracker.state().getCurrent());
+		assertEquals(140L, snapshotReceiver.tracker.state().getCurrent());
+
+		sender.receiveSpec(moleSpec(fresh));
+		sender.plugin.onBpdEncounterReset(reset);
+		sender.tick();
+		assertEquals(140L, sender.tracker.state().getCurrent());
+		sender.plugin.onBpdEncounterReset(resetAt(resetAt + 1));
+		assertNull(sender.tracker.state());
+	}
+
+	private static BpdEncounterReset resetAt(long timestamp) {
+		Gson gson = new Gson();
+		var json = gson.toJsonTree(new BpdEncounterReset(
+				WORLD, BossDefence.GIANT_MOLE, BpdDefenceSync.SCOPE_WORLD, 0)).getAsJsonObject();
+		json.addProperty("sentAtMillis", timestamp);
+		BpdEncounterReset reset = gson.fromJson(json, BpdEncounterReset.class);
+		reset.setMemberId(REMOTE_MEMBER_ID);
+		return reset;
+	}
+
+	private static SpecHistoryEntry timedWarhammer(String id, long timestamp) {
+		return new SpecHistoryEntry("Alice", SpecialWeapon.DRAGON_WARHAMMER, null, 13, id, id, 0, timestamp);
+	}
+
+	private static BpdSpecEvent moleSpec(SpecHistoryEntry spec) {
+		return new BpdSpecEvent(WORLD, BpdDefenceSync.SCOPE_WORLD, 0, BossDefence.GIANT_MOLE,
+				MOLE_INDEX, BpdDefenceSync.packBossLocation(3000, 3000, 0), 100, spec, null);
+	}
+
+	@Test
+	public void confirmedResetPreventsOldStateRestorationAfterRespawn() {
 		Node bob = new Node();
 		bob.addMole();
 		SyncState old = moleState(120);
 		bob.apply(old);
 
 		BpdEncounterReset reset = new BpdEncounterReset(
-			WORLD, BossDefence.GIANT_MOLE, BpdDefenceSync.SCOPE_WORLD, 0);
+				WORLD, BossDefence.GIANT_MOLE, BpdDefenceSync.SCOPE_WORLD, 0);
 		reset.setMemberId(REMOTE_MEMBER_ID);
 		bob.plugin.onBpdEncounterReset(reset);
 
@@ -485,8 +928,8 @@ public class EncounterRecoveryRegressionTest
 
 		bob.sendSyncToSelf(old, 1L);
 		bob.tick();
-		assertFalse("the post-reset barrier must reject the old snapshot",
-			bob.tracker.hasRememberedState(BossDefence.GIANT_MOLE));
+		assertFalse("an untimestamped snapshot cannot restore an encounter after a confirmed reset",
+				bob.tracker.hasRememberedState(BossDefence.GIANT_MOLE));
 
 		bob.addMole();
 		bob.tick();
@@ -494,8 +937,7 @@ public class EncounterRecoveryRegressionTest
 	}
 
 	@Test
-	public void emptyFullStateCannotOverwriteValidReducedState()
-	{
+	public void emptyFullStateCannotOverwriteValidReducedState() {
 		Node alice = new Node();
 		Node bob = new Node();
 		alice.addMole();
@@ -507,12 +949,11 @@ public class EncounterRecoveryRegressionTest
 		bob.sendSyncTo(alice, fullMoleState(), 1L);
 
 		assertEquals("a full/empty state must not erase a valid reduced state",
-			120L, alice.tracker.state().getCurrent());
+				120L, alice.tracker.state().getCurrent());
 	}
 
 	@Test
-	public void oldPartyStateCannotEnterNewParty()
-	{
+	public void oldPartyStateCannotEnterNewParty() {
 		Node bob = new Node();
 		bob.addMole();
 		when(bob.party.getPartyId()).thenReturn(2L);
@@ -523,32 +964,27 @@ public class EncounterRecoveryRegressionTest
 		assertFalse(bob.tracker.hasRememberedState(BossDefence.GIANT_MOLE));
 	}
 
-	private static void aliceSendTo(Node target, SyncState state, long version, long partyId)
-	{
+	private static void aliceSendTo(Node target, SyncState state, long version, long partyId) {
 		target.receiveSync(state, version, partyId);
 	}
 
-	private static SyncState moleState(long current)
-	{
+	private static SyncState moleState(long current) {
 		SpecHistoryEntry event = new SpecHistoryEntry("Alice", SpecialWeapon.DRAGON_WARHAMMER, 1);
 		return moleState(current, Collections.singletonList(event));
 	}
 
-	private static SyncState moleState(long current, List<SpecHistoryEntry> history)
-	{
+	private static SyncState moleState(long current, List<SpecHistoryEntry> history) {
 		return new SyncState("Giant Mole", BossDefence.GIANT_MOLE, current, 0, 200,
-			200, 200, 100, 100, 0, 0, false, false, false, true, history);
+				200, 200, 100, 100, 0, 0, false, false, false, true, history);
 	}
 
-	private static SyncState fullMoleState()
-	{
+	private static SyncState fullMoleState() {
 		return new SyncState("Giant Mole", BossDefence.GIANT_MOLE, 200, 0, 200,
-			200, 200, 100, 100, 0, 0, false, false, false, false,
-			Collections.emptyList());
+				200, 200, 100, 100, 0, 0, false, false, false, false,
+				Collections.emptyList());
 	}
 
-	private static final class Node
-	{
+	private static final class Node {
 		private final Map<Integer, NPC> npcsByIndex = new LinkedHashMap<>();
 		private final Client client = mock(Client.class);
 		private final WorldView worldView = mock(WorldView.class);
@@ -564,19 +1000,21 @@ public class EncounterRecoveryRegressionTest
 		private final BetterPartyDefenceConfig config = mock(BetterPartyDefenceConfig.class);
 		private final LocalDefenceSpecDetector localDetector = mock(LocalDefenceSpecDetector.class);
 		private final BetterPartyDefencePlugin plugin = new BetterPartyDefencePlugin();
-		private final EventBus eventBus = new EventBus(error -> { throw new AssertionError(error); });
+		private final EventBus eventBus = new EventBus(error -> {
+			throw new AssertionError(error);
+		});
 		private final DefenceTracker tracker;
 		private NPC mole;
 		private Node peer;
 		private final List<Integer> sentEncounterScopes = new ArrayList<>();
 		private int sentDefenceSyncs;
+		private int sentEncounterResets;
 		private final List<BpdSpecEvent> sentSpecs = new ArrayList<>();
 		private int sentBossPresenceRequests;
 		private int tick = 100;
 
 		@SuppressWarnings("unchecked")
-		private Node()
-		{
+		private Node() {
 			when(client.getWorld()).thenReturn(WORLD);
 			when(client.getTickCount()).thenAnswer(invocation -> tick);
 			when(client.getGameState()).thenReturn(GameState.LOGGED_IN);
@@ -587,9 +1025,9 @@ public class EncounterRecoveryRegressionTest
 			doReturn(players).when(worldView).players();
 			when(worldView.isInstance()).thenReturn(false);
 			when(npcs.byIndex(anyInt())).thenAnswer(
-				invocation -> npcsByIndex.get(invocation.<Integer>getArgument(0)));
+					invocation -> npcsByIndex.get(invocation.<Integer>getArgument(0)));
 			when(npcs.iterator()).thenAnswer(
-				invocation -> new ArrayList<>(npcsByIndex.values()).iterator());
+					invocation -> new ArrayList<>(npcsByIndex.values()).iterator());
 			when(players.iterator()).thenReturn(Collections.emptyIterator());
 			when(localPlayer.getInteracting()).thenReturn(null);
 			when(localPlayer.getWorldLocation()).thenReturn(new WorldPoint(3000, 3000, 0));
@@ -597,8 +1035,8 @@ public class EncounterRecoveryRegressionTest
 			when(party.isInParty()).thenReturn(true);
 			when(party.getPartyId()).thenReturn(0L);
 			when(party.getLocalMember()).thenReturn(localMember);
-			when(party.getMemberById(anyLong())).thenAnswer(invocation ->
-				invocation.<Long>getArgument(0) == REMOTE_MEMBER_ID ? remoteMember : null);
+			when(party.getMemberById(anyLong())).thenAnswer(
+					invocation -> invocation.<Long>getArgument(0) == REMOTE_MEMBER_ID ? remoteMember : null);
 			when(localMember.getMemberId()).thenReturn(1L);
 			when(remoteMember.getDisplayName()).thenReturn("Alice");
 			doAnswer(invocation -> {
@@ -609,33 +1047,35 @@ public class EncounterRecoveryRegressionTest
 			tracker = new DefenceTracker(client, config);
 			doAnswer(invocation -> {
 				Object message = invocation.getArgument(0);
-				if (message instanceof BpdDefenceSync)
-				{
+				if (message instanceof BpdDefenceSync) {
 					sentDefenceSyncs++;
-					if (peer != null)
-					{
+					if (peer != null) {
 						Gson gson = new Gson();
 						BpdDefenceSync received = gson.fromJson(gson.toJson(message), BpdDefenceSync.class);
 						received.setMemberId(REMOTE_MEMBER_ID);
 						peer.receivePacket(received);
 					}
-				}
-				else if (message instanceof BpdSpecEvent)
-				{
+				} else if (message instanceof BpdSpecEvent) {
 					sentSpecs.add((BpdSpecEvent) message);
-					if (peer != null) { peer.receiveSpec((BpdSpecEvent) message); }
-				}
-				else if (message instanceof BpdEncounterPresence)
-				{
+					if (peer != null) {
+						peer.receiveSpec((BpdSpecEvent) message);
+					}
+				} else if (message instanceof BpdEncounterPresence) {
 					sentEncounterScopes.add(((BpdEncounterPresence) message).getScopeType());
-				}
-				else if (message instanceof BpdBossPresence)
-				{
+				} else if (message instanceof BpdEncounterReset) {
+					sentEncounterResets++;
+					BpdEncounterReset reset = (BpdEncounterReset) message;
+					if (peer != null) {
+						reset.setMemberId(REMOTE_MEMBER_ID);
+						peer.plugin.onBpdEncounterReset(reset);
+					}
+				} else if (message instanceof BpdBossPresence) {
 					sentBossPresenceRequests++;
-					((BpdBossPresence) message).setMemberId(REMOTE_MEMBER_ID);
-					if (peer != null)
-					{
-						peer.plugin.onBpdBossPresence((BpdBossPresence) message);
+					if (peer != null) {
+						Gson gson = new Gson();
+						BpdBossPresence received = gson.fromJson(gson.toJson(message), BpdBossPresence.class);
+						received.setMemberId(REMOTE_MEMBER_ID);
+						peer.plugin.onBpdBossPresence(received);
 					}
 				}
 				return null;
@@ -650,33 +1090,28 @@ public class EncounterRecoveryRegressionTest
 			eventBus.register(plugin);
 		}
 
-		private void localSpec(SpecialWeapon weapon, int hit)
-		{
+		private void localSpec(SpecialWeapon weapon, int hit) {
 			tracker.queueLocal(weapon, MOLE_INDEX, hit, WORLD, "Alice", mole);
 		}
 
-		private void standardSpec(SpecialWeapon weapon, int hit)
-		{
+		private void standardSpec(SpecialWeapon weapon, int hit) {
 			SpecialCounterUpdate event = new SpecialCounterUpdate(MOLE_INDEX, weapon, hit, WORLD, 3);
 			event.setMemberId(REMOTE_MEMBER_ID);
 			plugin.onSpecialCounterUpdate(event);
 		}
 
-		private void receiveSpec(BpdSpecEvent packet)
-		{
+		private void receiveSpec(BpdSpecEvent packet) {
 			Gson gson = new Gson();
 			BpdSpecEvent received = gson.fromJson(gson.toJson(packet), BpdSpecEvent.class);
 			received.setMemberId(REMOTE_MEMBER_ID);
 			eventBus.post(received);
 		}
 
-		private void addMole()
-		{
+		private void addMole() {
 			mole = addNpc(MOLE_INDEX, "Giant Mole");
 		}
 
-		private NPC addNpc(int index, String name)
-		{
+		private NPC addNpc(int index, String name) {
 			NPC npc = mock(NPC.class);
 			when(npc.getName()).thenReturn(name);
 			when(npc.getIndex()).thenReturn(index);
@@ -690,64 +1125,51 @@ public class EncounterRecoveryRegressionTest
 			return npc;
 		}
 
-		private void removeMole()
-		{
+		private void removeMole() {
 			npcsByIndex.remove(MOLE_INDEX);
 		}
 
-		private void apply(SyncState state)
-		{
+		private void apply(SyncState state) {
 			tracker.applySyncState(state, mole);
 		}
 
-		private void tick()
-		{
+		private void tick() {
 			tick++;
 			plugin.onGameTick(mock(GameTick.class));
 		}
 
-		private void sendSyncTo(Node target, SyncState state, long version)
-		{
+		private void sendSyncTo(Node target, SyncState state, long version) {
 			target.receiveSync(state, version, 0L);
 		}
 
-		private void setPeer(Node peer)
-		{
+		private void setPeer(Node peer) {
 			this.peer = peer;
 		}
 
-		private void sendSyncToSelf(SyncState state, long version)
-		{
+		private void sendSyncToSelf(SyncState state, long version) {
 			receiveSync(state, version, 0L);
 		}
 
-		private void receiveSync(SyncState state, long version, long partyId)
-		{
+		private void receiveSync(SyncState state, long version, long partyId) {
 			BpdDefenceSync packet = new BpdDefenceSync(
-				WORLD, state, BpdDefenceSync.SCOPE_WORLD, 0, 3000, 3000, 0, 100, version);
-			if (partyId != 0)
-			{
+					WORLD, state, BpdDefenceSync.SCOPE_WORLD, 0, 3000, 3000, 0, 100, version);
+			if (partyId != 0) {
 				packet = BpdDefenceSyncValidationTest.withLegacyPartyId(packet, partyId);
 			}
 			packet.setMemberId(REMOTE_MEMBER_ID);
 			plugin.onBpdDefenceSync(packet);
 		}
 
-		private void receivePacket(BpdDefenceSync packet)
-		{
+		private void receivePacket(BpdDefenceSync packet) {
 			plugin.onBpdDefenceSync(packet);
 		}
 
-		private void setPluginField(String name, Object value)
-		{
-			try
-			{
+		private void setPluginField(String name, Object value) {
+			try {
 				Field field = BetterPartyDefencePlugin.class.getDeclaredField(name);
 				field.setAccessible(true);
 				field.set(plugin, value);
-			}
-			catch (ReflectiveOperationException ex)
-			{
+			} catch (ReflectiveOperationException ex) {
 				throw new AssertionError(ex);
 			}
 		}
