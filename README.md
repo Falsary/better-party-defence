@@ -195,16 +195,6 @@ Click **Report an issue** on the Plugin Hub page. Include the boss and phase, yo
 
 <br></br>
 
-# Is this vibe coded?
-
-Yes, I use AI. If you’re asking because something went wrong in-game, **what did the tracker show, and when in the encounter did it happen?** That gives me a starting point for reproducing it.
-
-AI saves me time implementing the logic. I research how the game works, decide how the classes, methods, flags, and RuneLite events fit together, review the code, and monitor those events in developer mode while testing in-game.
-
-I want to fix as many edge cases as I can. Calling it “vibe-coded slop” gives me nothing specific to investigate. The project is open source, and I’m happy to work with anyone who wants to report a bug or contribute a fix. AI is already part of many developers’ workflows, including mine.
-
-<br></br>
-
 # Is the plugin still being developed?
 
 Yes. I read every issue on GitHub and use those reports and player feedback to track bugs and decide what to improve next.
