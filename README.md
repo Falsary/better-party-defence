@@ -234,37 +234,7 @@ The original above hp display, boss stat data and Defence-drain calculations wer
 See [ATTRIBUTION.md](ATTRIBUTION.md) and [LICENSE-OSPARTY.txt](LICENSE-OSPARTY.txt) for details.
 
 <br></br>
-
-# Original work in Better Party Defence
-
-- Designing Better Party Defence’s event system to record when special attacks land, tie them to the right encounter, and reconcile what different clients observed.
-
-- Sharing Defence values and special attack history across clients in the same party and encounter.
-
-- Tracking multiple targets independently and deciding when to keep or clear each target’s data as players leave render distance, return to a fight, or move between boss phases.
-
-- Building display options for current and previous targets, with matching colours and thresholds for the overhead display and Defence infobox.
-
-- There’s more original work throughout the plugin. The additions listed here took the most time to design, implement, and test.
 <br></br>
-
-<h5 align="center"> If any of these solutions would help your plugin, you’re welcome to reuse my work with attribution under the project’s licence. Open source the world!🌍  </h5>
-
-<br></br>
-<br></br>
-
-
-<h2 align="center">Yours truly, Heisty 🔥</h2>
-
-<p align="center">
-  I can do countless things right, and someone will still find the one thing I got wrong.
-  If they saw something I missed, I have a reason to come back tomorrow and do it better.
-  To all the haters, thank you. You give me another reason to improve every day.
-</p>
-
-<br></br>
-<br></br>
-
 
 <h3 align="center">Coffee is always appreciated, but never expected! ☕✨</h3>
 <p align="center">
